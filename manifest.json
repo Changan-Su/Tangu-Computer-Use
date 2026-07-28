@@ -1,0 +1,22 @@
+{
+  "id": "tangu-computer-use",
+  "name": "电脑操作",
+  "version": "0.3.0",
+  "apiVersion": 1,
+  "description": "让 agent 观察并操作桌面应用:看屏幕、点按、输入、滚动(macOS / Windows / Linux)。捆绑包内含引擎侧的 11 个工具、配套技能,以及一个「被操控的窗口」实时画面视图 —— agent 动手时,被操控的那个窗口会亮起边缘光效,画面同步出现在 Agent Desk 上。",
+  "main": "main.js",
+  "onboarding": {
+    "intro": "工具、技能与实时画面视图都在这个包里,装一次就位。首次使用要在 macOS 系统设置里授予「辅助功能」与「屏幕录制」——授权给的是本机 helper,不是 Forsion 主程序。",
+    "steps": [
+      {
+        "title": "装 helper 并授权",
+        "description": "终端跑 `tangu computer-use setup`,它会装好本机 helper 并引导你在「系统设置 → 隐私与安全性」里勾选「辅助功能」和「屏幕录制」。装完可以用 `tangu computer-use doctor` 自检。"
+      },
+      {
+        "title": "开用",
+        "description": "在「设置 → 插件」里启用「电脑操作」。之后直接对 agent 说要它操作哪个桌面 App 即可;它动手时被操控的窗口会有一圈光效,画面会出现在 Agent Desk 上。"
+      }
+    ],
+    "settings": true
+  }
+}

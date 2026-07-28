@@ -1,0 +1,131 @@
+# 发布:打 v* tag(或手动)→ 在 macOS runner 构建 native helper + 插件 bundle → 发 npm + 传 GitHub Release。
+# 需要仓库 secret:NPM_TOKEN(npm 发布令牌)。GITHUB_TOKEN 自动注入(上传 Release 资产)。
+#
+# ⚠️ 0.2.0 起本仓是 **Forsion 捆绑包**:npm 包 = 捆绑包的分发载体(市场/离线安装解包到 plugins/<id>/),
+# **不再是能被 `tangu install` 直接装的独立引擎插件** —— 仓根已没有 tangu-plugin.json,
+# 引擎侧内容在 tangu-plugins/computer-use/。
+#
+# ⚠️ 升级永不换 bundle id(com.forsion.tangu-computer-use)与签名身份 —— macOS 把辅助功能/录屏(TCC)
+# 授权绑到它们,一换全体用户要重授权。
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  # Windows helper(Rust UIA bridge)→ prebuilt/windows/windows-bridge.exe。cargo 在 windows-latest 预装。
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Build Windows helper
+        run: node scripts/build-native.mjs --platform windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-bridge
+          path: prebuilt/windows/windows-bridge.exe
+          if-no-files-found: error
+
+  # Linux helper(Rust AT-SPI2/X11 bridge)→ prebuilt/linux/<arch>/linux-bridge。cargo 在 ubuntu runner 预装。
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install --no-audit --no-fund
+      - name: Build Linux helper
+        run: node scripts/build-native.mjs --platform linux --arch "${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-bridge-${{ matrix.arch }}
+          path: prebuilt/linux/${{ matrix.arch }}/linux-bridge
+          if-no-files-found: error
+
+  publish:
+    needs: [build-windows, build-linux]
+    runs-on: macos-14
+    permissions:
+      contents: write # 上传 Release 资产
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      - run: npm install --no-audit --no-fund
+
+      # native macOS helper(Swift)→ prebuilt/macos/<arch>/tangu-computer-use.app(arm64 + x86_64)
+      - name: Build macOS helper
+        run: npm run build:native
+
+      # Windows helper(上一个 job 的产物)→ prebuilt/windows/windows-bridge.exe,一并打进 npm 包
+      - name: Download Windows helper
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-bridge
+          path: prebuilt/windows
+
+      # Linux helper(上一个 job 的产物,两个架构)→ prebuilt/linux/<arch>/linux-bridge
+      - name: Download Linux helpers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: linux-bridge-*
+          path: ${{ runner.temp }}/linux
+      - name: Place Linux helpers
+        run: |
+          set -e
+          for arch in x64 arm64; do
+            src="$RUNNER_TEMP/linux/linux-bridge-$arch/linux-bridge"
+            test -f "$src"
+            mkdir -p "prebuilt/linux/$arch"
+            cp "$src" "prebuilt/linux/$arch/linux-bridge"
+            chmod 755 "prebuilt/linux/$arch/linux-bridge"
+          done
+
+      # 插件 bundle → dist/index.js
+      - name: Build plugin
+        run: npm run build
+
+      # 三平台自检(前台透明化判据 + helper 安装位置解析)
+      - name: Checks
+        run: npm run check
+
+      # 校验 npm 包内容命中 files 白名单(dist / prebuilt / tangu-plugin.json / native / scripts / LICENSE*)
+      - name: Verify package contents
+        run: npm pack --dry-run
+
+      - name: Publish to npm
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # 打包 helper app 传到 Release(市场/离线安装的 downloadUrl 源;桌面端下载享 githubMirrorCandidates 中国镜像)
+      - name: Zip helper app(s)
+        run: |
+          set -e
+          cd prebuilt/macos
+          for arch in arm64 x64; do
+            if [ -d "$arch/tangu-computer-use.app" ]; then
+              ditto -c -k --keepParent "$arch/tangu-computer-use.app" "$RUNNER_TEMP/tangu-computer-use-$arch.app.zip"
+            fi
+          done
+      - name: Attach helper to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ runner.temp }}/tangu-computer-use-*.app.zip

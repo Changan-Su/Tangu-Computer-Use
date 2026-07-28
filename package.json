@@ -1,0 +1,62 @@
+{
+  "name": "@forsion/tangu-computer-use",
+  "version": "0.3.0",
+  "description": "Tangu engine plugin: let agents observe and control macOS, Windows, and Linux desktop apps. Fork of injaneity/pi-computer-use (MIT).",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/forsion/tangu-computer-use.git"
+  },
+  "keywords": [
+    "tangu-plugin",
+    "computer-use",
+    "macos",
+    "desktop-automation",
+    "accessibility"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "tangu-plugins",
+    "skills",
+    "manifest.json",
+    "main.js",
+    "check.mjs",
+    "install.sh",
+    "CHANGELOG.md",
+    "UPSTREAM.md",
+    "tsconfig.json",
+    "src",
+    "types",
+    "scripts",
+    "prebuilt",
+    "native/macos",
+    "native/windows",
+    "native/linux/bridge-rs",
+    "LICENSE",
+    "LICENSE.upstream",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs && npm run typecheck",
+    "typecheck": "tsc --noEmit",
+    "check:no-foreground": "node scripts/no-foreground.check.mjs",
+    "check:helper-path": "node scripts/helper-path.check.mjs",
+    "check:highlight": "node scripts/highlight.check.mjs",
+    "check:plugin": "node check.mjs",
+    "check:blindclick": "node scripts/blind-click.check.mjs",
+    "check:liveview": "node scripts/live-view.check.mjs",
+    "check": "npm run check:no-foreground && npm run check:helper-path && npm run check:highlight && npm run check:plugin",
+    "build:native": "node scripts/build-native.mjs",
+    "build:windows": "node scripts/build-native.mjs --platform windows",
+    "build:linux": "node scripts/build-native.mjs --platform linux",
+    "check:live": "npm run check:blindclick && npm run check:liveview"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}

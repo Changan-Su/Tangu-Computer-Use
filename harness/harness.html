@@ -1,0 +1,128 @@
+<!doctype html><meta charset="utf-8"><title>CU live view harness</title>
+<style>
+  :root{--bg:#1b1b1f;--bg-card:#222226;--text:#e8e8ea;--text-muted:#9a9aa2;--text-light:#9a9aa2;
+        --border:#3f3f43;--accent:#ff9a7d;--accent-hover:#ffb59d;--accent-light:#3a2b26;--overlay-subtle:#2a2a2e;--overlay-light:#303036}
+  body{margin:0;background:var(--bg);color:var(--text);font:13px/1.5 -apple-system,system-ui,sans-serif}
+  #bar{padding:8px 12px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  #bar button{font:inherit;padding:4px 9px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);color:inherit;cursor:pointer}
+  /* 宿主给视图的容器:Agent Desk 那种「高度由 flex 决定」的格子 */
+  #frame{height:420px;width:640px;margin:16px;border:1px dashed var(--border);display:flex;flex-direction:column}
+  #frame > *{flex:1 1 auto;min-height:0}
+  #log{padding:8px 12px;color:var(--text-muted);white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:12px}
+</style>
+<div id="bar">
+  <button id="mount">挂载</button><button id="unmount">卸载</button>
+  <label><input type="checkbox" id="live" checked> 持续换帧(模拟实时)</label>
+  <label>窗口形状 <select id="shape">
+    <option value="1440x900">1440×900 宽屏</option>
+    <option value="1080x1920">1080×1920 竖屏(手机比例)</option>
+    <option value="800x800">800×800 正方</option>
+    <option value="2560x600">2560×600 极宽</option>
+    <option value="230x408">230×408 计算器</option>
+  </select></label>
+  <button id="measure">量一量(留白/比例)</button>
+  <span id="stat"></span>
+</div>
+<div id="frame"></div>
+<div id="log"></div>
+<script type="module">
+const log = (...a) => { document.getElementById('log').textContent += a.join(' ') + '\n' }
+// 造一张能一眼看出「有没有在变」的图:带秒数与网格
+function makeFrame(n, w = 1280, h = 720) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h
+  const g = c.getContext('2d')
+  g.fillStyle = '#123'; g.fillRect(0, 0, w, h)
+  g.strokeStyle = '#2c4a63'; for (let x = 0; x < w; x += 40) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke() }
+  for (let y = 0; y < h; y += 40) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke() }
+  g.fillStyle = '#ff9a7d'; g.font = 'bold 180px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle'
+  g.fillText(String(n), w / 2, h / 2)
+  g.fillStyle = '#fff'; g.font = '20px monospace'; g.fillText(`${w}x${h}  frame ${n}`, w / 2, h - 40)
+  return { data: c.toDataURL('image/jpeg', 0.7).split(',')[1], w, h }
+}
+let n = 0
+window.tangu = {
+  computerUseLiveView: async (o) => {
+    const [sw, sh] = document.getElementById('shape').value.split('x').map(Number)
+    // 放大取景时主进程会给更高分辨率的同一个窗口 —— 比例必须不变,只是像素更多
+    const k = o.maxDimension >= 1600 ? 2 : 1
+    // ⚠️照实现主进程的语义:image:false 就是**不给图**(连宽高都没有)。
+    // 无视这个参数的话,"我们没要图时保留现有画面"那条分支在 harness 里永远走不到。
+    if (o.image === false) {
+      document.getElementById('stat').textContent = `第 ${n} 帧 · 只问状态(image:false)`
+      return { active: true, windowId: 9, app: '测试窗口', title: '(只问状态)', ageMs: 200 }
+    }
+    const f = makeFrame(++n, sw * k, sh * k)
+    document.getElementById('stat').textContent = `第 ${n} 帧 · 请求 maxDimension=${o.maxDimension}`
+    if (!document.getElementById('live').checked && n > 1) return { active: true, windowId: 9, app: '测试窗口', title: '静止', ageMs: 9000, width: f.w, height: f.h, jpegBase64: f.data }
+    return { active: true, windowId: 9, app: '测试窗口', title: `第 ${n} 帧`, ageMs: 120, width: f.w, height: f.h, jpegBase64: f.data }
+  },
+}
+const views = []
+const ctx = { registerView: (v) => views.push(v), registerSetting(){}, registerCommand(){} }
+const src = await (await fetch('../main.js?t=' + Date.now())).text()
+new Function('ctx', src)(ctx)
+log('注册视图:', views.map(v => v.id).join(','))
+let dispose = null
+document.getElementById('mount').onclick = () => {
+  if (dispose) return
+  dispose = views[0].mount(document.getElementById('frame'))
+  log('已挂载')
+}
+document.getElementById('unmount').onclick = () => { if (dispose) { dispose(); dispose = null; log('已卸载') } }
+
+/**
+ * 布局自检:CSS/布局那头只有真浏览器能证(check.mjs 的垫片不做布局)。把所有窗口形状过一遍,每种量四件事:
+ *   ① 画布宽高比 == 窗口宽高比(画布真的变形了)
+ *   ② 画面渲染尺寸 == 画布尺寸(画布内部零留白 —— 而不是靠裁掉内容换来的)
+ *   ③ 画布至少一边贴满舞台(没有白留的空间)
+ *   ④ 画布不溢出舞台(padding / flex-shrink 都能让它悄悄溢出,踩过)
+ * ⚠️后台标签页里 document.hidden=true,视图按设计进 6s 慢速道且不要图 —— 自检里临时伪装成可见。
+ */
+document.getElementById('measure').onclick = async () => {
+  const btn = document.getElementById('measure')
+  btn.disabled = true
+  const desc = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden')
+  Object.defineProperty(document, 'hidden', { get: () => false, configurable: true })
+  const sel = document.getElementById('shape')
+  const keep = sel.value
+  const near = (a, b, t) => Math.abs(a - b) <= t
+  let bad = 0
+  try {
+    for (const opt of [...sel.options]) {
+      sel.value = opt.value
+      sel.dispatchEvent(new Event('change'))
+      const [w0, h0] = opt.value.split('x').map(Number)
+      // 等**这个形状的帧**真的上屏再量。固定 sleep 会量到上一形状的画面 —— 薄脆的仪器比没有更坏。
+      const arrived = await (async () => {
+        for (let i = 0; i < 40; i++) {
+          const im = document.querySelector('.cu-live-viewport img')
+          if (im && Math.abs(parseFloat(im.style.width) / parseFloat(im.style.height) - w0 / h0) < 1e-3) return true
+          await new Promise((r) => setTimeout(r, 100))
+        }
+        return false
+      })()
+      const vp = document.querySelector('.cu-live-viewport')
+      const stage = document.querySelector('.cu-live-stage')
+      if (!vp || !arrived) { log(`${opt.value} → 等不到这个形状的画面 ❌`); bad++; continue }
+      const img = vp.querySelector('img')
+      const v = vp.getBoundingClientRect(), st = stage.getBoundingClientRect(), im = img.getBoundingClientRect()
+      const [w, h] = opt.value.split('x').map(Number)
+      const ok = [
+        near(v.width / v.height, w / h, 0.012),
+        near(im.width, v.width, 1) && near(im.height, v.height, 1),
+        near(v.width, st.width, 1.5) || near(v.height, st.height, 1.5),
+        v.width <= st.width + 1 && v.height <= st.height + 1,
+      ]
+      if (ok.some((x) => !x)) bad++
+      log(`${opt.value.padEnd(9)} 画布 ${v.width.toFixed(0)}x${v.height.toFixed(0)}`
+        + `  比例${ok[0] ? '✅' : '❌'} 铺满${ok[1] ? '✅' : '❌'} 贴边${ok[2] ? '✅' : '❌'} 不溢出${ok[3] ? '✅' : '❌'}`)
+    }
+    log(bad === 0 ? '✅ 布局自检通过(每种窗口形状都无留白)' : `❌ ${bad} 种形状不合格`)
+  } finally {
+    sel.value = keep
+    if (desc) Object.defineProperty(document, 'hidden', desc)
+    btn.disabled = false
+  }
+}
+document.getElementById('mount').click()
+</script>

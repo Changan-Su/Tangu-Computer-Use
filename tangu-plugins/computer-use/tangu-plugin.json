@@ -1,0 +1,9 @@
+{
+  "id": "computer-use",
+  "name": "Computer Use",
+  "version": "0.2.0",
+  "apiVersion": 1,
+  "entry": "dist/index.js",
+  "commands": ["computer-use"],
+  "description": "Let the agent observe and control desktop apps (macOS 14+ / Windows / Linux)."
+}
