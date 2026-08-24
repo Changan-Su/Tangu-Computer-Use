@@ -70,9 +70,21 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
       - run: npm install --no-audit --no-fund
 
-      # native macOS helper(Swift)→ prebuilt/macos/<arch>/tangu-computer-use.app(arm64 + x86_64)
-      - name: Build macOS helper
-        run: npm run build:native
+      # native macOS helper(Swift)→ prebuilt/macos/{arm64,x64}/bridge
+      # ⚠️必须 --arch all:不带参数时 build-native.mjs 只编 process.arch(runner 是 arm64),
+      # 于是发出去的包里没有 x64 那份 —— Intel Mac 用户的「随包自动安装」会退化成本地 Swift 编译,
+      # 没装 Xcode 命令行工具就直接失败。setup-helper 只按 per-arch 路径找裸二进制,universal
+      # 裸二进制它不认,所以是 all 而不是 universal。
+      - name: Build macOS helper (both architectures)
+        run: npm run build:native -- --arch all
+
+      # 发版前把「两个架构都在」变成硬门槛 —— 缺哪个都不该发出去
+      - name: Verify macOS prebuilts
+        run: |
+          for a in arm64 x64; do
+            test -f "prebuilt/macos/$a/bridge" || { echo "missing prebuilt/macos/$a/bridge"; exit 1; }
+            file "prebuilt/macos/$a/bridge"
+          done
 
       # Windows helper(上一个 job 的产物)→ prebuilt/windows/windows-bridge.exe,一并打进 npm 包
       - name: Download Windows helper

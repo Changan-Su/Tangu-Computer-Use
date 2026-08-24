@@ -5,7 +5,8 @@
 # 本仓即 bundle 本体,整目录拷到 <home>/plugins/tangu-computer-use/ 一处即完成:
 #   桌面识别 manifest.json + main.js(「被操控的窗口」实时画面视图);
 #   引擎(tangu-agent bundles.ts)原地读 tangu-plugins/computer-use/(11 个工具)与 skills/(配套技能)。
-# native helper 不在这里装 —— 首次使用跑 `tangu computer-use setup`(要在系统设置里授权,得交互)。
+# native helper 不在这里装,但**也不用人管**:随包的 prebuilt 二进制会在第一次用工具时自动装/更新
+# (src/onboarding.ts)。只有系统授权(辅助功能/屏幕录制)必须用户自己拨 —— agent 会替他打开面板。
 set -euo pipefail
 MODE="${1:-dev}"
 case "$MODE" in
@@ -101,7 +102,7 @@ done
 echo "   引擎插件:$DEST/tangu-plugins/computer-use(11 个工具)"
 echo "   配套技能:$DEST/skills/computer-use"
 echo "重开 Forsion(dev:重启 desktop)后:设置 → 插件 → 启用「电脑操作」;"
-echo "首次使用请在终端跑 \`tangu computer-use setup\` 装 native helper 并授权。"
+echo "native helper 会在首次用工具时自动装好;届时按提示在系统设置里授予辅助功能与屏幕录制即可。"
 
 if [ -n "$LEGACY" ]; then
   echo ""

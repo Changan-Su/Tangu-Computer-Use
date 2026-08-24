@@ -12,12 +12,10 @@
  */
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { execFile } from 'node:child_process'
 import { connect } from 'node:net'
 import { homedir } from 'node:os'
-import { promisify } from 'node:util'
+import { ensureDaemon, freshCalculator, killCalculator } from './calc-fixture.mjs'
 
-const execFileP = promisify(execFile)
 const SOCK = `${homedir()}/Library/Caches/tangu-computer-use/bridge.sock`
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const FRAMES = 24
@@ -52,39 +50,23 @@ const findNode = (node, pred) => {
 }
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]
 
-/** 等计算器真的起来并且有窗口 —— 固定 sleep 会在机器忙时随机失败,薄脆的仪器比没有更坏。 */
-async function waitForCalculator(timeoutMs = 15_000) {
-  const deadline = Date.now() + timeoutMs
-  let last = ''
-  while (Date.now() < deadline) {
-    const calc = (await ask({ cmd: 'listApps' })).find((a) => a.bundleId === 'com.apple.calculator')
-    if (calc) {
-      const win = (await ask({ cmd: 'listRoots', pid: calc.pid })).roots.find((r) => r.windowId)
-      if (win) return { calc, win }
-      last = '进程在但还没有可见窗口'
-    } else {
-      last = '还没看到计算器进程'
-    }
-    await sleep(300)
-  }
-  throw new Error(`等计算器就绪超时:${last}`)
-}
-
-const diag = await ask({ cmd: 'diagnostics' })
-assert.equal(diag.protocolVersion, 10, `helper 协议应为 10,实测 ${diag.protocolVersion}`)
+const diag = await ensureDaemon(ask)
+assert.equal(diag.protocolVersion, 11, `helper 协议应为 11,实测 ${diag.protocolVersion}`)
 assert.ok(diag.screenRecording, '需要「屏幕录制」权限,否则拿不到任何画面')
 
-await execFileP('open', ['-g', '-a', 'Calculator'])
 try {
-  const { calc, win } = await waitForCalculator()
+  const { calc, win } = await freshCalculator(ask)
   const look = await ask({ cmd: 'look', pid: calc.pid, windowId: win.windowId, includeImage: true })
   const keyOf = (d) => {
     const n = findNode(look.outline, (x) => x.role === 'AXButton' && (x.description === d || x.title === d))
     assert.ok(n, `没找到数字键 ${d}`)
     return { x: n.rect.x + n.rect.w / 2, y: n.rect.y + n.rect.h / 2 }
   }
+  // ⚠️policy 必须是 background:这里只是要把窗口内容点变以便验证帧在更新,
+  // 用 foreground/hid 的话仪器每跑一次就抢 12 次用户焦点、还把实物鼠标拽走 ——
+  // 测「不抢前台」的项目自己抢前台,荒唐。后台 AX 按压点得中数字键(check:blindclick 已证明)。
   const click = (d) => ask({
-    cmd: 'act', lookId: look.lookId, pid: calc.pid, policy: 'foreground', delivery: 'hid',
+    cmd: 'act', lookId: look.lookId, pid: calc.pid, policy: 'background',
     cursorOverlay: true, action: 'click', target: keyOf(d), params: { button: 'left', clickCount: 1 },
   })
 
@@ -138,5 +120,5 @@ try {
   assert.ok(!frames.some((f) => f.source === 'legacy'), '不该退到上游那条会留白的老路')
   console.log(`✅ 实时画面:走常驻取景流、单帧亚百毫秒、画面确实在动、且每帧都是窗口原比例(无留白)`)
 } finally {
-  await execFileP('pkill', ['-x', 'Calculator']).catch(() => {})
+  await killCalculator(ask).catch(() => {})
 }

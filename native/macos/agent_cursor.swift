@@ -17,7 +17,9 @@ final class AgentCursor {
         self.scheduleIdleHide = scheduleIdleHide
     }
 
-    func animate(to point: CGPoint, above windowId: UInt32) {
+    /// `above` 这个标签是上游的,但**跨进程的相对排序已经做不到了**(见下面被删掉的那行),
+    /// 现在完全靠 window level 置顶。参数名留成 `_` 以免有人以为传进来的窗口号还起作用。
+    func animate(to point: CGPoint, above _: UInt32) {
         idleHideTask?.cancel()
         idleHideTask = nil
         idleGeneration &+= 1
@@ -29,7 +31,9 @@ final class AgentCursor {
         let bounds = Self.overlayBounds()
         if window.frame != bounds.union { window.setFrame(bounds.union, display: false) }
         if !window.isVisible { window.orderFrontRegardless() }
-        window.order(.above, relativeTo: Int(windowId))
+        // ⚠️上游这里是 window.order(.above, relativeTo: Int(windowId)) —— 对**别的进程**的 window number
+        // 是空操作(实测:窗口既不上移也不消失),它只在同一 App 自己的窗口之间有意义。
+        // 跨进程置顶只能靠 window level,见 AgentCursorOverlayWindow.init。
 
         let local = OverlayGeometry.canvasPoint(point, union: bounds.union, primaryHeight: bounds.primaryHeight)
         let renderer = AgentCursorRenderer.shared
@@ -99,6 +103,11 @@ private final class AgentCursorOverlayWindow: NSWindow {
         backgroundColor = .clear
         hasShadow = false
         ignoresMouseEvents = true
+        // Tangu 补丁:跨进程置顶只能靠 level(order(.above, relativeTo: 外部窗口号) 是空操作)。
+        // 取「能盖住 agent 会碰到的一切」的**最低**档:比光效(.floating=3)高,比目标 App 自己弹的
+        // 菜单(.popUpMenu=101)高一档 —— 指针指到哪儿是最关键的信息,菜单项被点时尤其不能被挡。
+        // ⚠️别调到 .screenSaver(1000):那会连屏保、系统警告一起盖住,而光标最长要停留 8 秒。
+        level = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue + 1)
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         isReleasedWhenClosed = false
         hidesOnDeactivate = false

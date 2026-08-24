@@ -38,7 +38,7 @@ const HIDDEN_TICK_MS = 6000
 const ERROR_TEXT = {
   unsupported_platform: '实时画面目前只有 macOS 支持(Windows 的 helper 是子进程,桌面端够不着)。',
   helper_not_running: '还没有窗口正在被操控。让 agent 用 computer use 的工具动一下,画面就会出现。',
-  unsupported_helper: '本机的 Computer Use helper 还是旧版,不认识实时画面(边缘光效同样不会出现——两者在同一个二进制里)。跑 `tangu computer-use setup` 更新;若它拒绝说会重置权限,加上 PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1 再跑,装完 macOS 会要求重新授权「辅助功能」与「屏幕录制」。',
+  unsupported_helper: '本机的 Computer Use helper 还是旧版,不认识实时画面(边缘光效同样不会出现——两者在同一个二进制里)。让 agent 用一次 computer use 的工具,它会自动把 helper 更新到随包的版本;更新后 macOS 可能要求重新授权「辅助功能」与「屏幕录制」。',
   capture_timeout: '截取窗口画面超时了,下一帧会重试。',
   client_timeout: '等本机 helper 回画面超时了,下一帧会重试。',
   capture_failed: '截不到这个窗口的画面 —— 多半是没给「屏幕录制」权限(系统设置 → 隐私与安全性)。',

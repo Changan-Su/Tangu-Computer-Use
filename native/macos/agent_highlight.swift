@@ -99,8 +99,8 @@ final class AgentHighlight {
             window.setFrame(appKitFrame, display: true)
         }
         if !window.isVisible { window.orderFrontRegardless() }
-        // 悬在目标窗口正上方:目标之上的其他窗口仍然正常盖住光效。
-        window.order(.above, relativeTo: Int(windowId))
+        // ⚠️这里曾是 window.order(.above, relativeTo: Int(windowId)) —— 对**别的进程**的 window number
+        // 是空操作(实测:窗口既不上移也不消失)。跨进程的 z-order 只能靠 window level,见 init 里的 .floating。
     }
 
     private func startFollowing() {
@@ -164,9 +164,15 @@ final class AgentHighlight {
 /// 顶层函数而非 Bridge 方法:AgentHighlight 是 @MainActor 单例,不该为了拿个矩形去持有 Bridge。
 /// 只用 CGWindowList(同步、便宜),不碰 ScreenCaptureKit —— 8Hz 跟随经不起异步捕获那条路。
 func cgWindowBounds(windowId: UInt32) -> CGRect? {
-    let ids = [NSNumber(value: windowId)] as CFArray
-    guard let entries = CGWindowListCreateDescriptionFromArray(ids) as? [[String: Any]],
+    // ⚠️别换回 CGWindowListCreateDescriptionFromArray:它对**别的进程**的窗口恒返回空数组
+    // (实测同一个计算器 windowId,CreateDescriptionFromArray → count=0,
+    //  CopyWindowInfo(.optionIncludingWindow) → count=1 且 bounds 正确)。
+    // 这条曾让边缘光效整个功能静默失效 —— show() 在这里 return,窗口连建都没建。
+    // ⚠️还要看 kCGWindowIsOnscreen:`.optionIncludingWindow` 连**最小化 / 已隐藏**的窗口也照给
+    // bounds,拿它去摆光效 = 在目标已经不在屏上时,把光圈留在它原来的位置上闪。
+    guard let entries = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(windowId)) as? [[String: Any]],
         let entry = entries.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowId }),
+        (entry[kCGWindowIsOnscreen as String] as? Bool) == true,
         let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
         let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
     else { return nil }
@@ -184,6 +190,10 @@ private final class HighlightOverlayWindow: NSWindow {
         backgroundColor = .clear
         hasShadow = false
         ignoresMouseEvents = true
+        // 宿主是 .accessory,永远不激活 → 普通层(0)的叠层会被"刚被激活的目标 App"直接压在下面,
+        // 用户什么也看不见。跨进程置顶只有 window level 一条路。光效用 .floating(3):盖住普通窗口,
+        // 但目标自己弹的菜单(popUpMenu=101)仍在它之上 —— 菜单本来就该盖住窗口边框的光。
+        level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         isReleasedWhenClosed = false
         hidesOnDeactivate = false

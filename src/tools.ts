@@ -18,7 +18,8 @@ import {
   executeEvaluateBrowser, ensureComputerUseSetup,
 } from './vendor/bridge.ts';
 import { getComputerUseConfig } from './vendor/config.ts';
-import { helperInstalled, isSupportedPlatform } from './helperState.ts';
+import { isSupportedPlatform } from './helperState.ts';
+import { autoInstallFailed, ensureHelperCurrent, guideMissingPermissions } from './onboarding.ts';
 import { foregroundNote } from './foregroundNote.ts';
 
 const execFileP = promisify(execFile);
@@ -258,18 +259,29 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
     definition: { type: 'function', function: { name: spec.name, description: spec.description, parameters: spec.parameters } },
     execute: async (args: Record<string, any>, tcx: ToolContext): Promise<string> => {
       syncSettings(store);
-      if (!helperInstalled()) {
-        return 'Computer Use helper is not installed yet. Run `tangu computer-use setup` to install the desktop helper (on macOS it also guides you through granting Accessibility + Screen Recording).';
-      }
+      // ⚠️这里**绝不能**再加「没装就 return 指导文本」的早退:vendor 的 ensureInstalled() 本来就会
+      // 自动跑 setup-helper.mjs,早退等于把上游的自动安装堵死(用户报的「首次安装还要敲命令」就是它)。
+      // 我们只补上游缺的那半:装着的二进制比 bundle 老时也要重装。
+      const installNote = await ensureHelperCurrent(tcx.signal);
       const pctx = makePiCtx(tcx, false);
       try {
         await ensureComputerUseSetup(pctx, tcx.signal);
       } catch (e: any) {
-        return `Computer Use is not ready: ${e?.message || e}\nRun \`tangu computer-use setup\` (grant Accessibility + Screen Recording to "Tangu Computer Use" in System Settings → Privacy & Security).`;
+        // 权限是系统安全设置,只能用户自己拨 —— 但可以替他把 App 登记好、把面板打开。
+        const guidance = await guideMissingPermissions(tcx.signal);
+        // ⚠️只有「自动安装本身失败了」才该提终端命令。就绪失败的原因多得很(Linux 缺 AT-SPI、
+        // 架构不符、daemon 起不来……),对这些 case 说「去跑 setup」是把模型引到错的方向上,
+        // 而真正的原因反而被这句话盖住了。
+        const fallback = autoInstallFailed()
+          ? `Computer Use is not ready: ${e?.message || e}\nAutomatic helper installation failed — run \`tangu computer-use setup\` in a terminal to see why.`
+          : `Computer Use is not ready: ${e?.message || e}`;
+        return [installNote, guidance ?? fallback].filter(Boolean).join('\n');
       }
-      if (spec.run) return spec.run(args, tcx, pctx);
+      // 装/升级过就在结果里说一句 —— 用户装了什么、agent 替他做了什么,不该是暗箱。
+      const prefix = installNote ? `${installNote}\n` : '';
+      if (spec.run) return prefix + await spec.run(args, tcx, pctx);
       const result = await spec.exec!('', args, tcx.signal, undefined, pctx);
-      return render(result, tcx);
+      return prefix + render(result, tcx);
     },
   });
 

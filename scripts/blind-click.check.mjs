@@ -15,12 +15,10 @@
  * 需要:macOS、helper 已装并授权(辅助功能 + 屏幕录制)。会短暂打开「计算器」,跑完关掉。
  */
 import assert from 'node:assert/strict'
-import { execFile } from 'node:child_process'
 import { connect } from 'node:net'
 import { homedir } from 'node:os'
-import { promisify } from 'node:util'
+import { ensureDaemon, freshCalculator, killCalculator } from './calc-fixture.mjs'
 
-const execFileP = promisify(execFile)
 const SOCK = `${homedir()}/Library/Caches/tangu-computer-use/bridge.sock`
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -61,40 +59,21 @@ function findNode(node, pred) {
   return null
 }
 
-/** 等计算器真的起来并且有窗口 —— 固定 sleep 会在机器忙时随机失败,薄脆的仪器比没有更坏。 */
-async function waitForCalculator(timeoutMs = 15_000) {
-  const deadline = Date.now() + timeoutMs
-  let last = ''
-  while (Date.now() < deadline) {
-    const calc = (await ask({ cmd: 'listApps' })).find((a) => a.bundleId === 'com.apple.calculator')
-    if (calc) {
-      const win = (await ask({ cmd: 'listRoots', pid: calc.pid })).roots.find((r) => r.windowId)
-      if (win) return { calc, win }
-      last = '进程在但还没有可见窗口'
-    } else {
-      last = '还没看到计算器进程'
-    }
-    await sleep(300)
-  }
-  throw new Error(`等计算器就绪超时:${last}`)
-}
-
-const diag = await ask({ cmd: 'diagnostics' })
-assert.equal(diag.protocolVersion, 10, `helper 协议应为 10,实测 ${diag.protocolVersion} —— 先重装 helper`)
+const diag = await ensureDaemon(ask)
+assert.equal(diag.protocolVersion, 11, `helper 协议应为 11,实测 ${diag.protocolVersion} —— 先重装 helper`)
 assert.ok(diag.accessibility, '需要「辅助功能」权限')
 
-// 后台打开计算器(-g = 不抢前台),留在终端/当前 App 前台
-await execFileP('open', ['-g', '-a', 'Calculator'])
 try {
   const before = await frontmostApp()
-  const { calc, win } = await waitForCalculator()
+  // 后台开一个全新的计算器(-g = 不抢前台);夹具会先等上一个仪器留下的实例真的退干净。
+  const { calc, win } = await freshCalculator(ask)
 
   const look = await ask({ cmd: 'look', pid: calc.pid, windowId: win.windowId, includeImage: true })
   // ⚠️outline 里的 rect 已经是**图像坐标**(不是屏幕坐标),act 的 x/y 要的正是它 —— 别再换算一遍。
-  const key5 = findNode(look.outline, (n) => n.role === 'AXButton' && (n.description === '5' || n.title === '5'))
-  assert.ok(key5, '没在 outline 里找到数字键 5')
-  const imgX = key5.rect.x + key5.rect.w / 2
-  const imgY = key5.rect.y + key5.rect.h / 2
+  assert.ok(
+    findNode(look.outline, (n) => n.role === 'AXButton' && (n.description === '5' || n.title === '5')),
+    '没在 outline 里找到数字键 5',
+  )
 
   /** 计算器的读数:第一个有值的静态文本。数字前有个 LTR 标记,只留数字。 */
   const displayIn = (outline) => String(findNode(outline, (n) => n.role === 'AXStaticText' && n.value)?.value ?? '').replace(/\D/g, '')
@@ -145,5 +124,5 @@ try {
   assert.ok(seven.display.endsWith('7'), `点了 7,读数应以 7 结尾,实得 ${seven.display}`)
   console.log('✅ 后台盲点:走 AX、不抢前台、且两次都真的点中了')
 } finally {
-  await execFileP('pkill', ['-x', 'Calculator']).catch(() => {})
+  await killCalculator(ask).catch(() => {})
 }

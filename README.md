@@ -21,16 +21,21 @@ sh install.sh dev                # → ~/.forsion-dev/plugins/tangu-computer-use
 > 若你装过 0.1.x,`<home>/tangu/plugins/` 或 `~/.tangu/plugins/` 里那份要删掉——同一个插件 id 会重复装载,
 > `install.sh` 会把它们列出来。
 
-Then enable **电脑操作** in **设置 → 插件**, and install the native helper:
+Then enable **电脑操作** in **设置 → 插件**. That is the whole setup — **the native helper installs
+itself** the first time a tool runs, and reinstalls itself when a plugin update ships a newer helper
+(the binary rides along in the bundle, so this works offline). No terminal required.
+
+The CLI is still there for repairs and for scripting:
 
 ```bash
-tangu computer-use setup      # installs the helper, guides you through granting permissions
 tangu computer-use doctor     # check helper / Accessibility / Screen Recording / macOS version
+tangu computer-use setup      # force a reinstall of the helper
 tangu computer-use stop       # stop the helper
 ```
 
 macOS will ask you to grant **Accessibility** and **Screen Recording** to *Tangu Computer Use*
-in System Settings → Privacy & Security. The agent cannot see or touch anything until you do.
+in System Settings → Privacy & Security — the agent opens the right pane for you, but only you can
+flip the switch. The agent cannot see or touch anything until you do.
 Since v0.5.0 the helper installs to `~/Applications` unless a writable `/Applications` copy already
 exists — **no administrator password needed**.
 
@@ -83,7 +88,10 @@ tools only when a desktop workflow must also touch a web page in the same root f
 npm install
 npm run build          # esbuild → tangu-plugins/computer-use/dist/index.js  +  tsc --noEmit
 npm run check          # foreground note · helper path · highlight geometry · desktop plugin
-npm run check:live     # real machine, needs an authorized helper: background click + live view
+npm run check:live     # real machine, needs an authorized helper:
+                       #   check:blindclick  background click lands without taking the foreground
+                       #   check:liveview    the live view really streams, at the window's aspect
+                       #   check:overlay     both overlays are ON SCREEN and ABOVE the target window
                        # (briefly opens Calculator; not runnable in CI, so not part of `check`)
 npm run build:native   # build the macOS Swift helper (arm64 + x86_64)
 npm run build:windows  # Windows Rust helper (must run on Windows)

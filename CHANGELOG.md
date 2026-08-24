@@ -1,5 +1,60 @@
 # 更新日志
 
+## 0.4.0 — 2026-07-29
+
+**示意光标和边缘光效终于真的画在屏幕上了。** 0.3.0 那轮修的是几何(算得对不对),这轮才发现算得再对
+也没用 —— 两个覆盖层压根没被用户看见,而且是两个互不相干的原因:
+
+- **边缘光效从未出现过一次**。定位窗口矩形用的 `CGWindowListCreateDescriptionFromArray` 对**别的进程**
+  的窗口恒返回空数组(同一个 windowId:它 count=0,`CGWindowListCopyWindowInfo(.optionIncludingWindow)`
+  count=1 且 bounds 正确)。拿不到矩形就 `return`,窗口连建都没建过。这个功能自加进来就一直是死的。
+- **示意光标随时会被压在下面**。两个覆盖层都没设 `window.level`,待在普通层(0);而宿主是 `.accessory`
+  永不激活,所以只要被操控的 App 被激活一次,覆盖层就沉到它下面。上游想用
+  `window.order(.above, relativeTo: 目标窗口号)` 解决,但那个 API 只在**本进程自己的窗口之间**有意义,
+  传别的进程的窗口号是**空操作**(实测:既不上移也不消失)。现在光效 `.floating`、光标 `.screenSaver`。
+
+留了仪器:`npm run check:overlay` 按 100ms 采样 `CGWindowListCopyWindowInfo` 的窗口栈,断言两个覆盖层
+**都上了屏、且 z 序在被操控窗口之上**。"窗口存在"和"用户看得见"是两件事,只有前者的测试骗了我们两轮。
+
+**首次安装和更新不再需要开终端。** 也是两半:
+
+- vendor 的 `ensureInstalled()` 本来就会自动跑 `scripts/setup-helper.mjs`(还正确处理了
+  `ELECTRON_RUN_AS_NODE`)—— 是我们自己在 tools.ts 里加的「没装就返回指导文本」抢在它前面 return,
+  把上游的自动安装堵死了。
+- 而 `ensureInstalled()` 只判断可执行文件**存不存在**,不判断新旧;插件升级后老二进制留在原地 →
+  协议不匹配 → 报错让用户去终端。现在比对 bundle 随包二进制与已装二进制的哈希,过期就地重装。
+
+权限仍然只能用户自己拨(系统安全设置),但现在会自动把 App 预登记进隐私面板并**打开对应面板**,
+用户只需拨一下开关;每个面板每进程只开一次,免得 agent 重试时刷屏。
+
+四处用户可见文案同步改掉了「去终端敲 `tangu computer-use setup`」:`manifest.json` 的引导卡
+(用户真正看到的那张)、`skills/computer-use/SKILL.md`(不然 agent 还会照旧念给用户听)、
+`main.js` 的旧 helper 提示、`install.sh` 结尾。CLI 本身保留,当修复入口用。
+
+**Codex 评审后修掉的(16 条,全收)**,其中三条足以让上面两件事白做:
+
+- **协议号还停在 10** —— 装新二进制不等于换掉正在跑的 daemon。协议号不变的话,0.3 的 daemon 能通过
+  `ensureProtocol()` 继续服务,你重启 Forsion 也还是看不见叠层。现为 **11**。
+  这轮只改了窗口层级和一个 CGWindowList 调用、没加新命令,正是最容易忘 bump 的形状。
+- **「过期」判定恒为真** —— `installHelperApp()` 是复制后**在原地重签**,Mach-O 字节必然变,
+  拿随包源二进制去比已装的可执行文件永远不等 → 每个新进程都跑一遍完整安装,还可能每次弹钥匙串。
+  改比 `Contents/Resources/source.sha256`(签名前的源哈希,`installHelperApp` 专门写它就是为这个)。
+- **发布只编了一个架构** —— CI 跑在 arm64 runner 上,`npm run build:native` 不带参数只编 `process.arch`,
+  发出去的包里没有 x64 那份。Intel Mac 的「随包自动安装」会退化成本地 Swift 编译,没装 Xcode 命令行
+  工具就直接失败。改 `--arch all` 并加发版前的硬门槛。
+
+其余:权限真值改问 `checkPermissions`(`diagnostics` 那项只是 `CGPreflight` 缓存值,bridge.swift 自己的
+注释就写着这点);一次只开一个隐私面板(系统设置是单窗口,连开两个后一个会顶掉前一个,而两个都被记成
+"开过了");安装的共享 Promise 只跟子进程生死绑定,超时/取消只中断**等待**;`cgWindowBounds` 增加
+`kCGWindowIsOnscreen` 检查(最小化的窗口也会返回 bounds,光效会留在它原来的位置);光标层级从
+`.screenSaver`(1000)降到 `.popUpMenu + 1`(102)—— 够盖住 agent 会碰到的一切,但不再盖住屏保和系统警告;
+就绪失败时只有「自动安装真的失败了」才提终端命令(否则 Linux 缺 AT-SPI 这类错误会被这句话盖住)。
+
+仪器也修了三条,其中两条是**假绿灯通道**:`check:overlay` 现在要求先有干净起跑线(光标空闲 8 秒才隐藏,
+上一个仪器留下的窗口足以让断言通过)、断言只看动作**之后**的帧;不再写死 `/Applications`
+(标准用户装在 `~/Applications`);`killCalculator` 超时改抛错而不是静默放行。
+并在脚本头写清它**不证明**什么:只看窗口的创建/层级/z 序,画布画了个空照样能过。
+
 ## 0.3.0 — 2026-07-27
 
 **后台点击不再抢前台**。之前 agent 看着截图"盲点"(只给坐标、没有元素引用)一定会把目标 App 拉到前台、

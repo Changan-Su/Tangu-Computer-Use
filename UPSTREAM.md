@@ -110,11 +110,14 @@ Accessibility/Screen-Recording (TCC) grants to them.
 > stays put, everything else goes to `~/Applications` (no admin needed). Users whose `/Applications`
 > is not writable will be asked to re-grant TCC once, because the path moved.
 
-**Helper protocol version — bumped by us.** Upstream v0.5.0 is at 6; we run **10**, in two places that must
+**Helper protocol version — bumped by us.** Upstream v0.5.0 is at 6; we run **11**, in two places that must
 always match: `native/macos/bridge.swift` (`private let protocolVersion`) and
 `src/vendor/platform/macos/helper.ts` (`HELPER_PROTOCOL_VERSION`). Bump it whenever the helper gains a
-command or native behaviour, because `ensureInstalled()` returns early as soon as the executable *exists* —
-it never notices a stale binary. Without a bump, an old installed helper keeps serving observe/act while
+command **or changes native behaviour** — `src/onboarding.ts` now notices a stale binary *on disk*, but a
+**already-running** daemon is only re-validated through the protocol number, so without a bump the old
+process keeps serving after the update lands. 0.4.0 is the cautionary case: it changed only overlay window
+levels and one CGWindowList call, no new commands — a same-protocol daemon would have gone on drawing
+invisible overlays and the user would have reported the bug a fourth time. Without a bump, an old installed helper keeps serving observe/act while
 every new native feature silently does nothing (that is exactly how the first live-view build shipped
 "working"). With a bump, `ensureProtocol()` restarts the daemon and then throws a clear
 "reinstall or rebuild the helper app" error. On resync, if upstream has moved past 6, go one above theirs.
@@ -157,6 +160,42 @@ every new native feature silently does nothing (that is exactly how the first li
   pointer is still where we put it (so it never fights a user who grabbed the mouse mid-click), and
   `CGAssociateMouseAndMouseCursorPosition(1)` after the warp or the pointer appears stuck. The
   background (pid) path needs none of this: it never moves the system pointer, it draws `AgentCursor`.
+
+- **Overlay z-order and window bounds — two bugs that made both overlays invisible (0.4.0).** Replay
+  these after any sync; both are one-liners and both fail *silently*.
+  ① `cgWindowBounds()` must use `CGWindowListCopyWindowInfo([.optionIncludingWindow], id)`.
+  **Never** `CGWindowListCreateDescriptionFromArray` — it returns an **empty array** for windows owned
+  by another process (measured on the same window id: 0 vs 1 entries). `AgentHighlight.show()` bails on
+  a nil rect, so the glowing edge had never rendered once since it was written.
+  ② Both overlay windows must set `window.level` (`.floating` for the glow, `.screenSaver` for the
+  cursor). They live in an `.accessory` app that never activates, so at the default level 0 they sink
+  below the controlled app the moment it is activated. Upstream's
+  `window.order(.above, relativeTo: <foreign window number>)` is a **no-op across processes** (measured:
+  the window neither rises nor disappears) — cross-process stacking is only expressible as a level.
+  `npm run check:overlay` samples the on-screen window stack at 100ms and asserts both overlays are
+  present **and above the controlled window**. Geometry unit tests cannot see either bug: "the rect is
+  correct", "the window exists" and "the user can see it" are three different claims.
+
+- **Never spawn `Contents/MacOS/bridge` directly** — launch the daemon with
+  `open -n -g <APP> --args serve --socket <path>` (what `launchDaemon()` does). TCC attributes grants to
+  the *responsible process*, so a direct spawn inherits the caller's identity and `diagnostics` reports
+  "no Accessibility permission". It looks exactly like lost grants and is not.
+
+### Onboarding — the helper installs itself (0.4.0)
+`ensureInstalled()` already shells out to `scripts/setup-helper.mjs` (re-entering Electron/Bun via
+`ELECTRON_RUN_AS_NODE`), so a **first** install needs no terminal. Two things break that, and both were
+ours:
+- Any "helper not installed → return instructions" early-return in `src/tools.ts` **defeats it**. Don't
+  add one back.
+- `ensureInstalled()` returns as soon as the executable *exists* and never notices a **stale** binary, so
+  plugin updates used to dead-end at a protocol-mismatch error telling the user to open a terminal.
+  `src/onboarding.ts` `helperNeedsUpdate()` compares the bundle's `prebuilt/macos/<arch>/bridge` against
+  the installed executable by hash (memoised per process) and reinstalls when they differ. This is why
+  the bundle must keep shipping the prebuilt binary — `npm run check:helper-path` asserts it does.
+
+Permissions deliberately still require the user: granting Accessibility/Screen Recording is a system
+security setting. `guideMissingPermissions()` pre-registers the app in the Privacy panes and opens the
+right pane (once per kind per process, or a retrying agent spams System Settings).
 
 ### Known residual: same-app window pairing
 `backgroundPressAtPoint` scopes its hit-test to the target app and then requires the hit to sit inside
