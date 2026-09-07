@@ -104,3 +104,11 @@ See `UPSTREAM.md` for the vendor strategy and how to re-sync upstream.
 ## License
 
 MIT (see `LICENSE`). Derived from pi-computer-use — upstream license in `LICENSE.upstream`.
+
+### Mini Panel foreground signal
+
+The macOS helper publishes a short-lived `foreground.json` beside its socket for Genesis Mini Panel. It becomes active only when real HID input is posted or the input path activates the target app; successful AX and PID background operations do not activate it. Nested physical-input scopes keep the signal active until the outer action finishes. A 1-second heartbeat renews a lease of at most 2500ms; short completed clicks remain observable for 350ms. Desktop checks expiry and helper liveness, never starts the helper or requests screenshots for this feature.
+
+Build the helper with `npm run build:native` (or the source fallback in setup-helper) and pair it with Genesis's Mini Panel adapter update. `npm run check:mini-foreground` tests signal lifetime without controlling any application. Existing installed helpers must be rebuilt through the normal signed-helper workflow before Genesis can follow foreground input.
+
+macOS helper 会向 socket 同目录发布短时前台输入信号，供 Genesis Mini Panel 跟随光标。后台 AX/PID 调用不触发；必须配套更新 Genesis 并按现有签名流程重建 helper。验证命令为 `npm run check:mini-foreground`，不会操控用户应用。

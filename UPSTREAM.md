@@ -238,3 +238,5 @@ src/  native/  scripts/  prebuilt/                          ← 源码与原生 
    For the view's layout, serve the repo and open `harness/harness.html`, then press 「量一量」 —
    it walks every window shape and asserts canvas-aspect / fill / snug / no-overflow. The DOM shim in
    `check.mjs` does no layout, so CSS regressions are only visible there.
+
+- Mini Panel foreground activity: `native/macos/foreground_activity.swift` emits a bounded, data-only lease beside the daemon socket. Hooked into actual HID/focus delivery and recursive input scopes, not the requested delivery policy. Included in both native-build and source-install inputs. No change to upstream tool schemas or input behavior.

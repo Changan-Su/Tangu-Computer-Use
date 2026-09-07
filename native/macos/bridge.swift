@@ -440,6 +440,7 @@ final class Bridge {
 			if lockFile >= 0 { close(lockFile) }
 			exit(0)
 		}
+		ForegroundActivity.shared.configure(socketPath: socketPath)
 		unlink(socketPath)
 		let server = socket(AF_UNIX, SOCK_STREAM, 0)
 		if server < 0 { close(lockFile); exit(1) }
@@ -1989,11 +1990,11 @@ final class Bridge {
 		var holdsPhysicalInput = false
 		func acquirePhysicalInputIfNeeded() {
 			if delivery == "hid" && !holdsPhysicalInput {
-				physicalInputLock.lock()
+				physicalInputLock.lock(); ForegroundActivity.shared.enter()
 				holdsPhysicalInput = true
 			}
 		}
-		defer { if holdsPhysicalInput { physicalInputLock.unlock() } }
+		defer { if holdsPhysicalInput { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		var performed: [String: Any] = ["delivery": delivery]
 		var element: AXUIElement?
 		var rawPoint: CGPoint?
@@ -2105,6 +2106,7 @@ final class Bridge {
 		func focusTargetForPhysicalInput() {
 			guard delivery == "hid" else { return }
 			if let app = NSRunningApplication(processIdentifier: pid), !app.isActive {
+				ForegroundActivity.shared.physicalInput()
 				performed["activated"] = app.activate()
 			}
 			if let window = windowElement(pid: pid, windowId: record.windowId) {
@@ -2343,8 +2345,8 @@ final class Bridge {
 		let mayUsePhysicalInput = actions.contains { action in
 			(optionalStringArg(action, "policy") ?? "default") != "ax_only"
 		}
-		if mayUsePhysicalInput { physicalInputLock.lock() }
-		defer { if mayUsePhysicalInput { physicalInputLock.unlock() } }
+		if mayUsePhysicalInput { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
+		defer { if mayUsePhysicalInput { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 
 		var steps: [[String: Any]] = []
 		var stoppedAt: Int?
@@ -3466,6 +3468,7 @@ final class Bridge {
 			event.postToPid(pid)
 			return
 		}
+		ForegroundActivity.shared.physicalInput()
 		// Post as a real foreground HID event. AppKit views with mouseDown handlers
 		// can ignore pid-targeted CGEvents even though postToPid reports success.
 		// Keep the target app frontmost so the HID event is delivered to the intended
@@ -3482,8 +3485,8 @@ final class Bridge {
 	}
 
 	private func postMouseMove(to point: CGPoint, pid: Int32, delivery: String = "hid") throws {
-		if delivery == "hid" { physicalInputLock.lock() }
-		defer { if delivery == "hid" { physicalInputLock.unlock() } }
+		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
+		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		guard let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
 			throw BridgeFailure(message: "Failed to create mouse move event", code: "input_failed")
 		}
@@ -3535,8 +3538,8 @@ final class Bridge {
 	}
 
 	private func postMouseClick(at point: CGPoint, pid: Int32, button: CGMouseButton = .left, clickCount: Int = 1, delivery: String = "hid") throws {
-		if delivery == "hid" { physicalInputLock.lock() }
-		defer { if delivery == "hid" { physicalInputLock.unlock() } }
+		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
+		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		// Tangu:HID 点击会把**用户的实物指针**挪到目标处并留在那里 —— 前台被抢已经够烦,
 		// 鼠标还被丢在别处就更糟。点完把指针还回原位。
 		// 后台(pid)路径不需要:那条本来就不动系统指针(只画 AgentCursor 虚拟光标)。
@@ -3570,8 +3573,8 @@ final class Bridge {
 	}
 
 	private func postMouseDrag(points: [CGPoint], pid: Int32, delivery: String = "hid") throws {
-		if delivery == "hid" { physicalInputLock.lock() }
-		defer { if delivery == "hid" { physicalInputLock.unlock() } }
+		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
+		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		guard points.count >= 2, let first = points.first else {
 			throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
 		}
@@ -3599,8 +3602,8 @@ final class Bridge {
 	}
 
 	private func postScrollWheel(at point: CGPoint, deltaX: Int, deltaY: Int, pid: Int32, delivery: String = "hid") throws {
-		if delivery == "hid" { physicalInputLock.lock() }
-		defer { if delivery == "hid" { physicalInputLock.unlock() } }
+		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
+		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		try postMouseMove(to: point, pid: pid, delivery: delivery)
 		guard let event = CGEvent(
 			scrollWheelEvent2Source: nil,
@@ -3666,8 +3669,8 @@ final class Bridge {
 	}
 
 	private func postKeyPress(keys: [String], pid: Int32, delivery: String = "hid") throws {
-		if delivery == "hid" { physicalInputLock.lock() }
-		defer { if delivery == "hid" { physicalInputLock.unlock() } }
+		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
+		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		if let chord = keyChord(keys) {
 			try postKey(chord.key, flags: chord.flags, pid: pid, delivery: delivery)
 			return
@@ -3687,8 +3690,8 @@ final class Bridge {
 	}
 
 	private func postKey(_ key: String, flags: CGEventFlags, pid: Int32, delivery: String = "hid") throws {
-		if delivery == "hid" { physicalInputLock.lock() }
-		defer { if delivery == "hid" { physicalInputLock.unlock() } }
+		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
+		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		guard let code = keyCode(key) else {
 			if key.count == 1 {
 				try postUnicodeText(key, pid: pid, delivery: delivery)
@@ -3709,8 +3712,8 @@ final class Bridge {
 	}
 
 	private func postUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
-		if delivery == "hid" { physicalInputLock.lock() }
-		defer { if delivery == "hid" { physicalInputLock.unlock() } }
+		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
+		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		for scalar in text.unicodeScalars {
 			let char = String(scalar)
 			if let stroke = physicalKeyStroke(for: char) {
@@ -3731,8 +3734,8 @@ final class Bridge {
 	}
 
 	private func postAtomicUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
-		if delivery == "hid" { physicalInputLock.lock() }
-		defer { if delivery == "hid" { physicalInputLock.unlock() } }
+		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
+		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
 			let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
 		else { throw BridgeFailure(message: "Failed to create unicode text event", code: "input_failed") }

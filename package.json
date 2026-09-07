@@ -53,7 +53,8 @@
     "build:windows": "node scripts/build-native.mjs --platform windows",
     "build:linux": "node scripts/build-native.mjs --platform linux",
     "check:live": "npm run check:blindclick && npm run check:liveview && npm run check:overlay",
-    "check:overlay": "node scripts/overlay-visible.check.mjs"
+    "check:overlay": "node scripts/overlay-visible.check.mjs",
+    "check:mini-foreground": "node scripts/mini-foreground.check.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
