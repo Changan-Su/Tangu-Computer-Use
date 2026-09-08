@@ -1,7 +1,7 @@
 # Upstream & vendor strategy
 
 Forked from **[injaneity/pi-computer-use](https://github.com/injaneity/pi-computer-use)**
-@ `c838d3a` (v0.5.0), MIT. Upstream license: `LICENSE.upstream`.
+@ `4b8dbd7e` (v0.5.1, 2026-08-31), MIT. (Previously `c838d3a` = v0.5.0; resynced 2026-09-07.) Upstream license: `LICENSE.upstream`.
 
 > Repo shape: this repo **is a Forsion bundle** (`manifest.json` + `main.js` + `skills/` at the root,
 > engine plugin under `tangu-plugins/computer-use/`). See "Bundle layout" at the bottom.
@@ -110,7 +110,7 @@ Accessibility/Screen-Recording (TCC) grants to them.
 > stays put, everything else goes to `~/Applications` (no admin needed). Users whose `/Applications`
 > is not writable will be asked to re-grant TCC once, because the path moved.
 
-**Helper protocol version — bumped by us.** Upstream v0.5.0 is at 6; we run **11**, in two places that must
+**Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **12**, in two places that must
 always match: `native/macos/bridge.swift` (`private let protocolVersion`) and
 `src/vendor/platform/macos/helper.ts` (`HELPER_PROTOCOL_VERSION`). Bump it whenever the helper gains a
 command **or changes native behaviour** — `src/onboarding.ts` now notices a stale binary *on disk*, but a
@@ -209,11 +209,18 @@ the same exposure — fixing it means real AX↔CG window identity, which needs 
 ### Bundle layout
 ```
 manifest.json  main.js  check.mjs  skills/computer-use/     ← Forsion 桌面侧(视图 + 配套技能)
-tangu-plugins/computer-use/{tangu-plugin.json,dist/}        ← 引擎侧插件(11 工具)
+tangu-plugins/computer-use/{tangu-plugin.json,dist/}        ← 引擎侧插件(12 工具:上游 11 + 自研 ensure_app)
 src/  native/  scripts/  prebuilt/                          ← 源码与原生 helper(位置不变)
 ```
 `bundles.ts` finds the engine plugin at `<bundle>/tangu-plugins/<pid>/tangu-plugin.json` and skills at
-`<bundle>/skills/<slug>/SKILL.md`. There is **no root `tangu-plugin.json` any more** — a stale
+`<bundle>/skills/<slug>/SKILL.md`.
+
+**Bundled into Forsion Desktop (0.5.0+).** The desktop depends on this repo as a vendored tarball
+(`Forsion-Genesis/desktop/vendor/tangu-computer-use.tgz`, refreshed by `npm run vendor:cu` there = `npm pack` of this repo
+after `npm run build` + `build:native --arch all`). electron-builder copies it to `resources/bundled-plugins/tangu-computer-use`
+and `desktop/electron/builtinPlugins.ts` seeds it into `<home>/plugins/tangu-computer-use/` at startup (replace only when the
+shipped version is newer; never downgrade a user-installed copy). The plugin therefore shows up as 「内置」 with no uninstall
+button; `install.sh dev|prod` stays as the developer loop for iterating on the bundle alone. There is **no root `tangu-plugin.json` any more** — a stale
 `tangu install --link` symlink from v0.1 now points at a directory without one.
 
 ## Re-syncing upstream
@@ -229,8 +236,12 @@ src/  native/  scripts/  prebuilt/                          ← 源码与原生 
    "noteControlledWindow\|liveView\|AgentHighlight" native/macos/bridge.swift` must find them.
 5. If `extensions/computer-use.ts` changed (new tools or schema), mirror it in `src/tools.ts` (`SPECS`),
    and mirror new config keys in `src/settings.ts` + `syncSettings`.
-6. `npm run build && npm run check`, plus `node scripts/build-native.mjs --arch arm64 --no-sign` to prove
-   the Swift still compiles. Bump the commit at the top of this file.
+6. `npm run build && npm run check`, then **`node scripts/build-native.mjs --arch all`** — not just a compile
+   probe: the bundle ships `prebuilt/macos/{arm64,x64}/bridge`, and the desktop vendors this repo as a tarball
+   (`npm run vendor:cu` in `Forsion-Genesis/desktop`), so a stale prebuilt is what users get. ⚠️ Upstream's own
+   git-tracked `prebuilt/` is *not* rebuilt per release (v0.5.0↔v0.5.1 blobs were byte-identical while
+   `bridge.swift` changed) — never copy their binaries, always rebuild from `native/`. Bump the commit at the
+   top of this file and the protocol number whenever `native/` changed behaviour.
 7. Real-machine greens (need an installed, authorized helper — not runnable in CI, hence not in
    `npm run check`): `npm run check:live` = `check:blindclick` (coordinate click goes AX, keeps the
    foreground, **and the Calculator readout actually changes**) + `check:liveview` (frames come from

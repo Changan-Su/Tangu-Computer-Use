@@ -1,7 +1,7 @@
 {
   "id": "computer-use",
   "name": "Computer Use",
-  "version": "0.2.0",
+  "version": "0.5.1",
   "apiVersion": 1,
   "entry": "dist/index.js",
   "commands": ["computer-use"],

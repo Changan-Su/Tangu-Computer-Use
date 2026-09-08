@@ -1,10 +1,44 @@
 # 更新日志
 
-## 未发布 — 2026-09-07
+## 0.5.1 — 2026-09-08
 
 - 为 Genesis Mini Panel 提供 macOS 前台输入活动信号：实际 HID 输入/前台激活开始发布短期租约，递归输入作用域结束后停止；AX 和 PID 后台路径不触发。
 - 信号在 helper socket 同目录的 `foreground.json`，带 PID 与过期时间；进行中每秒续期，避免每帧写盘。构建/安装脚本已纳入 reporter，新行为需要重新构建 helper。
 - 新增隔离 Swift 回归仪器 `npm run check:mini-foreground`，覆盖后台静默、嵌套输入、结束及短点击宽限。
+
+为 Forsion Desktop 权限引导提供独立的原生接口：
+
+- `permissionStatus` 只读取辅助功能信任状态、屏幕录制预检和授权主体，不抓图、不请求权限、不缓存。
+  同时返回 `settingsFrontmost` 和可选 `settingsWindow: {x,y,width,height}`，坐标为 CG 全局坐标
+  （左上原点、y 向下）；窗口按系统设置的 PID、layer 0、可见有效矩形筛选，取最大窗口，不依赖 AX 或窗口标题。
+  调用端必须只连接已有 socket：`macosHelper.command()` 会自动启动 helper，不适合页面首屏状态读取。
+- `registerPermissions` 可选 `kind: 'accessibility' | 'screenRecording'`，只请求该项；单项屏幕录制
+  返回系统 request 的 `screenRecording` 结果，不做 capturable probe。省略 `kind` 保持原先的双项请求行为。
+- `checkPermissions` 可选 `fresh: true`，绕过并重新建立成功缓存，验证失败会清除旧成功；只用于用户主动
+  授权后的验证。此参数不清除 macOS 自身的 TCC 缓存，预检通过仍不等于实际可采集。
+
+原生 arm64 / x64 产物随包更新；兼容原有命令，协议号保持 12。新增隔离系统 API 的权限检查，
+验证状态读取无授权副作用、单项请求隔离、撤权后 fresh 不残留成功缓存及未授权时的窗口矩形筛选。
+
+## 0.5.0 — 2026-09-07
+
+**随 Forsion Desktop 内置。** 不再需要从市场安装或跑 `install.sh`:桌面启动时把随包的捆绑包播种进
+`<home>/plugins/tangu-computer-use/`(只在随包版本比已装的新时替换;不降级、不碰更新的手装副本),
+设置里显示「内置」且不提供卸载 —— 不想用就关掉开关。native helper 仍在第一次用到工具时自动装。
+开发者装法 `sh install.sh dev` 保留,用于只迭代本包。
+
+**同步上游 v0.5.1**(自 v0.5.0,`4b8dbd7e`,2026-08-31)。工具契约零变化;拿到三处 macOS 修复:
+`find_roots` 的性能与 ScreenCaptureKit 探测死锁(窗口封顶 128、广度发现时 AX 超时 1.0s→0.25s、
+探测改回调)、**小窗口截图不再落进 1920×1080 的默认画布**(此前坐标映射错乱的根因)、同进程的
+AXDialog 不再抢走显式选中的目标窗口(新文件 `root-selection.ts`);`setup-helper` 下载加 120s 超时;
+Windows helper 路径可用 `PI_COMPUTER_USE_WINDOWS_HELPER_PATH` 覆盖。
+⚠️ 上游 git 里跟踪的 prebuilt 二进制在两版之间字节相同而 `bridge.swift` 改了 —— 同步只拷源码、
+native 一律本地重编;本包随附 arm64 + x64 两份新编 helper(`build-native.mjs --arch all`)。
+
+**协议号 11 → 12**:上游改了 helper 的原生行为(截图画布尺寸、根列表时序),按纪律 bump。
+已在跑的老 daemon 会被识别出来重启,并按 0.4.0 的引导自愈就地重装。
+
+顺手修掉文档漂移:包里一直是 12 个工具(上游 11 + 自研 `ensure_app`),六处写着 11。
 
 ## 0.4.0 — 2026-07-29
 

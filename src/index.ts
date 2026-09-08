@@ -1,7 +1,7 @@
 /**
  * Tangu Computer Use —— 引擎插件入口。fork 自 injaneity/pi-computer-use(MIT,见 LICENSE.upstream)。
  * 上游 pi 源码整体 vendor 在 src/vendor/(逐字节不改,pi 依赖靠 tsconfig/esbuild alias 指到 pi-compat);
- * 本层只做 pi→Tangu 的适配:11 工具翻译(tools.ts)、3 键设置(settings.ts)、CLI 命令(setup.ts)。
+ * 本层只做 pi→Tangu 的适配:12 工具(上游 11 + 自研 ensure_app,tools.ts)、3 键设置(settings.ts)、CLI 命令(setup.ts)。
  *
  * 门禁:host + hostExec + 启用 + macOS;动作类工具走 approval:'command'(审批);observe 截图经 collectImage 回灌。
  */

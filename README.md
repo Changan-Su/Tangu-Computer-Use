@@ -2,7 +2,7 @@
 
 Let a Forsion agent **observe and control desktop apps** on macOS, Windows and Linux — see the screen,
 click, type, scroll, and wait for UI changes — through the accessibility tree + OCR + screenshots.
-A **Forsion 捆绑包**: one directory that carries the engine plugin (11 tools), a companion skill, and a
+A **Forsion 捆绑包**: one directory that carries the engine plugin (12 tools), a companion skill, and a
 desktop view that shows the window being controlled. Forked from
 [pi-computer-use](https://github.com/injaneity/pi-computer-use) (MIT), synced at v0.5.0.
 
@@ -11,19 +11,18 @@ desktop view that shows the window being controlled. Forked from
 
 ## Install
 
-```bash
-npm install && npm run build     # 引擎入口必须先构建出来
-sh install.sh dev                # → ~/.forsion-dev/plugins/tangu-computer-use   (prod = ~/.forsion)
-```
+**It ships inside Forsion Desktop (0.5.0+).** Nothing to install: the desktop seeds this bundle into
+`<home>/plugins/tangu-computer-use/` on startup (replacing it only when the shipped version is newer, never
+downgrading a copy you installed yourself), and it appears under **设置 → 插件** as 「内置」 with no uninstall
+button — turn the **电脑操作** switch off if you do not want it. The native helper still installs itself the
+first time a tool runs, and reinstalls itself when an update ships a newer helper (the binary rides along in
+the bundle, so this works offline). No terminal required.
 
-> 0.2.0 起不再走 `tangu install`:仓根已没有 `tangu-plugin.json`,引擎侧内容在 `tangu-plugins/computer-use/`。
-> 发布的 npm 包是**捆绑包的分发载体**(市场解包到 `plugins/<id>/`),不是可直装的独立引擎插件。
-> 若你装过 0.1.x,`<home>/tangu/plugins/` 或 `~/.tangu/plugins/` 里那份要删掉——同一个插件 id 会重复装载,
-> `install.sh` 会把它们列出来。
-
-Then enable **电脑操作** in **设置 → 插件**. That is the whole setup — **the native helper installs
-itself** the first time a tool runs, and reinstalls itself when a plugin update ships a newer helper
-(the binary rides along in the bundle, so this works offline). No terminal required.
+macOS will ask you to grant **Accessibility** and **Screen Recording** to *Tangu Computer Use*
+in System Settings → Privacy & Security — the agent opens the right pane for you, but only you can
+flip the switch. The agent cannot see or touch anything until you do.
+Since v0.5.0 the helper installs to `~/Applications` unless a writable `/Applications` copy already
+exists — **no administrator password needed**.
 
 The CLI is still there for repairs and for scripting:
 
@@ -33,11 +32,21 @@ tangu computer-use setup      # force a reinstall of the helper
 tangu computer-use stop       # stop the helper
 ```
 
-macOS will ask you to grant **Accessibility** and **Screen Recording** to *Tangu Computer Use*
-in System Settings → Privacy & Security — the agent opens the right pane for you, but only you can
-flip the switch. The agent cannot see or touch anything until you do.
-Since v0.5.0 the helper installs to `~/Applications` unless a writable `/Applications` copy already
-exists — **no administrator password needed**.
+### Developer loop (iterating on this bundle alone)
+
+```bash
+npm install && npm run build     # 引擎入口必须先构建出来
+sh install.sh dev                # → ~/.forsion-dev/plugins/tangu-computer-use   (prod = ~/.forsion)
+```
+
+> 0.2.0 起不再走 `tangu install`:仓根已没有 `tangu-plugin.json`,引擎侧内容在 `tangu-plugins/computer-use/`。
+> 若你装过 0.1.x,`<home>/tangu/plugins/` 或 `~/.tangu/plugins/` 里那份要删掉——同一个插件 id 会重复装载,
+> `install.sh` 会把它们列出来。
+
+To ship a new version inside the desktop: bump the version here, `npm run build && node scripts/build-native.mjs --arch all`,
+then in `Forsion-Genesis/desktop` run `npm run vendor:cu` (packs this repo into `vendor/tangu-computer-use.tgz`).
+The desktop only replaces a user's installed copy when this version number is higher — forgetting the bump means
+the update silently never lands.
 
 ## What's in the bundle
 
@@ -45,7 +54,7 @@ exists — **no administrator password needed**.
 |---|---|
 | `manifest.json` + `main.js` | 桌面插件:注册视图 `plugin:tangu-computer-use:live`(被操控窗口的实时画面) |
 | `skills/computer-use/SKILL.md` | 配套技能:工具循环、后台优先、上 Agent Desk、不可逆动作的确认规则 |
-| `tangu-plugins/computer-use/` | 引擎插件:11 个工具 + `tangu computer-use` 子命令 |
+| `tangu-plugins/computer-use/` | 引擎插件:12 个工具 + `tangu computer-use` 子命令 |
 | `native/`, `scripts/`, `prebuilt/` | 三平台原生 helper 与它的构建/安装脚本 |
 
 ## Tools

@@ -1,9 +1,9 @@
 {
   "id": "tangu-computer-use",
   "name": "电脑操作",
-  "version": "0.4.0",
+  "version": "0.5.1",
   "apiVersion": 1,
-  "description": "让 agent 观察并操作桌面应用:看屏幕、点按、输入、滚动(macOS / Windows / Linux)。捆绑包内含引擎侧的 11 个工具、配套技能,以及一个「被操控的窗口」实时画面视图 —— agent 动手时,被操控的那个窗口会亮起边缘光效,画面同步出现在 Agent Desk 上。",
+  "description": "让 agent 观察并操作桌面应用:看屏幕、点按、输入、滚动(macOS / Windows / Linux)。捆绑包内含引擎侧的 12 个工具、配套技能,以及一个「被操控的窗口」实时画面视图 —— agent 动手时,被操控的那个窗口会亮起边缘光效,画面同步出现在 Agent Desk 上。",
   "main": "main.js",
   "onboarding": {
     "intro": "工具、技能与实时画面视图都在这个包里,装一次就位。本机 helper 随包自带、首次使用时自动装好;你只需要在 macOS 系统设置里授予「辅助功能」与「屏幕录制」——授权给的是那个 helper,不是 Forsion 主程序。",

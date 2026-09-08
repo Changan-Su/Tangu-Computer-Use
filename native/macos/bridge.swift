@@ -369,7 +369,7 @@ final class InputSuppressionGuard {
 }
 
 final class Bridge {
-	private let protocolVersion = 11
+	private let protocolVersion = 12
 	private let refStore = AXRefStore()
 	private let inputSuppressionGuard = InputSuppressionGuard()
 	private let physicalInputLock = NSRecursiveLock()
@@ -703,10 +703,12 @@ final class Bridge {
 		switch cmd {
 		case "diagnostics":
 			return diagnostics()
+		case "permissionStatus":
+			return permissionStatus()
 		case "checkPermissions":
-			return checkPermissions()
+			return checkPermissions(fresh: boolArg(request, "fresh") ?? false)
 		case "registerPermissions":
-			return try registerPermissions()
+			return try registerPermissions(request)
 		case "openPermissionPane":
 			return try openPermissionPane(request)
 		case "shutdown":
@@ -884,17 +886,15 @@ final class Bridge {
 	/// two disagree, the preflight boolean is the one lying.
 	private func screenRecordingCapturable() -> Bool {
 		if #available(macOS 14.0, *) {
-			let semaphore = DispatchSemaphore(value: 0)
+			let sema = DispatchSemaphore(value: 0)
 			let capturable = Box<Bool>(false)
-			Task {
-				defer { semaphore.signal() }
-				if let shareable = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false) {
+			SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { shareable, error in
+				if let shareable = shareable {
 					capturable.value = !shareable.displays.isEmpty
 				}
+				sema.signal()
 			}
-			if semaphore.wait(timeout: .now() + .seconds(3)) == .timedOut {
-				return false
-			}
+			guard sema.wait(timeout: .now() + .seconds(5)) == .success else { return false }
 			return capturable.value
 		}
 		if #available(macOS 10.15, *) {
@@ -939,13 +939,53 @@ final class Bridge {
 		return source
 	}
 
-	private func checkPermissions() -> [String: Any] {
+	/// Passive onboarding status only. Preflight is a hint, not capture proof;
+	/// never call ScreenCaptureKit or prompt APIs here, even after a grant.
+	private func permissionStatus() -> [String: Any] {
+		var result: [String: Any] = [
+			"accessibility": AXIsProcessTrusted(),
+			"screenRecordingPreflight": CGPreflightScreenCaptureAccess(),
+			"source": permissionSource(),
+			"settingsFrontmost": NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.systempreferences",
+		]
+		if let bounds = systemSettingsWindowBounds() {
+			// Quartz global coordinates: top-left origin, y increases downwards.
+			result["settingsWindow"] = ["x": bounds.minX, "y": bounds.minY, "width": bounds.width, "height": bounds.height]
+		}
+		return result
+	}
+
+	/// Window metadata remains available before AX / Screen Recording grants.
+	/// Do not filter by window title (redacted without Screen Recording), query
+	/// AX, or use the capture-backed windowInfo/currentWindowBounds helpers.
+	private func systemSettingsWindowBounds() -> CGRect? {
+		guard let settings = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == "com.apple.systempreferences" }),
+			let entries = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+		else { return nil }
+		return entries.compactMap { entry -> CGRect? in
+			guard (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == settings.processIdentifier,
+				(entry[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+				(entry[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue == true,
+				let dictionary = entry[kCGWindowBounds as String] as? [String: Any],
+				let bounds = CGRect(dictionaryRepresentation: dictionary as CFDictionary),
+				bounds.origin.x.isFinite, bounds.origin.y.isFinite,
+				bounds.width.isFinite, bounds.height.isFinite,
+				bounds.width > 0, bounds.height > 0
+			else { return nil }
+			return bounds
+		}.max(by: { $0.width * $0.height < $1.width * $1.height })
+	}
+
+	private func checkPermissions(fresh: Bool = false) -> [String: Any] {
 		permissionCacheLock.lock()
+		defer { permissionCacheLock.unlock() }
+		// Serialize probes so an older in-flight success cannot repopulate the
+		// cache after a fresh check detects revocation. A failed fresh check must
+		// leave no old success behind. This does not reset macOS's own TCC cache.
+		if fresh { grantedPermissionStatus = nil }
 		if let cached = grantedPermissionStatus {
-			permissionCacheLock.unlock()
 			return cached
 		}
-		permissionCacheLock.unlock()
 		let accessibility = AXIsProcessTrusted()
 		let screenRecordingPreflight: Bool
 		if #available(macOS 10.15, *) {
@@ -969,9 +1009,7 @@ final class Bridge {
 		// enables them, while fresh agent processes avoid repeating a multi-second
 		// ScreenCaptureKit probe against the same long-lived helper daemon.
 		if accessibility && capturable {
-			permissionCacheLock.lock()
 			grantedPermissionStatus = result
-			permissionCacheLock.unlock()
 		}
 		return result
 	}
@@ -981,7 +1019,20 @@ final class Bridge {
 	/// request registers (and prompts for) Accessibility; on recent macOS an
 	/// app only appears under Screen Recording after a real ScreenCaptureKit
 	/// attempt, which the capturable probe performs.
-	private func registerPermissions() throws -> [String: Any] {
+	private func registerPermissions(_ request: [String: Any]) throws -> [String: Any] {
+		// User-initiated, single-permission requests must not touch the other
+		// permission or run a capturable probe. Omitted kind preserves legacy setup.
+		if let rawKind = request["kind"] {
+			guard let kind = rawKind as? String, kind == "accessibility" || kind == "screenRecording" else {
+				throw BridgeFailure(message: "Permission kind must be 'accessibility' or 'screenRecording'", code: "invalid_args")
+			}
+			if kind == "accessibility" {
+				let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+				return ["accessibility": AXIsProcessTrustedWithOptions(options)]
+			}
+			// Request result only; checkPermissions(fresh: true) verifies usability.
+			return ["screenRecording": CGRequestScreenCaptureAccess()]
+		}
 		let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
 		let accessibility = AXIsProcessTrustedWithOptions(options)
 		if #available(macOS 10.15, *) {
@@ -1018,7 +1069,7 @@ final class Bridge {
 		pid > 0 && kill(pid, 0) == 0
 	}
 
-	private func listApps() -> [[String: Any]] {
+	private func listApps(cgEntries: [[String: Any]]? = nil) -> [[String: Any]] {
 		let frontmostPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
 		let apps = NSWorkspace.shared.runningApplications.filter { app in
 			// Computer-use targets are windows, not Dock-visible applications. Some
@@ -1046,7 +1097,7 @@ final class Bridge {
 		// even when their windows are visible and AX-controllable. Add CGWindow
 		// owners as acquisition candidates so callers can still resolve by pid/title
 		// and then build the normal AX scene through listWindows(pid:).
-		for owner in cgWindowOwners() where owner.pid != getpid() && !seen.contains(owner.pid) && pidIsAlive(owner.pid) {
+		for owner in cgWindowOwners(entries: cgEntries) where owner.pid != getpid() && !seen.contains(owner.pid) && pidIsAlive(owner.pid) {
 			seen.insert(owner.pid)
 			output.append([
 				"appName": owner.name,
@@ -1254,8 +1305,8 @@ final class Bridge {
 		["pairing": ["confidence": pairing.confidence, "score": pairing.score], "sheetCount": sheetCount]
 	}
 
-	private func broadRootCandidateApps() -> [[String: Any]] {
-		cgBroadRootOwners().compactMap { owner in
+	private func broadRootCandidateApps(entries: [[String: Any]]) -> [[String: Any]] {
+		cgBroadRootOwners(entries: entries).compactMap { owner in
 			guard owner.pid != getpid(), pidIsAlive(owner.pid) else { return nil }
 			var app: [String: Any] = ["appName": owner.name, "pid": Int(owner.pid)]
 			if let bundleId = NSRunningApplication(processIdentifier: owner.pid)?.bundleIdentifier {
@@ -1267,22 +1318,23 @@ final class Bridge {
 
 	private func listRoots(pid: Int32?, title: String? = nil) throws -> [String: Any] {
 		let requestedTitle = title?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+		let entries = allCGWindowEntries()
+		let isBroadDiscovery = pid == nil && requestedTitle.isEmpty
 		let apps: [[String: Any]]
 		if let pid {
 			apps = [["pid": Int(pid)]]
-		} else if !requestedTitle.isEmpty,
-			let entries = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] {
+		} else if !requestedTitle.isEmpty {
 			let matchingPids = Set(entries.compactMap { entry -> Int32? in
 				let candidate = ((entry[kCGWindowName as String] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 				guard candidate == requestedTitle || candidate.contains(requestedTitle) else { return nil }
 				return (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
 			})
-			apps = listApps().filter { app in
+			apps = listApps(cgEntries: entries).filter { app in
 				guard let rawPid = app["pid"] as? Int else { return false }
 				return matchingPids.contains(Int32(rawPid))
 			}
 		} else {
-			apps = broadRootCandidateApps()
+			apps = broadRootCandidateApps(entries: entries)
 		}
 		var roots: [[String: Any]] = []
 		for app in apps {
@@ -1290,14 +1342,14 @@ final class Bridge {
 			let appPid = Int32(rawPid)
 			let appName = app["appName"] as? String ?? processName(pid: appPid) ?? "Unknown App"
 			let bundleId = app["bundleId"] as? String
-			for var root in (try? listWindows(pid: appPid)) ?? [] {
+			for var root in (try? listWindows(pid: appPid, cgEntries: entries, messagingTimeout: isBroadDiscovery ? 0.25 : 1.0)) ?? [] {
 				root["pid"] = rawPid
 				root["appName"] = appName
 				if let bundleId { root["bundleId"] = bundleId }
 				roots.append(root)
 			}
-			let popupCandidates = cgPopupMenuCandidates(pid: appPid)
-			let menuElements = popupCandidates.isEmpty ? [] : openMenuElements(pid: appPid)
+			let popupCandidates = cgPopupMenuCandidates(pid: appPid, entries: entries)
+			let menuElements = popupCandidates.isEmpty ? [] : openMenuElements(pid: appPid, messagingTimeout: isBroadDiscovery ? 0.25 : 1.0)
 			for (index, candidate) in popupCandidates.enumerated() {
 				let menuElement = index < menuElements.count ? menuElements[index] : nil
 				let menuRef = menuElement.map { refStore.storeWindow($0) } ?? "cgmenu:\(candidate.windowId)"
@@ -1329,12 +1381,12 @@ final class Bridge {
 		return ["roots": roots]
 	}
 
-	private func listWindows(pid: Int32) throws -> [[String: Any]] {
+	private func listWindows(pid: Int32, cgEntries: [[String: Any]]? = nil, messagingTimeout: Float = 1.0) throws -> [[String: Any]] {
 		ensureEnhancedAccessibility(pid: pid)
 		let appElement = AXUIElementCreateApplication(pid)
-		AXUIElementSetMessagingTimeout(appElement, 1.0)
-		let windows = axElementArray(appElement, attribute: kAXWindowsAttribute as CFString)
-		let candidates = cgWindowCandidates(pid: pid)
+		AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
+		let windows = Array(axElementArray(appElement, attribute: kAXWindowsAttribute as CFString).prefix(128))
+		let candidates = cgWindowCandidates(pid: pid, entries: cgEntries)
 		let pairings = windowPairings(windows: windows, candidates: candidates)
 
 		var output: [[String: Any]] = []
@@ -2636,7 +2688,7 @@ final class Bridge {
 
 		let appElement = AXUIElementCreateApplication(pid)
 		AXUIElementSetMessagingTimeout(appElement, 1.0)
-		let windows = axElementArray(appElement, attribute: kAXWindowsAttribute as CFString)
+		let windows = Array(axElementArray(appElement, attribute: kAXWindowsAttribute as CFString).prefix(128))
 		guard !windows.isEmpty else { return nil }
 		guard let windowId else {
 			return windows.first
@@ -3046,10 +3098,12 @@ final class Bridge {
 		return CGRect(origin: origin, size: size)
 	}
 
-	private func cgWindowOwners() -> [CGWindowOwnerSummary] {
-		guard let entries = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else {
-			return []
-		}
+	private func allCGWindowEntries() -> [[String: Any]] {
+		(CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+	}
+
+	private func cgWindowOwners(entries suppliedEntries: [[String: Any]]? = nil) -> [CGWindowOwnerSummary] {
+		let entries = suppliedEntries ?? allCGWindowEntries()
 		var seen = Set<Int32>()
 		var owners: [CGWindowOwnerSummary] = []
 		for entry in entries {
@@ -3074,11 +3128,8 @@ final class Bridge {
 		windowInfo(windowId: windowId)?.pid
 	}
 
-	private func cgWindowCandidates(pid: Int32) -> [CGWindowCandidate] {
-		guard let entries = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else {
-			return []
-		}
-
+	private func cgWindowCandidates(pid: Int32, entries suppliedEntries: [[String: Any]]? = nil) -> [CGWindowCandidate] {
+		let entries = suppliedEntries ?? allCGWindowEntries()
 		var candidates: [CGWindowCandidate] = []
 		for (zOrder, entry) in entries.enumerated() {
 			guard let ownerPid = (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
@@ -3110,31 +3161,35 @@ final class Bridge {
 					zOrder: zOrder
 				)
 			)
+			if candidates.count == 128 { break }
 		}
 		return candidates
 	}
 
-	private func cgBroadRootOwners() -> [CGWindowOwnerSummary] {
-		guard let entries = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else {
-			return []
-		}
+	private func cgBroadRootOwners(entries: [[String: Any]]) -> [CGWindowOwnerSummary] {
 		let popupLevel = Int(CGWindowLevelForKey(.popUpMenuWindow))
 		var seen = Set<Int32>()
 		return entries.compactMap { entry -> CGWindowOwnerSummary? in
 			let layer = (entry[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0
 			guard layer == 0 || layer == popupLevel,
-				let pid = (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
-				seen.insert(pid).inserted
+				let pid = (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value
 			else { return nil }
+			if layer == popupLevel {
+				guard (entry[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue == true else { return nil }
+			} else {
+				guard let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
+					let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+					bounds.width >= 100,
+					bounds.height >= 80
+				else { return nil }
+			}
+			guard seen.insert(pid).inserted else { return nil }
 			let name = (entry[kCGWindowOwnerName as String] as? String) ?? processName(pid: pid) ?? "Unknown App"
 			return CGWindowOwnerSummary(pid: pid, name: name)
 		}
 	}
 
-	private func cgPopupMenuCandidates(pid: Int32?) -> [CGWindowCandidate] {
-		guard let entries = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else {
-			return []
-		}
+	private func cgPopupMenuCandidates(pid: Int32?, entries: [[String: Any]]) -> [CGWindowCandidate] {
 		let popupLevel = Int(CGWindowLevelForKey(.popUpMenuWindow))
 		var candidates: [CGWindowCandidate] = []
 		for (zOrder, entry) in entries.enumerated() {
@@ -3147,14 +3202,17 @@ final class Bridge {
 				let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
 			else { continue }
 			let title = (entry[kCGWindowName as String] as? String) ?? ""
-			let isOnscreen = (entry[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? true
+			let isOnscreen = (entry[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? false
+			guard isOnscreen else { continue }
 			candidates.append(CGWindowCandidate(windowId: windowNumber, title: title, bounds: bounds, isOnscreen: isOnscreen, layer: layer, zOrder: zOrder))
+			if candidates.count == 128 { break }
 		}
 		return candidates
 	}
 
-	private func openMenuElements(pid: Int32) -> [AXUIElement] {
+	private func openMenuElements(pid: Int32, messagingTimeout: Float = 1.0) -> [AXUIElement] {
 		let app = AXUIElementCreateApplication(pid)
+		AXUIElementSetMessagingTimeout(app, messagingTimeout)
 		let descendants = collectDescendants(startingAt: app, maxDepth: 6)
 		var menus = descendants.filter { (stringAttribute($0, attribute: kAXRoleAttribute as CFString) ?? "") == "AXMenu" }
 		if menus.isEmpty,
@@ -3300,6 +3358,10 @@ final class Bridge {
 
 					let filter = SCContentFilter(desktopIndependentWindow: window)
 					let config = SCStreamConfiguration()
+					// Avoid ScreenCaptureKit's default 1920x1080 canvas for window captures.
+					let scale = displayScaleFactor(for: window.frame)
+					config.width = max(1, Int((window.frame.width * scale).rounded()))
+					config.height = max(1, Int((window.frame.height * scale).rounded()))
 					config.showsCursor = false
 					config.ignoreShadowsSingleWindow = true
 

@@ -1,5 +1,5 @@
 /**
- * 上游 pi 的 11 个 defineTool → Tangu 的 ToolDef[]。翻译要点:
+ * 上游 pi 的 11 个 defineTool + 自研 ensure_app → Tangu 的 12 个 ToolDef。翻译要点:
  *   - parameters:上游 typebox schema 手翻成纯 JSON Schema 字面量(零依赖,不引 typebox)。
  *   - execute 签名:pi 的 (toolCallId, params, signal, onUpdate, ctx) → Tangu 的 (args, ctx)。
  *   - 结果:AgentToolResult.content 的 text block 拼成返回 string;image block(observe 截图)→ ctx.collectImage(回灌模型)。
