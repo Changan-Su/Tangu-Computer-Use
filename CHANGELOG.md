@@ -1,5 +1,13 @@
 # 更新日志
 
+## 0.5.2 — 2026-09-08
+
+- 修复旧 0.5.1 插件与新版前台信号 helper 同版本导致桌面播种跳过更新：发布独立版本，随包携带已构建的 macOS arm64 / x64 helper。
+- 自动升级 helper 后显式重启常驻进程，即使协议号和安装路径相同，也不会继续运行旧二进制；安装或重启失败均交给现有引导反馈。
+- 新增真实二进制启动信号检查 `check:helper-signal` 与安装/重启顺序回归 `check:helper-refresh`。
+
+Computer Use now ships as a distinct version so Desktop replaces older 0.5.1 bundles. Successful helper upgrades restart the daemon even when its protocol and path are unchanged. Tests cover actual packaged signal output and installer/restart failures.
+
 ## 0.5.1 — 2026-09-08
 
 - 为 Genesis Mini Panel 提供 macOS 前台输入活动信号：实际 HID 输入/前台激活开始发布短期租约，递归输入作用域结束后停止；AX 和 PID 后台路径不触发。

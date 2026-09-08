@@ -158,18 +158,23 @@ export async function ensureHelperCurrent(signal?: AbortSignal): Promise<string 
   const missing = !helperInstalled();
   if (!missing && !helperNeedsUpdate()) return undefined;
   install ??= runSetup().then(
-    () => {
+    async () => {
+      // The daemon survives binary replacement. Its protocol/path can still match while
+      // executing the previous image, so a successful upgrade must explicitly restart it.
+      if (!missing && process.platform === 'darwin') {
+        const { macosHelper } = await import('./vendor/platform/macos/helper.ts');
+        await macosHelper.restart();
+      }
       staleCache = undefined; // 重新比对,别让旧结论粘住
       return missing
         ? 'Installed the Computer Use desktop helper automatically.'
         : 'Updated the Computer Use desktop helper to match this plugin version.';
     },
-    (error: unknown) => {
-      installFailed = true;
-      const detail = error instanceof Error ? error.message : String(error);
-      return `Could not install the Computer Use helper automatically (${detail}). Run \`tangu computer-use setup\` in a terminal.`;
-    },
-  );
+  ).catch((error: unknown) => {
+    installFailed = true;
+    const detail = error instanceof Error ? error.message : String(error);
+    return `Could not install the Computer Use helper automatically (${detail}). Run \`tangu computer-use setup\` in a terminal.`;
+  });
   const note = await waitFor(install, signal).catch((error: unknown) => String((error as Error).message));
   if (!note || noteDelivered) return undefined; // 这句话只说一次,别给之后每个工具结果都加个帽子
   noteDelivered = true;

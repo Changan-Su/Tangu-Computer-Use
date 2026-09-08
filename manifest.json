@@ -1,7 +1,7 @@
 {
   "id": "tangu-computer-use",
   "name": "电脑操作",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "apiVersion": 1,
   "description": "让 agent 观察并操作桌面应用:看屏幕、点按、输入、滚动(macOS / Windows / Linux)。捆绑包内含引擎侧的 12 个工具、配套技能,以及一个「被操控的窗口」实时画面视图 —— agent 动手时,被操控的那个窗口会亮起边缘光效,画面同步出现在 Agent Desk 上。",
   "main": "main.js",

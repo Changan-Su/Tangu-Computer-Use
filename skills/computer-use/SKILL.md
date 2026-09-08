@@ -69,6 +69,13 @@ desk_present({ views: [{ type: "view", view: "plugin:tangu-computer-use:live", n
 Do it once, before the first `act_ui`. The view keeps itself up to date — you do not re-present it per
 action. If `desk_present` is unavailable, just carry on; it is a courtesy, not a dependency.
 
+On macOS, Genesis automatically opens a temporary Mini Panel for the current running conversation
+when real Computer Use input takes another app into the foreground. The user does not need to open
+Mini first. It follows the cursor with a linear transition and closes when Forsion regains focus or
+the run ends. Background accessibility actions and ordinary focus changes do not trigger it.
+This requires the matching helper from bundle 0.5.2 or later. Automatic upgrades replace and restart
+the helper; missing Mini is not a reason to ask the user to enable manual Mini or to fake its signal.
+
 ## Confirmation rules
 
 Observing and reading are always safe. **Before any irreversible or outward-facing action, stop and

@@ -121,3 +121,11 @@ The macOS helper publishes a short-lived `foreground.json` beside its socket for
 Build the helper with `npm run build:native` (or the source fallback in setup-helper) and pair it with Genesis's Mini Panel adapter update. `npm run check:mini-foreground` tests signal lifetime without controlling any application. Existing installed helpers must be rebuilt through the normal signed-helper workflow before Genesis can follow foreground input.
 
 macOS helper 会向 socket 同目录发布短时前台输入信号，供 Genesis Mini Panel 跟随光标。后台 AX/PID 调用不触发；必须配套更新 Genesis 并按现有签名流程重建 helper。验证命令为 `npm run check:mini-foreground`，不会操控用户应用。
+
+### Mini Panel helper delivery / 辅助程序交付
+
+Genesis 的自动 Mini 依赖 helper socket 同目录的 `foreground.json`。升级 helper 行为时必须提升捆绑包版本并重建所有随包 native 产物；桌面按 manifest 版本播种，不覆盖同版本副本。0.5.2 起自动更新成功后重启常驻 helper，避免协议号与路径相同但内存中仍为旧版本。
+
+运行 `npm run check:helper-refresh` 检查升级顺序，`npm run check:helper-signal` 启动随包真实二进制并检查初始闲置信号；后者可追加已安装的可执行文件路径。完整前台触发与 Mini 过渡在 Genesis desktop 的 `npm run check:mininative` 中验证，需要已安装并授权的 macOS helper。该测试只操作隔离测试窗口。
+
+Automatic Mini requires the helper’s foreground signal. Bump the bundle version whenever shipping changed helper bits, rebuild all native artifacts, and restart the daemon after replacement. `check:helper-refresh` covers upgrade ordering; `check:helper-signal` probes real packaged bits. Genesis `check:mininative` covers actual physical input, external focus, current-session Mini and cursor motion against an isolated window.

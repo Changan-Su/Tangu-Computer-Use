@@ -182,6 +182,13 @@ every new native feature silently does nothing (that is exactly how the first li
   "no Accessibility permission". It looks exactly like lost grants and is not.
 
 ### Onboarding — the helper installs itself (0.4.0)
+Since 0.5.2, a successful in-place macOS upgrade also awaits `macosHelper.restart()`. Replacing a
+binary does not replace a running process image, and matching protocol/path checks alone cannot
+detect that case. Keep installer and restart failures in the shared failure handler. Ship changed
+native bits under a new bundle version: Genesis deliberately skips same-version installed bundles.
+`check:helper-refresh` verifies this boundary; `check:helper-signal` probes the selected packaged
+executable on an isolated socket rather than trusting source code or protocol numbers.
+
 `ensureInstalled()` already shells out to `scripts/setup-helper.mjs` (re-entering Electron/Bun via
 `ELECTRON_RUN_AS_NODE`), so a **first** install needs no terminal. Two things break that, and both were
 ours:
