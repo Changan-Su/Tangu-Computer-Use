@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { packageMacosApp } from "./package-macos-app.mjs";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const macosSourcePaths = [
@@ -89,11 +90,7 @@ function swiftArgsForArch(arch, outputPath) {
 	return args;
 }
 
-async function signBinary(outputPath) {
-	if (hasArg("--no-sign") || process.env.PI_COMPUTER_USE_NO_SIGN === "1") {
-		return;
-	}
-
+function signingArgs() {
 	const identity = getArg("--sign-identity") ?? process.env.PI_COMPUTER_USE_CODESIGN_IDENTITY ?? "-";
 	const identifier = getArg("--sign-identifier") ?? process.env.PI_COMPUTER_USE_CODESIGN_IDENTIFIER ?? defaultCodeSignIdentifier;
 	const args = ["--force", "-i", identifier];
@@ -105,8 +102,22 @@ async function signBinary(outputPath) {
 	} else {
 		args.push("--timestamp=none");
 	}
-	args.push("--sign", identity, outputPath);
-	await run("codesign", args);
+	args.push("--sign", identity);
+	return args;
+}
+
+async function signBinary(outputPath) {
+	if (hasArg("--no-sign") || process.env.PI_COMPUTER_USE_NO_SIGN === "1") return;
+	await run("/usr/bin/codesign", [...signingArgs(), outputPath]);
+}
+
+async function packageApp(binary, arch) {
+	const version = JSON.parse(await fs.readFile(path.join(rootDir, 'package.json'), 'utf8')).version;
+	// Even unsigned dev binaries need a sealed app for installation. This
+	// build-time ad-hoc fallback never discovers or creates a private key.
+	const sign = hasArg('--no-sign') || process.env.PI_COMPUTER_USE_NO_SIGN === '1'
+		? ['--force', '-i', defaultCodeSignIdentifier, '--timestamp=none', '--sign', '-'] : signingArgs();
+	await packageMacosApp(binary, path.join(rootDir, 'prebuilt/macos', arch), version, sign);
 }
 
 async function buildForArch(arch, outputPath) {
@@ -261,6 +272,7 @@ async function main() {
 		}
 		for (const nextArch of ["x64", "arm64"]) {
 			await buildForArch(nextArch, defaultOutputPath(nextArch));
+			await packageApp(defaultOutputPath(nextArch), nextArch);
 		}
 		return;
 	}
@@ -268,10 +280,12 @@ async function main() {
 	const outputPath = outputArg ? path.resolve(process.cwd(), outputArg) : defaultOutputPath(arch);
 	if (arch === "universal") {
 		await buildUniversal(outputPath);
+		if (!outputArg) await packageApp(outputPath, arch);
 		return;
 	}
 
 	await buildForArch(arch, outputPath);
+	if (!outputArg) await packageApp(outputPath, arch);
 }
 
 main().catch((error) => {

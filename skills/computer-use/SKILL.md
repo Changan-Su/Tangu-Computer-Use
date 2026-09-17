@@ -18,16 +18,24 @@ when a web page must be handled inside the same window forest as a desktop app.
 ## The loop
 
 ```
-ensure_app  →  find_roots  →  observe_ui  →  (search_ui / expand_ui / inspect_ui)  →  act_ui
+find_roots  →  observe_ui  →  (search_ui / expand_ui / inspect_ui)  →  act_ui
 ```
 
-1. **`ensure_app`** — call this first when the target app may not be running. It starts the app in the
-   background without stealing focus. `observe_ui` only sees apps that are already running.
+1. **`ensure_app` (macOS only)** — on macOS, call this first when the target app may not be running.
+   On Windows and Linux, start with `find_roots`. If the app is not running, use a verified existing
+   executable or platform app launcher, then observe again. Do not guess installation paths.
 2. **`find_roots`** — pick the window/menu/sheet you want. Returns `@r` refs.
 3. **`observe_ui`** — capture that root. Returns a bounded outline of `@e` element refs plus a note.
 4. **`search_ui` / `expand_ui` / `inspect_ui`** — drill into what the compact outline folded away.
    Refine your predicates rather than asking for more results; the output is deliberately bounded.
 5. **`act_ui`** — perform the action(s).
+
+Tools already listed in your callable tool definitions do not need `load_tools`; call them directly.
+Only use `load_tools` for exact names from the Additional Tools catalog. The absence of `ensure_app`
+on Windows or Linux does not make the other Computer Use tools unavailable. A skill is documentation,
+not an activation switch: if no observation tools are visible, report the missing capability and ask
+the user to check whether the Computer Use plugin is enabled; do not claim the helper failed without
+an actual tool result. On Windows, honor the shell tool's stated shell and quoting rules, not Unix rules.
 
 ### Observation discipline
 

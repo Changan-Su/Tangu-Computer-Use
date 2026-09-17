@@ -13,19 +13,31 @@ try {
     const root = path.join(temp, scenario), events = path.join(root, 'events');
     const executable = path.join(root, 'installed/Contents/MacOS/bridge');
     const stamp = path.join(root, 'installed/Contents/Resources/source.sha256');
-    const bundled = path.join(root, `prebuilt/macos/${process.arch}/bridge`);
+    const bundled = path.join(root, `prebuilt/macos/${process.arch}/tangu-computer-use.app.zip`);
     const output = path.join(root, 'tangu-plugins/computer-use/dist/probe.mjs');
     for (const file of [executable, stamp, bundled, output, path.join(root, 'scripts/setup-helper.mjs')]) mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(path.join(root, 'manifest.json'), '{}');
+    writeFileSync(path.join(root, 'package.json'), JSON.stringify({ version: '0.5.3' }));
     writeFileSync(bundled, 'new helper image');
     if (scenario !== 'missing') writeFileSync(executable, 'locally signed image');
     writeFileSync(stamp, scenario === 'current' ? createHash('sha256').update(readFileSync(bundled)).digest('hex') : 'old image');
+    const sealed = ['Contents/MacOS/bridge', 'Contents/Info.plist', 'Contents/_CodeSignature/CodeResources'];
+    const files = {};
+    for (const file of sealed) {
+      const target = path.join(root, 'installed', file);
+      mkdirSync(path.dirname(target), { recursive: true });
+      files[file] = createHash('sha256').update('new helper image').digest('hex');
+      if (scenario !== 'missing') writeFileSync(target, scenario === 'current' ? 'new helper image' : 'old helper image');
+    }
+    writeFileSync(bundled.replace(/\.zip$/, '.json'), JSON.stringify({ version: '0.5.3', bundleId: 'com.forsion.tangu-computer-use', archiveSha256: files[sealed[0]], files }));
     writeFileSync(path.join(root, 'scripts/setup-helper.mjs'), `import {appendFileSync} from 'node:fs';
       appendFileSync(${JSON.stringify(events)}, 'install\\n');
       ${scenario === 'install-failure' ? "console.error('fixture install failure'); process.exitCode = 1;" : ''}`);
     await build({ entryPoints: [path.resolve('src/onboarding.ts')], outfile: output, bundle: true, platform: 'node', format: 'esm',
       define: { 'process.platform': '"darwin"' },
       plugins: [{ name: 'isolated-helper', setup(b) {
+        b.onResolve({ filter: /^node:child_process$/ }, args => args.namespace !== 'process-fixture' ? { path: args.path, namespace: 'process-fixture' } : undefined);
+        b.onLoad({ filter: /.*/, namespace: 'process-fixture' }, () => ({ contents: `export {spawn} from 'node:child_process'; export const execFileSync = () => Buffer.alloc(0);` }));
         b.onResolve({ filter: /\/helperState\.ts$|\/vendor\/platform\/macos\/helper\.ts$/ }, (args) => ({ path: args.path, namespace: 'fixture' }));
         b.onLoad({ filter: /.*/, namespace: 'fixture' }, (args) => ({ contents: args.path.endsWith('helperState.ts')
           ? `import {existsSync} from 'node:fs'; export const helperInstalled = () => existsSync(${JSON.stringify(executable)}); export const helperExecutablePath = () => ${JSON.stringify(executable)}; export const isSupportedPlatform = () => true;`

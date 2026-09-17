@@ -1,5 +1,22 @@
 # 更新日志
 
+## 0.5.4 — 2026-09-10
+
+- 修正 Windows / Linux 桌面操作指引：从窗口发现开始，不再要求调用仅 macOS 支持的应用启动工具。
+- 明确已可用的工具可以直接调用，避免误把重复加载提示当成整个电脑控制功能故障。
+- 新增三平台离线契约检查；这是工具与指引校验，不代替 Windows 真机操作验收。
+
+Windows and Linux guidance now starts with window discovery instead of the macOS-only app launcher. Available tools can be called directly without loading them again. Offline checks cover tool visibility and instructions on all three platforms; native Windows GUI acceptance testing remains separate.
+
+## 0.5.3 — 2026-09-09
+
+- 修复首次安装 Computer Use 时弹出 `codesign` 钥匙串密钥访问框：macOS 助手在构建阶段组装、签名，以完整 App ZIP 随包交付；安装时只校验和复制，不再查找用户 Developer ID、导入本地证书或访问私钥。
+- 修复拒绝旧签名弹窗后留下的半安装 App；校验完整签名与随包内容，采用临时目录验证、互斥安装和失败回滚，并识别同协议号的旧助手。
+- 新增 `check:installer` 与 `scripts/verify-macos-bundles.mjs`，验证首次安装、升级、半安装修复、损坏包、并发和回滚；桌面打包之后再次校验 ZIP，防止递归签名改写内置助手。
+- 当前构建使用 ad-hoc 签名，不等于 Developer ID 或 Apple 公证。从旧本地证书迁移及助手升级后，macOS 可能要求重新授予辅助功能与屏幕录制；安装无需钥匙串密码，已有钥匙串条目不会自动删除。
+
+macOS helpers now ship as complete, sealed app archives. Installation never discovers signing identities, imports certificates or accesses private keys. Interrupted older installations are repaired, concurrent installs are serialized, and failed replacements restore the previous app. The current ad-hoc build is not Developer ID-signed or notarized; macOS may request Accessibility and Screen Recording access again after migration or updates.
+
 ## 0.5.2 — 2026-09-08
 
 - 修复旧 0.5.1 插件与新版前台信号 helper 同版本导致桌面播种跳过更新：发布独立版本，随包携带已构建的 macOS arm64 / x64 helper。

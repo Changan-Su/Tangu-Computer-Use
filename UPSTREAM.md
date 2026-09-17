@@ -88,10 +88,14 @@ is there. Move the output and the build tells you.
 `scripts/setup-helper.mjs` gets one path patch of its own: upstream imports
 `../src/platform/macos/helper-path.mjs`; ours is `../src/vendor/platform/macos/helper-path.mjs`
 (and that file is listed in package.json `files`, or the published package can't install its helper).
-Plus the CN shortening (`Tangu CU Local Signing …` — openssl caps commonName at 64 bytes) and a
-`removeSigningTempFiles()` sweep right before `codesign` in `signHelper()`.
+Since 0.5.3 the macOS installer is intentionally diverged: **never restore upstream runtime
+certificate discovery/import or signing**. `build-native.mjs` creates sealed App ZIPs and checksum
+manifests, `macos-bundle.mjs` verifies and atomically installs them, and onboarding uses the same
+complete-app check. ZIPs keep Electron's outer `--deep` signature from rewriting the helper.
+`check:installer` traps every subprocess and rejects keychain/private-key operations. Keep this
+guard in both plugin and Genesis release pipelines.
 
-⚠️ That sweep is not cosmetic. `codesign --sign <local cert>` needs the private key, so it raises a
+Historical cause (removed in 0.5.3): `codesign --sign <local cert>` needs the private key, so it raises a
 **keychain dialog** — run it anywhere nobody can click and it hangs, and killing it leaves a
 `MacOS/*.cstemp` behind. The next `codesign --deep` then seals that temp file into `CodeResources`
 and deletes it on the way out, so the signature fails verification **forever**

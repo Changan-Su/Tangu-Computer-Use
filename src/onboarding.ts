@@ -15,9 +15,9 @@
  * 把 App 预登记进隐私面板(registerPermissions)+ 直接把面板打开(openPermissionPane),让用户
  * 只需拨一下开关,而不是自己去找。
  */
-import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { macosHelperIsCurrent } from '../scripts/macos-bundle.mjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { helperInstalled, helperExecutablePath, isSupportedPlatform } from './helperState.ts';
@@ -41,61 +41,25 @@ export function bundleRoot(): string | undefined {
   return undefined;
 }
 
-const sha256 = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex');
-
-/**
- * bundle 自带的 native helper —— 必须和 setup-helper.mjs 的**选择顺序一致**:
- * 预签名的 universal .app 优先,其次 per-arch .app,最后才是裸二进制(本地开发那条)。
- * 顺序错了会出现「安装用的是 A、判新旧看的是 B」,于是要么永远不更新、要么每次都更新。
- */
-function bundledHelper(): { source: string; signed: boolean } | undefined {
-  const root = bundleRoot();
-  if (!root || process.platform !== 'darwin') return undefined;
-  const arch = process.arch === 'x64' ? 'x64' : 'arm64';
-  for (const dir of ['universal', arch]) {
-    const app = path.join(root, 'prebuilt', 'macos', dir, 'tangu-computer-use.app', 'Contents', 'MacOS', 'bridge');
-    if (existsSync(app)) return { source: app, signed: true };
-  }
-  const loose = path.join(root, 'prebuilt', 'macos', arch, 'bridge');
-  return existsSync(loose) ? { source: loose, signed: false } : undefined;
-}
-
 let staleCache: boolean | undefined;
 
-/**
- * 已装的 helper 是不是 bundle 自带的那份(= 插件更新了但 helper 没跟上)。
- * 每进程只算一次:两个 ~700KB 文件的哈希,放在工具热路径上算不值当。
- *
- * ⚠️**裸二进制那条绝不能拿源文件去比已装的可执行文件**:`installHelperApp()` 是复制之后
- * **在原地重签**,Mach-O 字节必然不同 → 恒判「过期」→ 每个新进程都跑一遍完整安装,
- * 还可能每次弹钥匙串。它专门写了 `Contents/Resources/source.sha256` 记录**签名前**的源哈希,
- * 就是给这一步用的。预签名 .app 那条走的是 `installPrebuiltHelperApp()`,不重签,可以直接比字节。
- */
+/** Once per engine process, compare the complete installed app with the sealed
+ * bundle and verify its signature. A leftover executable from a rejected old
+ * installer is not a complete installation. --check uses this same predicate. */
 export function helperNeedsUpdate(): boolean {
   if (staleCache !== undefined) return staleCache;
-  staleCache = (() => {
-    const bundled = bundledHelper();
-    if (!bundled || !helperInstalled()) return false; // 没有随包件就没得比;没装是另一条路
-    try {
-      const want = sha256(bundled.source);
-      if (bundled.signed) return want !== sha256(helperExecutablePath());
-      const stamp = path.join(path.dirname(path.dirname(helperExecutablePath())), 'Resources', 'source.sha256');
-      return existsSync(stamp) ? readFileSync(stamp, 'utf8').trim() !== want : false;
-    } catch {
-      return false; // 读不到就别乱报过期,让 vendor 的协议校验去兜
-    }
-  })();
+  const root = bundleRoot();
+  if (!root || process.platform !== 'darwin' || !helperInstalled()) return false;
+  try {
+    staleCache = !macosHelperIsCurrent(root, path.dirname(path.dirname(path.dirname(helperExecutablePath()))));
+  } catch {
+    staleCache = true; // Let the installer report missing/damaged bundled assets.
+  }
   return staleCache;
 }
 
-/**
- * 跑安装脚本。
- *
- * ⚠️**任何情况下都不杀这个子进程** —— 它内部会 `codesign` helper.app,而被中断的 codesign 会留下
- * `*.cstemp`,下一次 `--deep` 会把它封进 CodeResources 再删掉,签名从此**恒定**校验失败;TCC 认签名,
- * 用户看到的就是「权限开关怎么点都没用」。2026-07-28 真踩过,排查了很久。超时/取消只是**停止等待**,
- * 让它自己跑完(setup-helper.mjs 里另有 removeSigningTempFiles 兜底,但别再制造需要兜底的场面)。
- */
+/** Installation is detached from a single caller's timeout. The installer
+ * verifies in staging and atomically replaces the app under a per-app lock. */
 function runSetup(): Promise<void> {
   const root = bundleRoot();
   if (!root) return Promise.reject(new Error('could not locate the plugin bundle root'));
@@ -106,7 +70,7 @@ function runSetup(): Promise<void> {
     const child = spawn(process.execPath, [script, '--runtime'], {
       env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', BUN_BE_BUN: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
-      detached: true, // 脱离进程组:宿主收 SIGINT 时不连带打断签名
+      detached: true, // A caller timeout must not interrupt an in-progress app replacement
     });
     child.unref();
     let output = '';
@@ -150,7 +114,7 @@ export function autoInstallFailed(): boolean {
  *
  * **每进程只装一次**,两个理由都必须成立:
  *   ① 工具是可以并发进来的(不同会话),两个安装同时往 /Applications 写会互相踩;
- *   ② 装失败通常需要人介入(钥匙串授权框、目录不可写),每次工具调用都重跑一遍
+ *   ② 装失败通常需要人介入(随包产物损坏、目录不可写),每次工具调用都重跑一遍
  *      三分钟的安装只会把 agent 拖死 —— 失败后交给 ensureComputerUseSetup 去报真正的原因。
  */
 export async function ensureHelperCurrent(signal?: AbortSignal): Promise<string | undefined> {

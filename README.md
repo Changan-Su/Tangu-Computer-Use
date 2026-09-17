@@ -118,11 +118,23 @@ MIT (see `LICENSE`). Derived from pi-computer-use — upstream license in `LICEN
 
 The macOS helper publishes a short-lived `foreground.json` beside its socket for Genesis Mini Panel. It becomes active only when real HID input is posted or the input path activates the target app; successful AX and PID background operations do not activate it. Nested physical-input scopes keep the signal active until the outer action finishes. A 1-second heartbeat renews a lease of at most 2500ms; short completed clicks remain observable for 350ms. Desktop checks expiry and helper liveness, never starts the helper or requests screenshots for this feature.
 
-Build the helper with `npm run build:native` (or the source fallback in setup-helper) and pair it with Genesis's Mini Panel adapter update. `npm run check:mini-foreground` tests signal lifetime without controlling any application. Existing installed helpers must be rebuilt through the normal signed-helper workflow before Genesis can follow foreground input.
+Build the helper with `npm run build:native` and pair it with Genesis's Mini Panel adapter update. Builds produce a sealed App ZIP alongside each binary; installation never compiles or signs on the user's machine. `npm run check:mini-foreground` tests signal lifetime without controlling any application.
 
 macOS helper 会向 socket 同目录发布短时前台输入信号，供 Genesis Mini Panel 跟随光标。后台 AX/PID 调用不触发；必须配套更新 Genesis 并按现有签名流程重建 helper。验证命令为 `npm run check:mini-foreground`，不会操控用户应用。
 
+### macOS installation and signing / 安装与签名
+
+Run `node scripts/build-native.mjs --arch all` before packaging, then `node scripts/verify-macos-bundles.mjs` and `npm run check:installer`. Both architectures must include `tangu-computer-use.app.zip` and its JSON checksum manifest. ZIP transport preserves the helper signature through Electron's recursive signing. Runtime setup only verifies and copies these archives; missing or damaged artifacts fail without trying a user's signing identity or creating keys. `setup-helper.mjs --check` is read-only (exit 0: current, 10: installation/repair needed, 1: package error).
+
+Builds default to ad-hoc signing. An explicitly supplied `--sign-identity` is used only at build time. Ad-hoc signing does not provide Developer ID trust or notarization; macOS may ask users to grant Accessibility/Screen Recording again after helper updates. Existing locally created keys are left untouched.
+
+打包前构建完整双架构 App，运行上述两项校验。首次安装、升级及旧签名被拒绝后的修复都不再访问用户钥匙串；缺失或损坏的随包件会明确失败。当前默认使用构建期 ad-hoc 签名，尚无 Developer ID/公证，迁移或升级可能需要重新授予辅助功能与屏幕录制。不会自动删除已有本地证书或私钥。
+
 ### Mini Panel helper delivery / 辅助程序交付
+
+工具与平台指引离线回归：`npm run build && npm run check:platform`。在隔离进程中验证 macOS / Windows / Linux 工具可见性、macOS 专用启动工具的边界，以及常驻工具直接调用的说明，不启动 helper 或操作用户界面。Windows 真机仍需另验原生助手启动、发现窗口、观察和动作；不能把该检查等同于整机验收。
+
+Offline platform regression: `npm run build && npm run check:platform` checks tool visibility and guidance in isolated processes without starting a helper or controlling a UI. Native Windows acceptance still requires verifying helper startup, window discovery, observation and actions on Windows hardware.
 
 Genesis 的自动 Mini 依赖 helper socket 同目录的 `foreground.json`。升级 helper 行为时必须提升捆绑包版本并重建所有随包 native 产物；桌面按 manifest 版本播种，不覆盖同版本副本。0.5.2 起自动更新成功后重启常驻 helper，避免协议号与路径相同但内存中仍为旧版本。
 

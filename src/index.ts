@@ -3,7 +3,7 @@
  * 上游 pi 源码整体 vendor 在 src/vendor/(逐字节不改,pi 依赖靠 tsconfig/esbuild alias 指到 pi-compat);
  * 本层只做 pi→Tangu 的适配:12 工具(上游 11 + 自研 ensure_app,tools.ts)、3 键设置(settings.ts)、CLI 命令(setup.ts)。
  *
- * 门禁:host + hostExec + 启用 + macOS;动作类工具走 approval:'command'(审批);observe 截图经 collectImage 回灌。
+ * 门禁:host + hostExec + 启用 + 支持的平台;ensure_app 仅 macOS。
  */
 import type { TanguPlugin } from '@forsion/tangu-agent';
 import { buildToolProvider, PLUGIN_ID } from './tools.ts';
@@ -26,9 +26,12 @@ const plugin: TanguPlugin = {
       promptSection: ({ execMode }) =>
         execMode === 'host'
           ? [
-              'You can operate native desktop apps via the Computer Use tools: (ensure_app) → find_roots → observe_ui → (search_ui/expand_ui/inspect_ui) → act_ui.',
+              'Computer Use tools in your tool list are already available and directly callable. Do not load them with load_tools unless they appear in the Additional Tools catalog. Reading a skill does not enable a disabled plugin.',
+              'Desktop control loop: find_roots → observe_ui → (search_ui/expand_ui/inspect_ui) → act_ui.',
               'These control ANY on-screen application through its accessibility tree + OCR + screenshots — use them when the task needs a desktop app rather than an API/CLI/file.',
-              'If the target app may not be running yet, call ensure_app first — it starts the app in the background (no focus steal); observe_ui only sees already-running apps.',
+              process.platform === 'darwin'
+                ? 'On macOS, if the target app may not be running yet, call ensure_app first — it starts the app in the background (no focus steal).'
+                : 'On Windows and Linux, ensure_app is unavailable. Start with find_roots to discover running apps. If necessary, launch an existing app using a verified executable or platform app launcher, then observe again. Do not guess app paths or treat ensure_app absence as failure of the observation tools.',
               'Prefer the background path: to fill a field use a single setText action (writes the value without taking focus) rather than click-then-type; the foreground is taken only when an action genuinely needs it, and the result says so on a [foreground] line — when it does, tell the user. Strict background-only is a plugin setting, not a tool parameter.',
               'For pure web tasks prefer browser_task / browser_* (lighter). Use the Computer Use browser tools (launch/navigate/evaluate_browser) only when a desktop workflow must touch a web page within the same @r root forest.',
               // Working discipline: re-observe before acting, derive element refs from the latest observation (they go stale), prefer the AX text and only screenshot when it is incomplete.

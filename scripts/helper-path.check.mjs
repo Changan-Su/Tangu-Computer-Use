@@ -74,10 +74,7 @@ import { readFileSync } from 'node:fs';
 const onboarding = readFileSync(path.join(repoRoot, 'src', 'onboarding.ts'), 'utf8');
 assert.ok(!/child\.kill\(/.test(onboarding), 'src/onboarding.ts 不得 kill 安装子进程 —— 中断 codesign 会永久毁掉签名与 TCC 授权');
 assert.ok(/ELECTRON_RUN_AS_NODE/.test(onboarding), '自装必须设 ELECTRON_RUN_AS_NODE,否则在 Electron 宿主里会去开窗口而不是跑脚本');
-// ⚠️裸二进制那条的新旧判定必须比 Contents/Resources/source.sha256(**签名前**的源哈希)。
-// 拿随包源去比已装的可执行文件恒不相等 —— installHelperApp 是复制后在原地重签,Mach-O 必然变 ——
-// 于是每个新进程都判「过期」跑一遍完整安装,还可能每次弹钥匙串。
-assert.ok(/source\.sha256/.test(onboarding), 'helperNeedsUpdate 必须比 source.sha256,不能比已签名的可执行文件');
+assert.ok(/macosHelperIsCurrent/.test(onboarding), 'helperNeedsUpdate 与安装器共用完整 App 与签名校验');
 // 权限真值只能问 checkPermissions:diagnostics 的 screenRecording 只是 CGPreflight 缓存值
 // (bridge.swift 自己的注释:"Permission truth comes from checkPermissions")。
 assert.ok(/checkPermissions/.test(onboarding), '权限判定必须走 checkPermissions,不能用 diagnostics 的预检值');
