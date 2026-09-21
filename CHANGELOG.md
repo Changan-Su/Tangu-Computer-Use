@@ -1,5 +1,11 @@
 # 更新日志
 
+## 0.5.5 — 2026-09-21
+
+- 首次引导改由 Forsion 桌面端实测「辅助功能」与「屏幕录制」两项授权：都已授权就不再弹引导卡，缺哪项就在卡里直接安装 helper 并请求授权；引导说明补齐英文。
+
+The setup card is now driven by the Accessibility and Screen Recording grants that Forsion Desktop checks itself. It only appears while a grant is missing, and it can install the helper and request access in place. The setup guide now has English text.
+
 ## 0.5.4 — 2026-09-10
 
 - 修正 Windows / Linux 桌面操作指引：从窗口发现开始，不再要求调用仅 macOS 支持的应用启动工具。

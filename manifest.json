@@ -1,9 +1,11 @@
 {
   "id": "tangu-computer-use",
   "name": "电脑操作",
-  "version": "0.5.4",
+  "nameEn": "Computer Use",
+  "version": "0.5.5",
   "apiVersion": 1,
   "description": "让 agent 观察并操作桌面应用:看屏幕、点按、输入、滚动(macOS / Windows / Linux)。捆绑包内含引擎侧的 12 个工具、配套技能,以及一个「被操控的窗口」实时画面视图 —— agent 动手时,被操控的那个窗口会亮起边缘光效,画面同步出现在 Agent Desk 上。",
+  "descriptionEn": "Let the agent observe and control desktop apps: see the screen, click, type and scroll (macOS / Windows / Linux). The bundle includes 12 engine tools, a companion skill and a live view of the window being controlled. While the agent works, that window gets a glowing edge and its picture appears on Agent Desk.",
   "main": "main.js",
   "onboarding": {
     "intro": "工具、技能与实时画面视图都在这个包里,装一次就位。本机 helper 随包自带、首次使用时自动装好;你只需要在 macOS 系统设置里授予「辅助功能」与「屏幕录制」——授权给的是那个 helper,不是 Forsion 主程序。",
@@ -17,6 +19,28 @@
         "description": "首次使用时 agent 会替你打开「系统设置 → 隐私与安全性」的对应面板,在「辅助功能」和「屏幕录制」里把 tangu-computer-use 的开关拨开即可 —— 这是系统安全设置,只能你自己拨。之后 agent 动手时被操控的窗口会有一圈光效,画面会出现在 Agent Desk 上。"
       }
     ],
-    "settings": true
+    "requires": [
+      {
+        "kind": "permission",
+        "id": "computerAccessibility"
+      },
+      {
+        "kind": "permission",
+        "id": "computerScreen"
+      }
+    ],
+    "en": {
+      "intro": "The tools, skill and live view all ship in this bundle, so one install covers everything. The local helper comes with it and installs itself the first time it is needed. On macOS you only need to grant Accessibility and Screen Recording in System Settings. The grant goes to the helper, not to the Forsion app itself.",
+      "steps": [
+        {
+          "title": "Get started",
+          "description": "Turn on Computer Use in Settings → Plugins, then tell the agent which desktop app to work in. The local helper installs itself the first time it is needed and stays current when the plugin updates, so there is no terminal step."
+        },
+        {
+          "title": "Grant access",
+          "description": "On first use the agent opens the matching pane in System Settings → Privacy & Security. Turn on tangu-computer-use under both Accessibility and Screen Recording. These are system security settings, so only you can switch them on. After that, the window the agent is controlling gets a glowing edge and its live picture appears on Agent Desk."
+        }
+      ]
+    }
   }
 }
