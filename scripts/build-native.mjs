@@ -165,6 +165,11 @@ async function buildWindowsHelper(prebuiltOutput) {
 	const manifestPath = path.join(windowsCrateDir, "Cargo.toml");
 
 	console.log("Building Windows helper with cargo...");
+	// Tangu: link the MSVC runtime statically. The default dynamic link imports VCRUNTIME140.dll, which is not part
+	// of Windows, so the helper would not start on a clean machine. RUSTFLAGS, not the crate's .cargo/config.toml:
+	// cargo reads config from the caller's cwd, and an inherited RUSTFLAGS would override config rustflags anyway.
+	// Appended last so it wins; verify-package.mjs rejects a helper that still imports the VC++ runtime.
+	process.env.RUSTFLAGS = `${process.env.RUSTFLAGS ?? ""} -C target-feature=+crt-static`.trim();
 	const cargoArgs = [
 		"build",
 		"--release",

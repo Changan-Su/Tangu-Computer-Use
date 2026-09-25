@@ -185,6 +185,16 @@ every new native feature silently does nothing (that is exactly how the first li
   the *responsible process*, so a direct spawn inherits the caller's identity and `diagnostics` reports
   "no Accessibility permission". It looks exactly like lost grants and is not.
 
+- **Windows helper links the MSVC runtime statically (0.5.8)** — `scripts/build-native.mjs` (Windows branch)
+  appends `-C target-feature=+crt-static` to `RUSTFLAGS` before running cargo. Upstream links it dynamically,
+  so `windows-bridge.exe` imports `VCRUNTIME140.dll`, which Windows does not ship (it comes with the VC++
+  Redistributable): on a clean machine the helper never starts. Not a `.cargo/config.toml` in the crate —
+  cargo reads config from the cwd, and `build-native.mjs` runs cargo from the caller's cwd with
+  `--manifest-path`; an inherited `RUSTFLAGS` would override config rustflags anyway. `scripts/verify-package.mjs`
+  fails the release if the helper's bytes name any VC++ runtime DLL, so losing this patch in a sync cannot ship.
+  Not applied to `setup-helper.mjs`'s opt-in install-time `cargo build` (`PI_COMPUTER_USE_ALLOW_BUILD=1`): that
+  binary only runs on the machine that built it, which has MSVC and its runtime.
+
 ### Onboarding — the helper installs itself (0.4.0)
 Since 0.5.2, a successful in-place macOS upgrade also awaits `macosHelper.restart()`. Replacing a
 binary does not replace a running process image, and matching protocol/path checks alone cannot
@@ -241,7 +251,8 @@ button; `install.sh dev|prod` stays as the developer loop for iterating on the b
    "pi-computer-use\|injaneity" src/vendor` must come back empty. Import lines need no change — the alias
    handles pi.
 3. Copy `scripts/{setup-helper,build-native,make-signing-cert}` over, rename, then re-apply our two
-   setup-helper patches (vendor path for `helper-path.mjs`, short signing CN).
+   setup-helper patches (vendor path for `helper-path.mjs`, short signing CN) and the `build-native.mjs`
+   hooks listed under "Native" (macOS source list, Windows `+crt-static`).
 4. Copy `native/{macos,windows,linux}` over, rename — then **replay the Tangu native additions** listed
    under "Native" (the highlight file and the three `bridge.swift` hooks). `grep -n
    "noteControlledWindow\|liveView\|AgentHighlight" native/macos/bridge.swift` must find them.

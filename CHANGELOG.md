@@ -1,5 +1,11 @@
 # 更新日志
 
+## 0.5.8 — 2026-09-26
+
+- 修复 Windows 助手在没装过 VC++ 运行库的干净 Windows 上起不来：助手改为静态链接 MSVC 运行库，不再依赖 `VCRUNTIME140.dll`。发布前的包内容检查会拦下仍依赖 VC++ 运行库的 Windows 助手。
+
+The Windows helper now links the MSVC runtime statically, so it starts on clean Windows machines without the Visual C++ Redistributable (it no longer needs `VCRUNTIME140.dll`). The release check rejects a Windows helper that still depends on the Visual C++ runtime.
+
 ## 0.5.7 — 2026-09-25
 
 - 修复 Windows / Linux 上 `tangu computer-use setup` 与 `doctor` 打印结果后进程不退出：这两个一次性命令结束前会关掉助手进程。macOS 不受影响。

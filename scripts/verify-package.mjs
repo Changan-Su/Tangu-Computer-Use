@@ -34,6 +34,15 @@ for (const [file, version] of [['manifest.json', manifest.version], ['tangu-plug
   if (version !== pkg.version) errors.push(`${file} ${version} != package.json ${pkg.version}`);
 }
 
+// Import-table DLL names are plain ASCII: any of the VC++ runtime family means the helper was linked against it
+// dynamically, and it will not start on a Windows without the VC++ Redistributable. build-native.mjs links it
+// statically (+crt-static); same pattern as Genesis's release-content check.
+const windowsHelper = 'prebuilt/windows/windows-bridge.exe';
+if (existsSync(windowsHelper)) {
+  const vcRuntime = readFileSync(windowsHelper).toString('latin1').match(/\b(?:vcruntime|msvcp|concrt|vccorlib|vcomp|vcamp)\d+(?:_\w+)?\.dll/i);
+  if (vcRuntime) errors.push(`${windowsHelper} imports ${vcRuntime[0]} (build it with scripts/build-native.mjs, which links +crt-static)`);
+}
+
 // A helper signed by anything but the release certificate (ad-hoc, a regenerated key) has a different
 // designated requirement, and every macOS user would lose the Accessibility / Screen Recording grants.
 if (process.platform !== 'darwin') errors.push('the macOS helper signature can only be verified on macOS');
