@@ -5,6 +5,11 @@
 # 首个版本必须人工发一次 —— npm 规定包存在后才能登记 trusted publisher(步骤见 README「发布」)。
 # 包还不存在时 publish 步骤只告警、不变红;Release 上附的 .tgz 就是要人工发的那一份。
 #
+# macOS helper 用固定证书签名(指纹钉在 scripts/macos-bundle.mjs 的 releaseCertSha1):macOS 把辅助功能 / 屏幕录制
+# 授权绑在「bundle id + 证书指纹」上,证书不变,helper 更新就不用重新授权。需要仓库 secret:
+# CU_SIGNING_P12(.p12 的 base64)与 CU_SIGNING_P12_PASSWORD。私钥只在本 job 的临时钥匙串里,
+# 用户机器上的安装器只校验、复制,从不签名、不碰钥匙串。
+#
 # ⚠️ 0.2.0 起本仓是 **Forsion 捆绑包**:npm 包 = 捆绑包的分发载体(市场/离线安装解包到 plugins/<id>/),
 # **不再是能被 `tangu install` 直接装的独立引擎插件** —— 仓根已没有 tangu-plugin.json,
 # 引擎侧内容在 tangu-plugins/computer-use/。
@@ -81,8 +86,32 @@ jobs:
         run: test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./package.json').version")"
       - run: npm install --no-audit --no-fund
 
+      # 临时钥匙串 + 分区列表放行 codesign:CI 上没人能点钥匙串授权框,不放行就会卡死在签名上。
+      - name: Import release signing certificate
+        env:
+          CU_SIGNING_P12: ${{ secrets.CU_SIGNING_P12 }}
+          CU_SIGNING_P12_PASSWORD: ${{ secrets.CU_SIGNING_P12_PASSWORD }}
+        run: |
+          if [ -z "$CU_SIGNING_P12" ] || [ -z "$CU_SIGNING_P12_PASSWORD" ]; then
+            echo "::error::Missing CU_SIGNING_P12 / CU_SIGNING_P12_PASSWORD. An ad-hoc helper would cost every macOS user a new permission grant."
+            exit 1
+          fi
+          keychain="$RUNNER_TEMP/cu-signing.keychain-db"
+          keychain_password="$(openssl rand -hex 24)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          printf '%s' "$CU_SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/cu-signing.p12"
+          security import "$RUNNER_TEMP/cu-signing.p12" -k "$keychain" -P "$CU_SIGNING_P12_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/cu-signing.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$(node --input-type=module -e "const m = await import('./scripts/macos-bundle.mjs'); console.log(m.releaseCertSha1.toUpperCase())")"
+          security find-identity -p codesigning "$keychain" | grep -q "$identity" || { echo "::error::The imported key is not certificate $identity"; exit 1; }
+          echo "PI_COMPUTER_USE_CODESIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+
       # native macOS helper(Swift)→ prebuilt/macos/{arm64,x64}/bridge
-      # 两个架构均构建完整 App 并封入 ZIP;签名只在构建期进行,安装器不接触用户钥匙串。
+      # 两个架构均构建完整 App 并封入 ZIP;用上一步的固定证书签名(PI_COMPUTER_USE_CODESIGN_IDENTITY),安装器不接触用户钥匙串。
       - name: Build macOS helper (both architectures)
         run: npm run build:native -- --arch all
 
@@ -160,3 +189,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         continue-on-error: true
         run: curl -fsS -X PUT "https://registry.npmmirror.com/-/package/%40forsion%2Ftangu-computer-use/syncs"
+
+      - name: Remove signing keychain
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/cu-signing.keychain-db" 2>/dev/null || true

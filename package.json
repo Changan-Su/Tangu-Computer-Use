@@ -1,6 +1,6 @@
 {
   "name": "@forsion/tangu-computer-use",
-  "version": "0.5.5",
+  "version": "0.5.6",
   "description": "Tangu engine plugin: let agents observe and control macOS, Windows, and Linux desktop apps. Fork of injaneity/pi-computer-use (MIT).",
   "type": "module",
   "license": "MIT",

@@ -49,7 +49,9 @@ Bump `version` in both `package.json` and `manifest.json`, add a CHANGELOG entry
 `.github/workflows/release.yml` builds every native helper, runs the checks, verifies the package contents
 (`node scripts/verify-package.mjs`), attaches the helpers and the `.tgz` to the GitHub Release, and publishes the
 `.tgz` to npm through trusted publishing (no npm token is stored anywhere). Running the workflow by hand is a dry
-run: it builds and verifies, but creates no release and publishes nothing.
+run: it builds and verifies, but creates no release and publishes nothing. The macOS helper is signed with the
+release certificate from the secrets `CU_SIGNING_P12` (base64 of the `.p12`) and `CU_SIGNING_P12_PASSWORD`; the
+workflow fails without them rather than shipping an ad-hoc helper.
 
 Forsion Desktop picks a new version up in two ways. Running desktops check npm in the background, download the
 new version, and switch to it on the next launch. New desktop builds bundle it: Dependabot opens a PR that bumps
@@ -150,9 +152,9 @@ macOS helper 会向 socket 同目录发布短时前台输入信号，供 Genesis
 
 Run `node scripts/build-native.mjs --arch all` before packaging, then `node scripts/verify-macos-bundles.mjs` and `npm run check:installer`. Both architectures must include `tangu-computer-use.app.zip` and its JSON checksum manifest. ZIP transport preserves the helper signature through Electron's recursive signing. Runtime setup only verifies and copies these archives; missing or damaged artifacts fail without trying a user's signing identity or creating keys. `setup-helper.mjs --check` is read-only (exit 0: current, 10: installation/repair needed, 1: package error).
 
-Builds default to ad-hoc signing. An explicitly supplied `--sign-identity` is used only at build time. Ad-hoc signing does not provide Developer ID trust or notarization; macOS may ask users to grant Accessibility/Screen Recording again after helper updates. Existing locally created keys are left untouched.
+Release builds are signed with the project's fixed self-signed certificate (`releaseCertSha1` in `scripts/macos-bundle.mjs`). macOS files the Accessibility and Screen Recording grants under the bundle id plus that certificate's hash, so helper updates keep the grants as long as neither changes. Never replace the certificate: every user would have to grant access again. `scripts/verify-package.mjs` refuses to release a helper signed by anything else. Local builds without `--sign-identity` stay ad-hoc and are for development only. This is not Developer ID signing or notarization.
 
-打包前构建完整双架构 App，运行上述两项校验。首次安装、升级及旧签名被拒绝后的修复都不再访问用户钥匙串；缺失或损坏的随包件会明确失败。当前默认使用构建期 ad-hoc 签名，尚无 Developer ID/公证，迁移或升级可能需要重新授予辅助功能与屏幕录制。不会自动删除已有本地证书或私钥。
+打包前构建完整双架构 App，运行上述两项校验。首次安装、升级及旧签名被拒绝后的修复都不再访问用户钥匙串；缺失或损坏的随包件会明确失败。发布版用固定的自签名证书签名(指纹见 `scripts/macos-bundle.mjs` 的 `releaseCertSha1`),macOS 按「bundle id + 证书指纹」记授权,两者不变则 helper 更新不用重新授权;**证书永远不能换**。本地不带 `--sign-identity` 的构建仍是 ad-hoc,只供开发。这不是 Developer ID 签名,也没有公证。
 
 ### Mini Panel helper delivery / 辅助程序交付
 

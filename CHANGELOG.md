@@ -1,5 +1,12 @@
 # 更新日志
 
+## 0.5.6 — 2026-09-25
+
+- macOS 助手改用固定证书签名。从这一版起，助手更新会保留「辅助功能」与「屏幕录制」授权，不用再重新授予。从旧版升级上来时需要最后授权一次。安装过程仍然不访问钥匙串，也不会要你输入密码。
+- 第一个发布到 npm 的版本，随包带齐 macOS（arm64 / x64）、Windows 与 Linux 助手。已安装 Forsion 的机器会在后台下载新版，下次启动时换上。
+
+The macOS helper is now signed with a fixed certificate, so later helper updates keep the Accessibility and Screen Recording grants. Upgrading from an earlier version asks for them one last time. Installation still never touches the keychain or asks for a password. This is also the first version published to npm, and it ships the macOS (arm64 and x64), Windows and Linux helpers. Installed copies of Forsion download new versions in the background and switch to them on the next launch.
+
 ## 0.5.5 — 2026-09-21
 
 - 首次引导改由 Forsion 桌面端实测「辅助功能」与「屏幕录制」两项授权：都已授权就不再弹引导卡，缺哪项就在卡里直接安装 helper 并请求授权；引导说明补齐英文。

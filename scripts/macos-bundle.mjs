@@ -8,6 +8,13 @@ import path from 'node:path';
 
 export const appName = 'tangu-computer-use.app';
 export const bundleId = 'com.forsion.tangu-computer-use';
+// Release helpers are signed with one fixed self-signed certificate (SHA-1 below). macOS files the
+// Accessibility and Screen Recording grants under the designated requirement = bundle id + this
+// certificate's hash, so helper updates keep the grants for as long as neither changes. Never replace
+// the certificate or change the bundle id: every user would have to grant access again. The private key
+// lives only in the GitHub secrets CU_SIGNING_P12 / CU_SIGNING_P12_PASSWORD (backup kept by the owner);
+// the release workflow signs with it and scripts/verify-package.mjs refuses a helper signed by anything else.
+export const releaseCertSha1 = 'dab3a30e7568c7e2c021660b49398356a205a191';
 export const sealedFiles = ['Contents/MacOS/bridge', 'Contents/Info.plist', 'Contents/_CodeSignature/CodeResources'];
 export const sha256 = data => createHash('sha256').update(data).digest('hex');
 

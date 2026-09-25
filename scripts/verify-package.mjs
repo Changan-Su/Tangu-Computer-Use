@@ -2,8 +2,11 @@
 // Release gate for the npm package. npm versions are immutable: a version that ships without its
 // engine bundle or a platform helper can only be deprecated, never fixed. The release workflow runs
 // this after all helpers are in place; a local run reports the Windows/Linux helpers as missing.
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { appName, bundleId, releaseCertSha1 } from './macos-bundle.mjs';
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
@@ -25,7 +28,30 @@ const errors = [
   ...required.filter((f) => !files.has(f)).map((f) => `missing ${f}`),
   ...[...files].filter((f) => /(^|\/)target\/|\.map$|(^|\/)\.env/.test(f)).map((f) => `must not ship ${f}`),
 ];
-if (manifest.version !== pkg.version) errors.push(`manifest.json ${manifest.version} != package.json ${pkg.version}`);
+const engine = JSON.parse(readFileSync('tangu-plugins/computer-use/tangu-plugin.json', 'utf8'));
+for (const [file, version] of [['manifest.json', manifest.version], ['tangu-plugins/computer-use/tangu-plugin.json', engine.version]]) {
+  if (version !== pkg.version) errors.push(`${file} ${version} != package.json ${pkg.version}`);
+}
+
+// A helper signed by anything but the release certificate (ad-hoc, a regenerated key) has a different
+// designated requirement, and every macOS user would lose the Accessibility / Screen Recording grants.
+if (process.platform !== 'darwin') errors.push('the macOS helper signature can only be verified on macOS');
+else for (const arch of ['arm64', 'x64']) {
+  const temp = mkdtempSync(path.join(os.tmpdir(), 'cu-verify-signing-'));
+  try {
+    execFileSync('/usr/bin/ditto', ['-x', '-k', `prebuilt/macos/${arch}/${appName}.zip`, temp]);
+    const shown = spawnSync('/usr/bin/codesign', ['-d', '-r-', path.join(temp, appName)], { encoding: 'utf8' });
+    const requirement = `${shown.stdout}${shown.stderr}`;
+    const pinned = new RegExp(`certificate (leaf|root) = H"${releaseCertSha1}"`).test(requirement);
+    if (!pinned || !requirement.includes(`identifier "${bundleId}"`)) {
+      errors.push(`macOS ${arch} helper is not signed with the release certificate ${releaseCertSha1}: ${requirement.match(/designated => .*/)?.[0] ?? requirement.trim()}`);
+    }
+  } catch (error) {
+    errors.push(`macOS ${arch} helper archive could not be inspected: ${error.message}`);
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
+}
 if (errors.length) {
   console.error(errors.map((e) => `✗ ${e}`).join('\n'));
   process.exit(1);
