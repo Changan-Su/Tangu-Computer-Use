@@ -43,10 +43,34 @@ sh install.sh dev                # → ~/.forsion-dev/plugins/tangu-computer-use
 > 若你装过 0.1.x,`<home>/tangu/plugins/` 或 `~/.tangu/plugins/` 里那份要删掉——同一个插件 id 会重复装载,
 > `install.sh` 会把它们列出来。
 
-To ship a new version inside the desktop: bump the version here, `npm run build && node scripts/build-native.mjs --arch all`,
-then in `Forsion-Genesis/desktop` run `npm run vendor:cu` (packs this repo into `vendor/tangu-computer-use.tgz`).
-The desktop only replaces a user's installed copy when this version number is higher — forgetting the bump means
-the update silently never lands.
+### Release / 发布
+
+Bump `version` in both `package.json` and `manifest.json`, add a CHANGELOG entry, then push a `v<version>` tag.
+`.github/workflows/release.yml` builds every native helper, runs the checks, verifies the package contents
+(`node scripts/verify-package.mjs`), attaches the helpers and the `.tgz` to the GitHub Release, and publishes the
+`.tgz` to npm through trusted publishing (no npm token is stored anywhere). Running the workflow by hand is a dry
+run: it builds and verifies, but creates no release and publishes nothing.
+
+Forsion Desktop picks a new version up in two ways. Running desktops check npm in the background, download the
+new version, and switch to it on the next launch. New desktop builds bundle it: Dependabot opens a PR that bumps
+the pinned version in `Forsion-Genesis/desktop`. A copy is only replaced when the version number is higher, so
+forgetting the bump means the update silently never lands. Declare `minAppVersion` in `manifest.json` whenever a
+version needs a newer desktop; older desktops then skip it instead of loading something they cannot run.
+
+**First publish (once).** npm only lets you register a trusted publisher for a package that already exists:
+
+```bash
+gh release download v<version> -R Changan-Su/Tangu-Computer-Use -p 'forsion-tangu-computer-use-*.tgz'
+npm publish forsion-tangu-computer-use-<version>.tgz --access public
+```
+
+Then on npmjs.com open the package → Settings → Trusted publishing → GitHub Actions, with owner `Changan-Su`,
+repository `Tangu-Computer-Use`, workflow `release.yml` (or `npm trust github @forsion/tangu-computer-use
+--repo Changan-Su/Tangu-Computer-Use --file release.yml --allow-publish` with a current npm 11). Every later tag publishes by itself.
+
+发版 = 两处 version 一起升 + CHANGELOG + 推 `v<version>` tag,CI 构建全部 helper、校验包内容、挂 Release、经 trusted
+publishing 发 npm(仓库里没有 npm 令牌)。桌面端两路拿到新版:在跑的桌面后台从 npm 下载、下次启动换上;新桌面版由
+Dependabot 提 PR 升级内置版本。首个版本需按上面两条命令人工发一次,再到 npm 包设置里登记 trusted publisher。
 
 ## What's in the bundle
 

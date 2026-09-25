@@ -1,5 +1,9 @@
-# 发布:打 v* tag(或手动)→ 在 macOS runner 构建 native helper + 插件 bundle → 发 npm + 传 GitHub Release。
-# 需要仓库 secret:NPM_TOKEN(npm 发布令牌)。GITHUB_TOKEN 自动注入(上传 Release 资产)。
+# 发布:打 v* tag → 在 macOS runner 构建 native helper + 插件 bundle → 传 GitHub Release + 发 npm。
+# 手动触发(workflow_dispatch)= 演练:构建、自检、打包校验全跑,不建 Release、不发 npm。
+#
+# npm 走 trusted publishing(OIDC),仓库里**没有 npm 令牌**:npm 只认本仓 + 本文件名(release.yml)发来的请求。
+# 首个版本必须人工发一次 —— npm 规定包存在后才能登记 trusted publisher(步骤见 README「发布」)。
+# 包还不存在时 publish 步骤只告警、不变红;Release 上附的 .tgz 就是要人工发的那一份。
 #
 # ⚠️ 0.2.0 起本仓是 **Forsion 捆绑包**:npm 包 = 捆绑包的分发载体(市场/离线安装解包到 plugins/<id>/),
 # **不再是能被 `tangu install` 直接装的独立引擎插件** —— 仓根已没有 tangu-plugin.json,
@@ -62,12 +66,17 @@ jobs:
     runs-on: macos-14
     permissions:
       contents: write # 上传 Release 资产
+      id-token: write # npm trusted publishing(OIDC)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24' # trusted publishing 要 npm ≥ 11.5.1 + Node ≥ 22.14
           registry-url: 'https://registry.npmjs.org'
+      # tag 与 package.json 版本对不上就别往下走:npm 版本不可变,发错只能 deprecate。
+      - name: Tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: test "${GITHUB_REF_NAME#v}" = "$(node -p "require('./package.json').version")"
       - run: npm install --no-audit --no-fund
 
       # native macOS helper(Swift)→ prebuilt/macos/{arm64,x64}/bridge
@@ -111,22 +120,41 @@ jobs:
       - name: Checks
         run: npm run check
 
-      # 校验 npm 包内容命中 files 白名单(dist / prebuilt / tangu-plugin.json / native / scripts / LICENSE*)
+      # 包内容硬门禁:引擎入口、双架构 macOS App、Windows/Linux helper 缺一不发;版本号 manifest 与 package 一致。
       - name: Verify package contents
-        run: npm pack --dry-run
+        run: node scripts/verify-package.mjs
 
-      - name: Publish to npm
-        run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Pack
+        run: npm pack
 
       - name: Collect sealed helper app archives
         run: |
           for arch in arm64 x64; do
             cp "prebuilt/macos/$arch/tangu-computer-use.app.zip" "$RUNNER_TEMP/tangu-computer-use-$arch.app.zip"
           done
-      - name: Attach helper to GitHub Release
+
+      # 先挂 Release 再发 npm:首个版本要人工发的 .tgz 就从这里下载,与自检过的字节是同一份。
+      - name: Attach helpers and package to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: ${{ runner.temp }}/tangu-computer-use-*.app.zip
+          files: |
+            ${{ runner.temp }}/tangu-computer-use-*.app.zip
+            forsion-tangu-computer-use-*.tgz
           fail_on_unmatched_files: true
+
+      - name: Publish to npm
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          name="$(node -p "require('./package.json').name")"
+          if npm view "$name" name 2>&1 | grep -q E404; then
+            echo "::warning::$name is not on npm yet. Publish the .tgz attached to this release once by hand, then register release.yml as its trusted publisher (README: Release)."
+          else
+            npm publish ./forsion-tangu-computer-use-*.tgz --access public
+          fi
+
+      # 大陆用户走 npmmirror,默认同步有分钟级延迟;这里催一下,失败不影响发布。
+      - name: Ask npmmirror to sync
+        if: startsWith(github.ref, 'refs/tags/v')
+        continue-on-error: true
+        run: curl -fsS -X PUT "https://registry.npmmirror.com/-/package/%40forsion%2Ftangu-computer-use/syncs"

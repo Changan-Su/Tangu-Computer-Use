@@ -4,6 +4,7 @@
   "nameEn": "Computer Use",
   "version": "0.5.5",
   "apiVersion": 1,
+  "minAppVersion": "2.11.2",
   "description": "让 agent 观察并操作桌面应用:看屏幕、点按、输入、滚动(macOS / Windows / Linux)。捆绑包内含引擎侧的 12 个工具、配套技能,以及一个「被操控的窗口」实时画面视图 —— agent 动手时,被操控的那个窗口会亮起边缘光效,画面同步出现在 Agent Desk 上。",
   "descriptionEn": "Let the agent observe and control desktop apps: see the screen, click, type and scroll (macOS / Windows / Linux). The bundle includes 12 engine tools, a companion skill and a live view of the window being controlled. While the agent works, that window gets a glowing edge and its picture appears on Agent Desk.",
   "main": "main.js",

@@ -6,7 +6,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/forsion/tangu-computer-use.git"
+    "url": "git+https://github.com/Changan-Su/Tangu-Computer-Use.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "tangu-plugin",
