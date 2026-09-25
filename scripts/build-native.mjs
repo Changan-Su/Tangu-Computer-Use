@@ -165,10 +165,13 @@ async function buildWindowsHelper(prebuiltOutput) {
 	const manifestPath = path.join(windowsCrateDir, "Cargo.toml");
 
 	console.log("Building Windows helper with cargo...");
-	// Tangu: link the MSVC runtime statically. The default dynamic link imports VCRUNTIME140.dll, which is not part
-	// of Windows, so the helper would not start on a clean machine. RUSTFLAGS, not the crate's .cargo/config.toml:
-	// cargo reads config from the caller's cwd, and an inherited RUSTFLAGS would override config rustflags anyway.
-	// Appended last so it wins; verify-package.mjs rejects a helper that still imports the VC++ runtime.
+	// Tangu: link the MSVC runtime statically. The default dynamic link imports VCRUNTIME140.dll, which Windows does
+	// not ship, so the helper would not start on a clean machine; verify-package.mjs rejects such a helper. RUSTFLAGS,
+	// not the crate's .cargo/config.toml: cargo reads config from the caller's cwd. A duplicate flag (Genesis CI sets
+	// it too) is harmless.
+	// ponytail: a set RUSTFLAGS makes cargo ignore config rustflags (build.rustflags, target.<triple>.rustflags,
+	// CARGO_TARGET_*_RUSTFLAGS), so a cross-build's extra flags (xwin's -Lnative) must come in RUSTFLAGS. If that
+	// bites, pass `--config target.'cfg(target_env = "msvc")'.rustflags=[...]` whenever RUSTFLAGS is unset.
 	process.env.RUSTFLAGS = `${process.env.RUSTFLAGS ?? ""} -C target-feature=+crt-static`.trim();
 	const cargoArgs = [
 		"build",

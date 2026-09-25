@@ -192,8 +192,10 @@ every new native feature silently does nothing (that is exactly how the first li
   cargo reads config from the cwd, and `build-native.mjs` runs cargo from the caller's cwd with
   `--manifest-path`; an inherited `RUSTFLAGS` would override config rustflags anyway. `scripts/verify-package.mjs`
   fails the release if the helper's bytes name any VC++ runtime DLL, so losing this patch in a sync cannot ship.
-  Not applied to `setup-helper.mjs`'s opt-in install-time `cargo build` (`PI_COMPUTER_USE_ALLOW_BUILD=1`): that
-  binary only runs on the machine that built it, which has MSVC and its runtime.
+  Side effect: a set `RUSTFLAGS` makes cargo ignore config-level rustflags, so a cross-build (`--target`) that
+  needs extra flags passes them in `RUSTFLAGS`. Not applied to `setup-helper.mjs`'s own `cargo build`, which runs
+  when the prebuilt exe is missing (`--runtime`, which the runtime always passes, `--allow-build`, or
+  `PI_COMPUTER_USE_ALLOW_BUILD=1`): that binary only runs on the machine that built it, which has MSVC and its runtime.
 
 ### Onboarding — the helper installs itself (0.4.0)
 Since 0.5.2, a successful in-place macOS upgrade also awaits `macosHelper.restart()`. Replacing a
