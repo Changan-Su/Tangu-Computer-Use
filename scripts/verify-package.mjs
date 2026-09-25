@@ -2,8 +2,9 @@
 // Release gate for the npm package. npm versions are immutable: a version that ships without its
 // engine bundle or a platform helper can only be deprecated, never fixed. The release workflow runs
 // this after all helpers are in place; a local run reports the Windows/Linux helpers as missing.
+import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { appName, bundleId, releaseCertSha1 } from './macos-bundle.mjs';
@@ -40,11 +41,15 @@ else for (const arch of ['arm64', 'x64']) {
   const temp = mkdtempSync(path.join(os.tmpdir(), 'cu-verify-signing-'));
   try {
     execFileSync('/usr/bin/ditto', ['-x', '-k', `prebuilt/macos/${arch}/${appName}.zip`, temp]);
-    const shown = spawnSync('/usr/bin/codesign', ['-d', '-r-', path.join(temp, appName)], { encoding: 'utf8' });
-    const requirement = `${shown.stdout}${shown.stderr}`;
-    const pinned = new RegExp(`certificate (leaf|root) = H"${releaseCertSha1}"`).test(requirement);
-    if (!pinned || !requirement.includes(`identifier "${bundleId}"`)) {
-      errors.push(`macOS ${arch} helper is not signed with the release certificate ${releaseCertSha1}: ${requirement.match(/designated => .*/)?.[0] ?? requirement.trim()}`);
+    // Check the real signer (leaf certificate extracted from the signature) and the exact requirement text:
+    // a substring match would pass a crafted requirement such as `... leaf = H"<pin>" or leaf = H"<other>"`.
+    const prefix = path.join(temp, 'signer');
+    const shown = spawnSync('/usr/bin/codesign', ['-d', '-r-', `--extract-certificates=${prefix}`, path.join(temp, appName)], { encoding: 'utf8' });
+    const designated = `${shown.stdout}${shown.stderr}`.match(/^(?:# )?designated => (.*)$/m)?.[1]?.trim() ?? '(none)';
+    const signer = existsSync(`${prefix}0`) ? createHash('sha1').update(readFileSync(`${prefix}0`)).digest('hex') : 'ad-hoc';
+    const expected = ['leaf', 'root'].map((kind) => `identifier "${bundleId}" and certificate ${kind} = H"${releaseCertSha1}"`);
+    if (signer !== releaseCertSha1 || !expected.includes(designated)) {
+      errors.push(`macOS ${arch} helper is not signed with the release certificate ${releaseCertSha1} (signer ${signer}; designated => ${designated})`);
     }
   } catch (error) {
     errors.push(`macOS ${arch} helper archive could not be inspected: ${error.message}`);
