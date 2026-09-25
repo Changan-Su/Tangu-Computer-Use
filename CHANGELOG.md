@@ -1,5 +1,11 @@
 # 更新日志
 
+## 0.5.7 — 2026-09-25
+
+- 修复 Windows / Linux 上 `tangu computer-use setup` 与 `doctor` 打印结果后进程不退出：这两个一次性命令结束前会关掉助手进程。macOS 不受影响。
+
+On Windows and Linux, `tangu computer-use setup` and `doctor` now exit after printing their result. Both one-off commands close the helper process before they return. macOS was not affected.
+
 ## 0.5.6 — 2026-09-25
 
 - macOS 助手改用固定证书签名。从这一版起，助手更新会保留「辅助功能」与「屏幕录制」授权，不用再重新授予。从旧版升级上来时需要最后授权一次。安装过程仍然不访问钥匙串，也不会要你输入密码。

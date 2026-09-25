@@ -33,40 +33,14 @@ function cliCtx(hasUI: boolean): ExtensionContext {
 
 export async function cliMain(argv: string[]): Promise<number> {
   const sub = argv[0];
-  if (sub === 'setup') {
+  // setup / doctor 是一次性命令:返回前释放 helper 会话。Windows / Linux 的 helper 是 stdio 子进程,管道开着
+  // 事件循环就空不了,结果打印完进程也退不出(09-25 windows-2022 实测 doctor 挂满 90s)。宿主刻意不在插件命令后
+  // 强退(tangu worker 这类命令靠打开的句柄常驻),只能命令自己收。macOS 的常驻 daemon 不受影响(会话关闭本就不杀它)。
+  if (sub === 'setup' || sub === 'doctor') {
     try {
-      await ensureComputerUseSetup(cliCtx(true));
-      console.log('✓ Computer Use is ready.');
-      return 0;
-    } catch (e: any) {
-      console.error(`✗ ${e?.message || e}`);
-      return 1;
-    }
-  }
-  if (sub === 'doctor') {
-    if (!helperInstalled()) {
-      console.log(`✗ native helper not installed (expected at ${helperExecutablePath()}).`);
-      console.log('  Fix: run `tangu computer-use setup`.');
-      return 1;
-    }
-    try {
-      await ensureComputerUseSetup(cliCtx(false)); // helper 已装,这里只查权限;缺 → 抛指导文本
-      console.log('✓ helper installed, permissions granted, backend ready.');
-      return 0;
-    } catch (e: any) {
-      const msg = String(e?.message || e);
-      console.log(`✗ not ready: ${msg}`);
-      // 协议不匹配 = 装着的 helper 二进制比宿主老(新命令/新原生功能它都没有)。
-      // 重装会换二进制,macOS 因此可能重置辅助功能/录屏授权,setup 默认会拒绝 ad-hoc 覆盖 —— 明说怎么绕。
-      if (/protocol/i.test(msg)) {
-        console.log('  The installed helper binary is older than this plugin.');
-        console.log('  Fix: PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1 tangu computer-use setup');
-        console.log('       then `tangu computer-use stop` so the new binary takes over.');
-        console.log('       macOS will ask you to re-grant Accessibility + Screen Recording.');
-      } else {
-        console.log('  Fix: run `tangu computer-use setup`.');
-      }
-      return 1;
+      return await (sub === 'setup' ? setup() : doctor());
+    } finally {
+      await shutdownComputerUseSession().catch(() => {}); // 收尾失败不能盖掉命令本身的结果
     }
   }
   if (sub === 'stop') {
@@ -82,4 +56,42 @@ export async function cliMain(argv: string[]): Promise<number> {
   }
   console.log('usage: tangu computer-use <setup|doctor|stop>');
   return sub ? 1 : 0;
+}
+
+async function setup(): Promise<number> {
+  try {
+    await ensureComputerUseSetup(cliCtx(true));
+    console.log('✓ Computer Use is ready.');
+    return 0;
+  } catch (e: any) {
+    console.error(`✗ ${e?.message || e}`);
+    return 1;
+  }
+}
+
+async function doctor(): Promise<number> {
+  if (!helperInstalled()) {
+    console.log(`✗ native helper not installed (expected at ${helperExecutablePath()}).`);
+    console.log('  Fix: run `tangu computer-use setup`.');
+    return 1;
+  }
+  try {
+    await ensureComputerUseSetup(cliCtx(false)); // helper 已装,这里只查权限;缺 → 抛指导文本
+    console.log('✓ helper installed, permissions granted, backend ready.');
+    return 0;
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    console.log(`✗ not ready: ${msg}`);
+    // 协议不匹配 = 装着的 helper 二进制比宿主老(新命令/新原生功能它都没有)。
+    // 重装会换二进制,macOS 因此可能重置辅助功能/录屏授权,setup 默认会拒绝 ad-hoc 覆盖 —— 明说怎么绕。
+    if (/protocol/i.test(msg)) {
+      console.log('  The installed helper binary is older than this plugin.');
+      console.log('  Fix: PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1 tangu computer-use setup');
+      console.log('       then `tangu computer-use stop` so the new binary takes over.');
+      console.log('       macOS will ask you to re-grant Accessibility + Screen Recording.');
+    } else {
+      console.log('  Fix: run `tangu computer-use setup`.');
+    }
+    return 1;
+  }
 }
