@@ -69,10 +69,12 @@ jobs:
       id-token: write # npm trusted publishing(OIDC)
     steps:
       - uses: actions/checkout@v4
+      # ⚠️ 这里刻意不设 registry-url:setup-node 会往 .npmrc 写 `_authToken=${NODE_AUTH_TOKEN}` 并导出占位令牌,
+      # npm 见到「已配令牌」就不走 OIDC,trusted publishing 以 ENEEDAUTH / E404 失败(npm/documentation#1960)。
+      # npm 缺省源就是 registry.npmjs.org。
       - uses: actions/setup-node@v4
         with:
           node-version: '24' # trusted publishing 要 npm ≥ 11.5.1 + Node ≥ 22.14
-          registry-url: 'https://registry.npmjs.org'
       # tag 与 package.json 版本对不上就别往下走:npm 版本不可变,发错只能 deprecate。
       - name: Tag matches package version
         if: startsWith(github.ref, 'refs/tags/v')
