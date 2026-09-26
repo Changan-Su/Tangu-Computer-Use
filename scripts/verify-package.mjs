@@ -34,12 +34,13 @@ for (const [file, version] of [['manifest.json', manifest.version], ['tangu-plug
   if (version !== pkg.version) errors.push(`${file} ${version} != package.json ${pkg.version}`);
 }
 
-// Import-table DLL names are plain ASCII: any of the VC++ runtime family means the helper was linked against it
-// dynamically, and it will not start on a Windows without the VC++ Redistributable. build-native.mjs links it
-// statically (+crt-static); same pattern as Genesis's release-content check.
+// Import and delay-import DLL names are plain ASCII: any of the VC++ runtime family means the helper was linked
+// against it dynamically, and it will not start on a Windows without the VC++ Redistributable. build-native.mjs
+// links it statically (+crt-static). Genesis's release-content pattern plus msvcr<nn> (the pre-2015 C runtime);
+// the digits keep msvcrt.dll, which Windows ships, out.
 const windowsHelper = 'prebuilt/windows/windows-bridge.exe';
 if (existsSync(windowsHelper)) {
-  const vcRuntime = readFileSync(windowsHelper).toString('latin1').match(/\b(?:vcruntime|msvcp|concrt|vccorlib|vcomp|vcamp)\d+(?:_\w+)?\.dll/i);
+  const vcRuntime = readFileSync(windowsHelper).toString('latin1').match(/\b(?:vcruntime|msvcr|msvcp|concrt|vccorlib|vcomp|vcamp)\d+(?:_\w+)?\.dll/i);
   if (vcRuntime) errors.push(`${windowsHelper} imports ${vcRuntime[0]} (build it with scripts/build-native.mjs, which links +crt-static)`);
 }
 
