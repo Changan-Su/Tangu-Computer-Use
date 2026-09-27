@@ -3,7 +3,8 @@ import Foundation
 
 // 电脑历史采集器的单测(npm run check:recorder-logic),不需要任何授权。
 // 纯逻辑:差分 / 截断 / 无痕判定 / 浏览器与 bundle 匹配 / 快捷键串 / URL 清洗 / 按订阅者过滤 / 锁屏判定 /
-// 点击归属 / 情境刷新时待发输入的去留 / 同标题换站点 / 有上限遍历(假树)/ 无痕扫描计数 / agent 计数 / 订阅写队列。
+// 点击归属与点击读取的属性 / 情境事件的去重与无痕窗口 / 焦点框变成密码框(读值闸)/ 情境刷新时待发输入的去留 /
+// 同标题换站点 / 有上限遍历(假树)/ 无痕扫描计数 / agent 计数 / 订阅写队列。
 // subscriptionStream 走真实的订阅路径:会装上主线程观察者与 NSEvent 全局监听、对前台 App 发 AX 读取
 // (本进程没有辅助功能授权时这些读取都失败、键盘监听收不到东西),只断言事件形状与退订后的拆除状态,绝不打印事件内容。
 @main struct ActivityRecorderTests {
@@ -22,6 +23,8 @@ import Foundation
 		bundles()
 		keys()
 		filtering()
+		privateContextDelivery()
+		secureFieldFlip()
 		browsers()
 		sessionLock()
 		clickOwner()
@@ -116,6 +119,8 @@ import Foundation
 		check(recorderClickLabelAllowed(role: "AXButton", subrole: ""), "buttons carry a label")
 		check(recorderClickLabelAllowed(role: "AXRadioButton", subrole: "AXTabButton"), "tabs carry a label")
 		check(!recorderClickLabelAllowed(role: "AXTextField", subrole: ""), "text fields never carry their value as a label")
+		check(!recorderClickAttributes.contains(kAXValueAttribute), "a click never reads the hit element's value")
+		check(recorderClickAttributes == [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute], "a click reads only role, subrole, title and description")
 	}
 
 	static func keys() {
@@ -162,6 +167,7 @@ import Foundation
 		let privateApp = recorderEventBody(kind: .app, context: incognito, policy: open)
 		check(privateApp != nil && privateApp?["title"] == nil && (privateApp?["app"] as? [String: Any])?["excluded"] == nil, "private window keeps an untitled switch")
 		check(recorderEventBody(kind: .text, context: incognito, policy: open) == nil, "private window drops text")
+		check(recorderEventBody(kind: .window, context: incognito, policy: open) == nil, "private window emits no window events")
 
 		var keychain = RecorderContext(name: "Keychain Access", bundleId: "com.apple.keychainaccess")
 		keychain.hardExcluded = true
@@ -197,6 +203,84 @@ import Foundation
 		check(recorderEventBody(kind: .window, context: unknown, policy: open)?["title"] as? String == "Chase — Accounts", "unknown browser URL is recorded when no site is excluded")
 		let newTab = RecorderContext(name: "Google Chrome", bundleId: "com.google.Chrome", title: "New Tab")
 		check(recorderEventBody(kind: .window, context: newTab, policy: domainOff)?["title"] as? String == "New Tab", "a resolved page without a web URL is not treated as excluded")
+	}
+
+	/// 情境事件对一个订阅者的去重(emit 用的就是这个函数):无痕窗口不发 window 事件,但同一浏览器里切回普通窗口那条照常发出。
+	static func privateContextDelivery() {
+		let docs = RecorderContext(name: "Google Chrome", bundleId: "com.google.Chrome", title: "Docs", url: "https://docs.example.com/a")
+		let mail = RecorderContext(name: "Google Chrome", bundleId: "com.google.Chrome", title: "Inbox", url: "https://mail.example.com/")
+		var incognito = RecorderContext(name: "Google Chrome", bundleId: "com.google.Chrome")
+		incognito.isPrivate = true
+		var key: String?
+		func deliver(_ kind: RecorderKind, _ context: RecorderContext, dedupe: Bool, policy: RecorderPolicy = RecorderPolicy()) -> [String: Any]? {
+			let (body, next) = recorderContextDelivery(kind: kind, context: context, policy: policy, lastKey: key, dedupe: dedupe)
+			key = next
+			return body
+		}
+		check(deliver(.app, docs, dedupe: false)?["title"] as? String == "Docs", "switching into the browser sends a titled app event")
+		check(deliver(.window, docs, dedupe: true) == nil, "an identical window event is deduped")
+		// 普通 → 无痕 → 普通(同一个浏览器、切回同一个普通窗口)。
+		check(deliver(.window, incognito, dedupe: true) == nil, "entering a private window in the same browser sends no window event")
+		check(deliver(.window, incognito, dedupe: true) == nil, "staying in private windows sends nothing")
+		let back = deliver(.window, docs, dedupe: true)
+		check(back?["kind"] as? String == "window" && back?["title"] as? String == "Docs" && back?["url"] as? String == "https://docs.example.com/a", "returning to the same normal window is sent again, not deduped")
+		check(deliver(.window, docs, dedupe: true) == nil, "after returning, identical window events are deduped again")
+		// 还在无痕窗口时同一 App 重新激活(activated 的 samePid 路径,带去重):不再补一条切换。
+		_ = deliver(.window, incognito, dedupe: true)
+		check(deliver(.app, incognito, dedupe: true) == nil, "re-activating the browser while still private sends no second switch")
+		check(deliver(.window, docs, dedupe: true)?["title"] as? String == "Docs", "after that re-activation, returning to the normal window is still sent")
+		// 普通 → 无痕 → 另一个普通窗口。
+		_ = deliver(.window, incognito, dedupe: true)
+		check(deliver(.window, mail, dedupe: true)?["title"] as? String == "Inbox", "leaving a private window for another normal window is sent")
+		// 从别的 App 切进无痕窗口:只有一条不带标题的 app 切换。
+		key = "com.apple.Terminal"
+		let entered = deliver(.app, incognito, dedupe: false)
+		check(entered?["kind"] as? String == "app" && entered?["title"] == nil && entered?["url"] == nil, "switching into a private window from another app sends one untitled switch")
+		// 排除 App:切进来那条之后,里面的窗口变化不发,键也不变。
+		let appOff = RecorderPolicy(json: ["excludeBundleIds": ["com.google.Chrome"]])
+		key = nil
+		check(deliver(.app, docs, dedupe: false, policy: appOff) != nil, "an excluded app still gets its untitled switch")
+		let excludedKey = key
+		check(deliver(.window, mail, dedupe: true, policy: appOff) == nil && key == excludedKey, "window changes inside an excluded app send nothing and keep the key")
+	}
+
+	/// 焦点框在读值前被网页原地改成密码框(AX 身份不变):读值闸每次都重查角色 / 子角色与 Secure Input,是就不读值。
+	static func secureFieldFlip() {
+		var role = "AXTextField"
+		var subrole = ""
+		var count: Int? = 5
+		var secureInput = false
+		var probes = 0
+		var valueReads = 0
+		func read() -> RecorderFieldRead {
+			recorderReadField(
+				secureInput: { secureInput },
+				probe: { probes += 1; return (role, subrole, count) },
+				value: { valueReads += 1; return "hello" }
+			)
+		}
+		check(read() == .value("hello") && valueReads == 1, "a plain focused field is read")
+		subrole = "AXSecureTextField" // 同一个元素,type=text → type=password
+		check(read() == .secure && valueReads == 1, "a field that turned into a password field is not read")
+		subrole = ""
+		role = "AXSecureTextField"
+		check(read() == .secure && valueReads == 1, "a secure-role field is not read")
+		role = "AXTextField"
+		secureInput = true
+		let probesBefore = probes
+		check(read() == .secure && valueReads == 1 && probes == probesBefore, "secure input skips the field without any AX read")
+		secureInput = false
+		role = ""
+		check(read() == .unreadable && valueReads == 1, "an unreadable role is not proven plain, so the value is not read")
+		role = "AXTextField"
+		count = RecorderLimit.bigEditChars + 1
+		check(read() == .big && valueReads == 1, "an oversized field reports big without reading the value")
+		count = nil
+		check(read() == .value("hello") && valueReads == 2, "a field without a character count is still read")
+		check(recorderFieldState(secureInput: false, role: "AXTextField", subrole: "AXSecureTextField") == .secure, "the emit-time recheck treats a secure subrole as secure")
+		check(recorderFieldState(secureInput: true, role: "AXTextField", subrole: "") == .secure, "the emit-time recheck treats secure input as secure")
+		check(recorderFieldState(secureInput: false, role: "", subrole: "") == .unreadable, "the emit-time recheck does not call a destroyed field secure")
+		check(recorderFieldState(secureInput: false, role: "AXTextArea", subrole: "") == .plain, "an ordinary text area is plain")
 	}
 
 	static func browsers() {

@@ -17,7 +17,8 @@ import Foundation
 //   - AX 读取全在独立的 recorder 线程(自己的 CFRunLoop)上做,不占 NSApp 主线程(agent 光标 / 边缘光效在那画)。
 //     NSEvent 全局监听与 NSWorkspace / 分布式通知只能挂在主线程,回调里只取几个数就转交 recorder 线程。
 // 隐私闸在读 AX **之前**:硬排除名单(密码管理器等)与「所有订阅者都排除了的 App」不建 observer、不读标题;
-// 安全输入框 / Secure Input 期间不读值;无痕窗口只留一条不带标题的切换(Safari 判不出,整个按无痕处理)。
+// 安全输入框 / Secure Input 期间不读值,每次读值 / 报字前都重查(网页能把已聚焦的输入框原地改成密码框);
+// 无痕窗口只留激活时那一条不带标题的 App 切换,不发 window 事件(Safari 判不出,整个按无痕处理)。
 // 情境(无痕 / 排除站点)在读基线、开始一段输入、停手报字、记点击 / 快捷键之前先对齐(refreshIfStale;
 // 浏览器里标题没变也按快路重读网址,同标题换站点算换了情境),不拿上一个窗口 / 标签页 / 页面的情境去判;
 // 点击另按窗口列表确认落在前台 App 自己的窗口上。
@@ -157,9 +158,13 @@ func recorderTextFields(_ diff: RecorderTextDiff) -> [String: Any] {
 	return fields
 }
 
+func recorderIsSecureField(role: String, subrole: String) -> Bool {
+	role == "AXSecureTextField" || subrole == "AXSecureTextField"
+}
+
 /// 焦点元素是不是「可编辑文本」:只有这类的 ValueChanged 才处理。安全输入框一律不是。
 func recorderIsEditableText(role: String, subrole: String, editable: Bool) -> Bool {
-	if role == "AXSecureTextField" || subrole == "AXSecureTextField" { return false }
+	if recorderIsSecureField(role: role, subrole: subrole) { return false }
 	return ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"].contains(role) || subrole == "AXSearchField" || editable
 }
 
@@ -168,6 +173,55 @@ func recorderClickLabelAllowed(role: String, subrole: String) -> Bool {
 	if role == "AXSecureTextField" || subrole == "AXSecureTextField" { return false }
 	return ["AXButton", "AXPopUpButton", "AXMenuButton", "AXLink", "AXMenuItem", "AXMenuBarItem", "AXRadioButton", "AXTab", "AXCheckBox", "AXDisclosureTriangle"].contains(role)
 		|| subrole == "AXTabButton"
+}
+
+/// 点击命中的控件一次要读的属性(一次 IPC)。**不含 AXValue**:点到文本框 / 安全输入框时连值都不读;
+/// 标签只从标题 / 描述来(弹出按钮这类只有值、没有标题 / 描述的控件因此不带标签)。
+let recorderClickAttributes: [String] = [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute]
+
+enum RecorderFieldState: Equatable {
+	case plain
+	/// 安全输入框,或 Secure Input 开着。
+	case secure
+	/// 角色读不到(元素已销毁 / 超时):证明不了还是普通框。
+	case unreadable
+}
+
+func recorderFieldState(secureInput: Bool, role: String, subrole: String) -> RecorderFieldState {
+	if secureInput { return .secure }
+	if recorderIsSecureField(role: role, subrole: subrole) { return .secure }
+	return role.isEmpty ? .unreadable : .plain
+}
+
+enum RecorderFieldRead: Equatable {
+	/// 此刻是安全输入框 / Secure Input 开着:值没读。调用方丢掉待发、基线与这个框的 ValueChanged 观察。
+	case secure
+	/// 角色或值读不到:值没读到(停手时退回最后一次采样)。
+	case unreadable
+	/// 超过 bigEditChars:只能报 bigEdit。
+	case big
+	case value(String)
+}
+
+/// 读焦点框的值(基线、采样、停手)的唯一入口。先查 Secure Input,再重查角色 / 子角色(与字数同一次 IPC)——
+/// 网页能把已聚焦的普通输入框原地改成密码框而 AX 身份不变,聚焦时查过的那一次不算数。
+/// 安全输入框 / Secure Input → .secure,值根本不读;角色读不到 → .unreadable,也不读值。
+/// 读数经闭包注入(真路径是 AX,单测是假读数)。
+func recorderReadField(
+	secureInput: () -> Bool,
+	probe: () -> (role: String, subrole: String, count: Int?),
+	value: () -> String?
+) -> RecorderFieldRead {
+	if secureInput() { return .secure }
+	let (role, subrole, count) = probe()
+	switch recorderFieldState(secureInput: false, role: role, subrole: subrole) {
+	case .secure: return .secure
+	case .unreadable: return .unreadable
+	case .plain: break
+	}
+	if let count, count > RecorderLimit.bigEditChars { return .big }
+	guard let text = value() else { return .unreadable }
+	return text.utf16.count > RecorderLimit.bigEditChars ? .big : .value(text)
 }
 
 /// 地址栏的描述 / 标题(浏览器 URL 的兜底来源)。
@@ -315,7 +369,8 @@ enum RecorderKind: String {
 ///     一概不发,连时间点和次数都不外泄;
 ///   - 排除站点(当前 URL 命中 / 设了排除站点而浏览器网址没读到):app 切换与 window 标记,只带 `app.excluded`
 ///     (同一浏览器里从允许的页面进到排除站点,靠这条 window 标记结束上一段的计时;连着的标记由 emit 按情境键去重);
-///   - 无痕窗口:只有 app / window 两种,不带标题与 URL;
+///   - 无痕窗口:只有激活时那一条 app 事件,不带标题与 URL;window 事件一概不发,连进出无痕窗口的时间点都不外泄
+///     (同一 App 里切走后的下一条情境事件照常发出,见 recorderContextDelivery);
 ///   - 只记标题的 App:没有 text / click / key。
 func recorderEventBody(kind: RecorderKind, context: RecorderContext?, policy: RecorderPolicy) -> [String: Any]? {
 	var body: [String: Any] = ["kind": kind.rawValue]
@@ -338,7 +393,7 @@ func recorderEventBody(kind: RecorderKind, context: RecorderContext?, policy: Re
 	}
 	body["app"] = app
 	if context.isPrivate {
-		guard kind == .app || kind == .window else { return nil }
+		guard kind == .app else { return nil }
 		return body
 	}
 	switch kind {
@@ -359,6 +414,22 @@ func recorderContextKey(_ body: [String: Any]) -> String {
 	return [app["bundleId"] as? String ?? app["name"] as? String ?? "",
 	        (app["excluded"] as? Bool) == true ? "x" : "",
 	        body["title"] as? String ?? "", body["url"] as? String ?? ""].joined(separator: "\u{1F}")
+}
+
+/// 一条 app / window 情境事件对某个订阅者:发什么(nil = 不发)、之后记住的情境键。
+///   - dedupe 且与上一条同键 → 不发;
+///   - 被滤掉的 window 事件(无痕窗口;排除 App 里的窗口变化):不发,但键记成这个情境的 app 事件的键。
+///     同一浏览器里从普通窗口 A 切进无痕窗口、再切回 A 时,回来的那条必须照常发出 —— 键若还停在 A,它会被当成重复吞掉,
+///     中间那段就全算进了 A。记成无痕情境的键(不带标题),还在无痕窗口时同一 App 重新激活的那条 app 事件照样去重。
+///     排除 App 的键本来就是切进来时那条,记不记都一样。
+func recorderContextDelivery(kind: RecorderKind, context: RecorderContext?, policy: RecorderPolicy, lastKey: String?, dedupe: Bool) -> (body: [String: Any]?, key: String?) {
+	guard let body = recorderEventBody(kind: kind, context: context, policy: policy) else {
+		if kind == .window, let app = recorderEventBody(kind: .app, context: context, policy: policy) { return (nil, recorderContextKey(app)) }
+		return (nil, lastKey)
+	}
+	let key = recorderContextKey(body)
+	if dedupe && key == lastKey { return (nil, lastKey) }
+	return (body, key)
 }
 
 func recorderJSONLine(_ object: [String: Any]) -> Data? {
@@ -992,12 +1063,15 @@ final class ActivityRecorder {
 	private func emit(_ kind: RecorderKind, context: RecorderContext?, t: Double? = nil, fields: [String: Any] = [:], agent: Bool = false, dedupe: Bool = false) {
 		let time = Int64(t ?? recorderNowMs())
 		for subscriber in subscriberSnapshot() {
-			guard var body = recorderEventBody(kind: kind, context: context, policy: subscriber.policy) else { continue }
+			let delivered: [String: Any]?
 			if kind == .app || kind == .window {
-				let key = recorderContextKey(body)
-				if dedupe && subscriber.lastContextKey == key { continue }
+				let (body, key) = recorderContextDelivery(kind: kind, context: context, policy: subscriber.policy, lastKey: subscriber.lastContextKey, dedupe: dedupe)
 				subscriber.lastContextKey = key
+				delivered = body
+			} else {
+				delivered = recorderEventBody(kind: kind, context: context, policy: subscriber.policy)
 			}
+			guard var body = delivered else { continue }
 			for (name, value) in fields { body[name] = value }
 			body["t"] = time
 			if agent { body["origin"] = "agent" }
@@ -1264,7 +1338,11 @@ final class ActivityRecorder {
 	}
 
 	private func setFocus(_ element: AXUIElement?) {
-		if let element, let current = focusElement, CFEqual(element, current) { return }
+		if let element, let current = focusElement, CFEqual(element, current) {
+			// 同一个 AX 元素再次聚焦:网页可能已原地把它改成了密码框(身份不变)。复核一次,是就立刻撒手。
+			if fieldSecure(current) { dropSecureField(current) }
+			return
+		}
 		flushText()
 		releaseFocus()
 		// 无痕窗口(含整个 Safari)里连焦点框都不看:不读控件名、不挂 ValueChanged(一个窗口的无痕与否不会变,换窗口会重新 setFocus)。
@@ -1301,15 +1379,46 @@ final class ActivityRecorder {
 	/// 聚焦时记下当前值作为差分基线(聚焦前就有的内容不算「打的字」)。
 	private func primeBaseline(_ element: AXUIElement) {
 		focusSampling = false
-		guard !recorderSecureInputActive() else { return setBaseline(element, nil) }
-		if let count = (axCopy(element, kAXNumberOfCharactersAttribute) as? NSNumber)?.intValue, count > RecorderLimit.bigEditChars {
-			return setBaseline(element, nil)
+		switch readField(element, withCount: true) {
+		case .secure: dropSecureField(element)
+		case .big, .unreadable: setBaseline(element, nil)
+		case .value(let value):
+			setBaseline(element, value)
+			focusSampling = value.utf16.count <= RecorderLimit.sampleChars
 		}
-		guard let value = axCopy(element, kAXValueAttribute) as? String, value.utf16.count <= RecorderLimit.bigEditChars else {
-			return setBaseline(element, nil)
-		}
-		setBaseline(element, value)
-		focusSampling = value.utf16.count <= RecorderLimit.sampleChars
+	}
+
+	/// recorderReadField 的 AX 版。withCount:基线 / 停手把字数与角色放在同一次 IPC 里取(与以前读字数 + 读值一样是两次);
+	/// 采样不取字数(比以前多一次角色读取)。value 缺省读 AXValue。
+	private func readField(_ element: AXUIElement, withCount: Bool, value: (() -> String?)? = nil) -> RecorderFieldRead {
+		recorderReadField(
+			secureInput: recorderSecureInputActive,
+			probe: { [self] in
+				let attributes = withCount ? [kAXRoleAttribute, kAXSubroleAttribute, kAXNumberOfCharactersAttribute] : [kAXRoleAttribute, kAXSubroleAttribute]
+				let values = axMulti(element, attributes)
+				return (values[0] as? String ?? "", values[1] as? String ?? "", withCount ? (values[2] as? NSNumber)?.intValue : nil)
+			},
+			value: value ?? { [self] in axCopy(element, kAXValueAttribute) as? String }
+		)
+	}
+
+	/// 报字之前再核一次(只查角色与 Secure Input,不读值):读值与报出之间,这个框可能刚被改成密码框。
+	/// 角色读不到(元素已销毁)不算安全输入框 —— 要报的内容是它还是普通框时读的。
+	private func fieldSecure(_ element: AXUIElement) -> Bool {
+		if recorderSecureInputActive() { return true }
+		let values = axMulti(element, [kAXRoleAttribute, kAXSubroleAttribute])
+		return recorderFieldState(secureInput: false, role: values[0] as? String ?? "", subrole: values[1] as? String ?? "") == .secure
+	}
+
+	/// 焦点框此刻是安全输入框(或 Secure Input 开着):待发输入、差分基线、这个框的 ValueChanged 观察全部立刻丢掉,不报。
+	/// 之后要等焦点换走再回来(setFocus 重新按角色判断)才会再看它。调用方在这之后不能再碰 focusElement。
+	private func dropSecureField(_ element: AXUIElement) {
+		textTimer?.invalidate(); textTimer = nil
+		sampleTimer?.invalidate(); sampleTimer = nil
+		if let pendingElement = pending?.element { setBaseline(pendingElement, nil) }
+		pending = nil
+		setBaseline(element, nil)
+		if let focus = focusElement, CFEqual(focus, element) { releaseFocus() }
 	}
 
 	private func baseline(_ element: AXUIElement) -> String? {
@@ -1329,7 +1438,8 @@ final class ActivityRecorder {
 		// 当前情境本就不收文字时不查:过时只会让这段多丢,不会多记(也免得无痕窗口里每敲一下都多两次 AX 读)。
 		if pending == nil, let context, wants(.text, context) { refreshIfStale() }
 		guard let focus = focusElement, CFEqual(element, focus), let context else { return }
-		guard !recorderSecureInputActive(), wants(.text, context) else {
+		if recorderSecureInputActive() { return dropSecureField(focus) }
+		guard wants(.text, context) else {
 			// 这段期间的值不能进下一次差分:丢掉待发与基线。
 			pending = nil
 			textTimer?.invalidate(); textTimer = nil
@@ -1356,17 +1466,29 @@ final class ActivityRecorder {
 		sampleTimer = nil
 		// 两头都要:打字时的情境,以及现在的情境(之间若刷新成了无痕 / 排除站点,refreshWindow 已丢掉待发)。
 		guard var current = pending, let focus = focusElement, CFEqual(current.element, focus), let live = context,
-			wants(.text, current.context), wants(.text, live), !recorderSecureInputActive()
+			wants(.text, current.context), wants(.text, live)
 		else { return }
-		let started = CFAbsoluteTimeGetCurrent()
-		guard let value = axCopy(focus, kAXValueAttribute) as? String else { return }
+		// 只给读值本身计时(角色复核那次 IPC 不算进去,不然慢一点的 App 会因此停掉采样)。
+		var readTime = 0.0
+		let value: String
+		switch readField(focus, withCount: false, value: { [self] in
+			let started = CFAbsoluteTimeGetCurrent()
+			defer { readTime = CFAbsoluteTimeGetCurrent() - started }
+			return axCopy(focus, kAXValueAttribute) as? String
+		}) {
+		case .secure: return dropSecureField(focus)
+		case .unreadable: return
+		case .big: focusSampling = false; return
+		case .value(let text): value = text
+		}
 		// 读一次超过 50ms 的 App、或者文本变大了:退回只在停手时读,不给目标 App 添负担。
-		if CFAbsoluteTimeGetCurrent() - started > 0.05 || value.utf16.count > RecorderLimit.sampleChars { focusSampling = false }
+		if readTime > 0.05 || value.utf16.count > RecorderLimit.sampleChars { focusSampling = false }
 		if value.isEmpty, let latest = current.latest, !latest.isEmpty {
 			// 输入框被清空(聊天框发送的典型形态):清空前那版立刻当作一段输入报出去,基线归零。
 			// 报之前先确认情境没过时(这段输入期间页面可能已同标题换到排除站点);刷新若换了情境,待发已被报掉或丢掉。
 			refreshIfStale()
 			guard pending != nil, let still = focusElement, CFEqual(still, focus) else { return }
+			if fieldSecure(focus) { return dropSecureField(focus) }
 			if let base = baseline(focus), let diff = recorderSettleText(baseline: base, latest: latest, final: value), !diff.inserted.isEmpty {
 				emit(.text, context: current.context, t: current.lastChange, fields: recorderTextFields(diff).merging(["el": current.el]) { $1 }, agent: current.agent)
 			}
@@ -1393,23 +1515,29 @@ final class ActivityRecorder {
 		sampleTimer?.invalidate(); sampleTimer = nil
 		guard let current = pending else { return }
 		pending = nil
-		guard !recorderSecureInputActive(), wants(.text, current.context), let live = context, wants(.text, live) else {
-			return setBaseline(current.element, nil)
-		}
 		let element = current.element
-		if let count = (axCopy(element, kAXNumberOfCharactersAttribute) as? NSNumber)?.intValue, count > RecorderLimit.bigEditChars {
+		if recorderSecureInputActive() { return dropSecureField(element) }
+		guard wants(.text, current.context), let live = context, wants(.text, live) else {
+			return setBaseline(element, nil)
+		}
+		let final: String
+		switch readField(element, withCount: true) {
+		case .secure: return dropSecureField(element)
+		case .big:
 			setBaseline(element, nil)
 			return emit(.text, context: current.context, t: current.lastChange, fields: ["el": current.el, "bigEdit": true], agent: current.agent)
+		case .unreadable:
+			// 元素已销毁 / 超时:用最后一次采样兜底(有的聊天 App 发送后直接换掉输入框)。采样时它还是普通框(每次采样前都复核过)。
+			guard let latest = current.latest else { return }
+			final = latest
+		case .value(let text): final = text
 		}
-		// 元素已销毁 / 超时:用最后一次采样兜底(有的聊天 App 发送后直接换掉输入框)。
-		guard let final = (axCopy(element, kAXValueAttribute) as? String) ?? current.latest else { return }
-		if final.utf16.count > RecorderLimit.bigEditChars {
-			setBaseline(element, nil)
-			return emit(.text, context: current.context, t: current.lastChange, fields: ["el": current.el, "bigEdit": true], agent: current.agent)
-		}
-		defer { setBaseline(element, final) }
 		// 没有基线(聚焦时读不到 / 刚从大文本缩回来):这次只建基线,不猜哪些是新打的。
-		guard let base = baseline(element), let diff = recorderSettleText(baseline: base, latest: current.latest, final: final) else { return }
+		guard let base = baseline(element), let diff = recorderSettleText(baseline: base, latest: current.latest, final: final) else {
+			return setBaseline(element, final)
+		}
+		if fieldSecure(element) { return dropSecureField(element) }
+		setBaseline(element, final)
 		emit(.text, context: current.context, t: current.lastChange, fields: recorderTextFields(diff).merging(["el": current.el]) { $1 }, agent: current.agent)
 	}
 
@@ -1441,12 +1569,12 @@ final class ActivityRecorder {
 		var pid: pid_t = 0
 		guard AXUIElementGetPid(hit, &pid) == .success, pid == observedPid else { return }
 		AXUIElementSetMessagingTimeout(hit, Self.axTimeout)
-		let values = axMulti(hit, [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute])
+		let values = axMulti(hit, recorderClickAttributes)
 		let role = values[0] as? String ?? ""
 		guard !role.isEmpty else { return }
 		var el: [String: Any] = ["role": role]
 		if recorderClickLabelAllowed(role: role, subrole: values[1] as? String ?? ""),
-			let label = recorderLabel(recorderFirstNonEmpty(values[2] as? String, values[3] as? String, values[4] as? String)) {
+			let label = recorderLabel(recorderFirstNonEmpty(values[2] as? String, values[3] as? String)) {
 			el["label"] = label
 		}
 		emit(.click, context: context, fields: ["el": el], agent: agent)
