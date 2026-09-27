@@ -369,7 +369,7 @@ final class InputSuppressionGuard {
 }
 
 final class Bridge {
-	private let protocolVersion = 12
+	private let protocolVersion = 13
 	private let refStore = AXRefStore()
 	private let inputSuppressionGuard = InputSuppressionGuard()
 	private let physicalInputLock = NSRecursiveLock()
@@ -470,17 +470,45 @@ final class Bridge {
 		let clientInput = FileHandle(fileDescriptor: client, closeOnDealloc: true)
 		var buffer = Data()
 		let newline = Data([0x0A])
+		// Tangu:这条连接一旦成了电脑历史订阅(recordSubscribe),之后只由 ActivityRecorder 写事件、这里只等 EOF ——
+		// 再处理别的请求,回包会和事件行在不同线程上交错写坏。
+		var subscribed = false
 		while true {
 			let data = clientInput.availableData
 			if data.isEmpty { break }
+			if subscribed { continue }
 			buffer.append(data)
 			while let range = buffer.range(of: newline) {
 				let lineData = buffer.subdata(in: 0..<range.lowerBound)
 				buffer.removeSubrange(0..<range.upperBound)
-				if let line = String(data: lineData, encoding: .utf8), !line.isEmpty { handleLine(line, to: client) }
+				guard let line = String(data: lineData, encoding: .utf8), !line.isEmpty else { continue }
+				if let subscribedNow = subscribeRecorder(line, client: client) {
+					if subscribedNow { subscribed = true; buffer.removeAll(); break }
+					continue
+				}
+				handleLine(line, to: client)
 			}
 		}
+		// 先退订并排空它的写队列,再关 fd —— 否则排队中的写会落到被复用的 fd 上。
+		if subscribed { ActivityRecorder.shared.unsubscribe(fd: client) }
 		clientInput.closeFile()
+	}
+
+	/// Tangu:recordSubscribe(协议 13,见 activity_recorder.swift)。不是这条命令 → nil,照常走 handleLine;
+	/// 订阅成功 → true(回包已由 recorder 排在这条连接写队列的第一位);失败 → 在这里回错误包,false。
+	private func subscribeRecorder(_ line: String, client: Int32) -> Bool? {
+		guard line.contains("recordSubscribe"),
+			let data = line.data(using: .utf8),
+			let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+			object["cmd"] as? String == "recordSubscribe"
+		else { return nil }
+		let id = (object["id"] as? String) ?? "invalid"
+		guard let failure = ActivityRecorder.shared.subscribe(fd: client, id: id, policy: object["policy"], protocolVersion: protocolVersion, browserBundleIds: browserBundleIds) else {
+			return true
+		}
+		send(["id": id, "ok": false, "error": ["message": failure.message, "code": failure.code]], to: client)
+		recordCompletedRequest(id)
+		return false
 	}
 
 	private func processBufferedInput() {
@@ -735,16 +763,21 @@ final class Bridge {
 		case "endInputSuppression":
 			return endInputSuppression()
 		case "restoreUserFocus":
+			// Tangu:agent 发起的界面改动期间,电脑历史把观测到的事件记成 origin:"agent"(深度计数,见 activity_recorder.swift)。
+			ActivityRecorder.shared.agentEnter(); defer { ActivityRecorder.shared.agentLeave() }
 			return try restoreUserFocus(request)
 		case "focusWindow":
+			ActivityRecorder.shared.agentEnter(); defer { ActivityRecorder.shared.agentLeave() }
 			return try focusWindow(request)
 		case "setWindowFrame":
 			return try setWindowFrame(request)
 		case "look":
 			return try look(request)
 		case "act":
+			ActivityRecorder.shared.agentEnter(); defer { ActivityRecorder.shared.agentLeave() }
 			return try act(request)
 		case "actBatch":
+			ActivityRecorder.shared.agentEnter(); defer { ActivityRecorder.shared.agentLeave() }
 			return try actBatch(request)
 		case "liveView":
 			return try liveView(request)
@@ -758,6 +791,9 @@ final class Bridge {
 			return try axReadText(request)
 		case "getMousePosition":
 			return getMousePosition()
+		case "recordSubscribe":
+			// 只在 serve socket 的专用连接上有意义(processClient 截走了那条路);stdin 模式没有能长开的连接。
+			throw BridgeFailure(message: "recordSubscribe needs a dedicated connection to the serve socket", code: "unsupported")
 		default:
 			throw BridgeFailure(message: "Unknown command '\(cmd)'", code: "unknown_command")
 		}
@@ -866,7 +902,14 @@ final class Bridge {
 			"accessibility": permissions["accessibility"] ?? false,
 			"screenRecording": permissions["screenRecording"] ?? false,
 			"recentCompletedRequestIds": completedRequestIds(),
+			"recorderSubscribers": ActivityRecorder.shared.subscriberCount,
 		]
+		// Tangu:电脑历史的无痕扫描计数(只有计数)—— 浏览器窗口的有上限遍历走了几次、几次没看完、各因什么停手。
+		// 真机上据此判断「扫描不完整时仍按普通窗口记」要不要改(见 activity_recorder.swift RecorderScanStats)。
+		let privateScan = ActivityRecorder.shared.scanStats.snapshot()
+		output["recorderPrivateScans"] = privateScan.walks
+		output["recorderPrivateScanIncomplete"] = privateScan.incomplete
+		output["recorderPrivateScanStops"] = privateScan.stops
 		if let parentPath {
 			output["parentPath"] = parentPath
 		}

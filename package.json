@@ -1,6 +1,6 @@
 {
   "name": "@forsion/tangu-computer-use",
-  "version": "0.5.8",
+  "version": "0.6.0",
   "description": "Tangu engine plugin: let agents observe and control macOS, Windows, and Linux desktop apps. Fork of injaneity/pi-computer-use (MIT).",
   "type": "module",
   "license": "MIT",
@@ -54,7 +54,7 @@
     "check:platform": "node scripts/platform-contract.check.mjs",
     "check:blindclick": "node scripts/blind-click.check.mjs",
     "check:liveview": "node scripts/live-view.check.mjs",
-    "check": "npm run check:platform && npm run check:no-foreground && npm run check:helper-path && npm run check:highlight && npm run check:permissions && npm run check:plugin && npm run check:helper-refresh && npm run check:installer && npm run check:cli-exit",
+    "check": "npm run check:platform && npm run check:no-foreground && npm run check:helper-path && npm run check:highlight && npm run check:permissions && npm run check:plugin && npm run check:helper-refresh && npm run check:installer && npm run check:cli-exit && npm run check:recorder-logic",
     "build:native": "node scripts/build-native.mjs",
     "build:windows": "node scripts/build-native.mjs --platform windows",
     "build:linux": "node scripts/build-native.mjs --platform linux",
@@ -64,7 +64,9 @@
     "check:helper-refresh": "node scripts/helper-refresh.check.mjs",
     "check:helper-signal": "node scripts/helper-signal.check.mjs",
     "check:installer": "node scripts/keychain-free-install.check.mjs",
-    "check:cli-exit": "node scripts/cli-exit.check.mjs"
+    "check:cli-exit": "node scripts/cli-exit.check.mjs",
+    "check:recorder-logic": "node scripts/recorder-logic.check.mjs",
+    "check:recorder": "node scripts/recorder.check.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

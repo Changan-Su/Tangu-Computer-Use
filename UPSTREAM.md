@@ -114,7 +114,7 @@ Accessibility/Screen-Recording (TCC) grants to them.
 > stays put, everything else goes to `~/Applications` (no admin needed). Users whose `/Applications`
 > is not writable will be asked to re-grant TCC once, because the path moved.
 
-**Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **12**, in two places that must
+**Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **13**, in two places that must
 always match: `native/macos/bridge.swift` (`private let protocolVersion`) and
 `src/vendor/platform/macos/helper.ts` (`HELPER_PROTOCOL_VERSION`). Bump it whenever the helper gains a
 command **or changes native behaviour** — `src/onboarding.ts` now notices a stale binary *on disk*, but a
@@ -274,4 +274,5 @@ button; `install.sh dev|prod` stays as the developer loop for iterating on the b
    it walks every window shape and asserts canvas-aspect / fill / snug / no-overflow. The DOM shim in
    `check.mjs` does no layout, so CSS regressions are only visible there.
 
+- Computer History recorder (protocol 13, 0.6.0): `native/macos/activity_recorder.swift` + `activity_recorder_tests.swift` (`check:recorder-logic`), listed in `macosSourcePaths` before `bridge.swift`. Three `bridge.swift` hooks to replay after a resync: `processClient` hands a `recordSubscribe` line to `subscribeRecorder()` and, once subscribed, only waits for EOF and then calls `ActivityRecorder.shared.unsubscribe`; `handleRequest` wraps `act` / `actBatch` / `focusWindow` / `restoreUserFocus` in `agentEnter()` / `agentLeave()` (events become `origin:"agent"`) and rejects `recordSubscribe` on stdin; `diagnostics` reports `recorderSubscribers`. `grep -n "ActivityRecorder" native/macos/bridge.swift` must find them. The recorder never calls `ensureEnhancedAccessibility`.
 - Mini Panel foreground activity: `native/macos/foreground_activity.swift` emits a bounded, data-only lease beside the daemon socket. Hooked into actual HID/focus delivery and recursive input scopes, not the requested delivery policy. Included in both native-build and source-install inputs. No change to upstream tool schemas or input behavior.
