@@ -3,7 +3,8 @@ import Foundation
 
 // 电脑历史采集器的单测(npm run check:recorder-logic),不需要任何授权。
 // 纯逻辑:差分 / 截断 / 无痕判定 / 浏览器与 bundle 匹配 / 快捷键串 / URL 清洗 / 按订阅者过滤 / 锁屏判定 /
-// 点击归属与点击读取的属性 / 情境事件的去重与无痕窗口 / 焦点框变成密码框(读值闸)/ 情境刷新时待发输入的去留 /
+// 点击归属与点击读取的属性 / 情境事件的去重与无痕窗口 / 断点 resumed / 焦点框变成密码框与角色查询失败(读值闸)/
+// 采样的整次读计时 / 情境刷新时待发输入的去留 /
 // 同标题换站点 / 有上限遍历(假树)/ 无痕扫描计数 / agent 计数 / 订阅写队列。
 // subscriptionStream 走真实的订阅路径:会装上主线程观察者与 NSEvent 全局监听、对前台 App 发 AX 读取
 // (本进程没有辅助功能授权时这些读取都失败、键盘监听收不到东西),只断言事件形状与退订后的拆除状态,绝不打印事件内容。
@@ -24,7 +25,9 @@ import Foundation
 		keys()
 		filtering()
 		privateContextDelivery()
+		resumedMarker()
 		secureFieldFlip()
+		sampleCutoff()
 		browsers()
 		sessionLock()
 		clickOwner()
@@ -211,11 +214,9 @@ import Foundation
 		let mail = RecorderContext(name: "Google Chrome", bundleId: "com.google.Chrome", title: "Inbox", url: "https://mail.example.com/")
 		var incognito = RecorderContext(name: "Google Chrome", bundleId: "com.google.Chrome")
 		incognito.isPrivate = true
-		var key: String?
+		var state = RecorderDeliveryState()
 		func deliver(_ kind: RecorderKind, _ context: RecorderContext, dedupe: Bool, policy: RecorderPolicy = RecorderPolicy()) -> [String: Any]? {
-			let (body, next) = recorderContextDelivery(kind: kind, context: context, policy: policy, lastKey: key, dedupe: dedupe)
-			key = next
-			return body
+			recorderContextDelivery(kind: kind, context: context, policy: policy, state: &state, dedupe: dedupe)
 		}
 		check(deliver(.app, docs, dedupe: false)?["title"] as? String == "Docs", "switching into the browser sends a titled app event")
 		check(deliver(.window, docs, dedupe: true) == nil, "an identical window event is deduped")
@@ -233,21 +234,97 @@ import Foundation
 		_ = deliver(.window, incognito, dedupe: true)
 		check(deliver(.window, mail, dedupe: true)?["title"] as? String == "Inbox", "leaving a private window for another normal window is sent")
 		// 从别的 App 切进无痕窗口:只有一条不带标题的 app 切换。
-		key = "com.apple.Terminal"
+		state = RecorderDeliveryState(lastKey: "com.apple.Terminal")
 		let entered = deliver(.app, incognito, dedupe: false)
 		check(entered?["kind"] as? String == "app" && entered?["title"] == nil && entered?["url"] == nil, "switching into a private window from another app sends one untitled switch")
 		// 排除 App:切进来那条之后,里面的窗口变化不发,键也不变。
 		let appOff = RecorderPolicy(json: ["excludeBundleIds": ["com.google.Chrome"]])
-		key = nil
+		state = RecorderDeliveryState()
 		check(deliver(.app, docs, dedupe: false, policy: appOff) != nil, "an excluded app still gets its untitled switch")
-		let excludedKey = key
-		check(deliver(.window, mail, dedupe: true, policy: appOff) == nil && key == excludedKey, "window changes inside an excluded app send nothing and keep the key")
+		let excludedKey = state.lastKey
+		check(deliver(.window, mail, dedupe: true, policy: appOff) == nil && state.lastKey == excludedKey, "window changes inside an excluded app send nothing and keep the key")
+	}
+
+	/// 断点标记 resumed(合同见 Genesis desktop/shared/computerHistory.ts):没记的情境之后第一条可记录的情境事件带它,
+	/// 只此一条;不带那段的任何时间或内容;按订阅者各自的策略判断。
+	static func resumedMarker() {
+		let docs = RecorderContext(name: "Google Chrome", bundleId: "com.google.Chrome", title: "Docs", url: "https://docs.example.com/a")
+		let docsB = RecorderContext(name: "Google Chrome", bundleId: "com.google.Chrome", title: "Docs", url: "https://docs.example.com/b")
+		let bank = RecorderContext(name: "Google Chrome", bundleId: "com.google.Chrome", title: "Accounts", url: "https://mybank.com/accounts")
+		let terminal = RecorderContext(name: "Terminal", bundleId: "com.apple.Terminal", title: "zsh")
+		var incognito = RecorderContext(name: "Google Chrome", bundleId: "com.google.Chrome")
+		incognito.isPrivate = true
+		let open = RecorderPolicy()
+		let siteOff = RecorderPolicy(json: ["excludeDomains": ["mybank.com"]])
+		let appOff = RecorderPolicy(json: ["excludeBundleIds": ["com.google.Chrome"]])
+		var state = RecorderDeliveryState()
+		func deliver(_ kind: RecorderKind, _ context: RecorderContext, dedupe: Bool = true, policy: RecorderPolicy = RecorderPolicy()) -> [String: Any]? {
+			recorderContextDelivery(kind: kind, context: context, policy: policy, state: &state, dedupe: dedupe)
+		}
+		func resumed(_ body: [String: Any]?) -> Bool { body?["resumed"] as? Bool == true }
+
+		check(recorderContextRecorded(docs, policy: open) && !recorderContextRecorded(incognito, policy: open), "a normal window is recorded, a private one is not")
+		check(!recorderContextRecorded(bank, policy: siteOff) && recorderContextRecorded(bank, policy: open), "an excluded site is unrecorded only for the subscriber that excludes it")
+		check(!recorderContextRecorded(docs, policy: appOff), "an excluded app is unrecorded")
+
+		// 普通 → 无痕 → 同一个普通窗口。
+		check(!resumed(deliver(.app, docs, dedupe: false)), "the first recorded context carries no resumed marker")
+		_ = deliver(.window, incognito)
+		let back = deliver(.window, docs)
+		check(resumed(back) && back?["title"] as? String == "Docs", "returning from a private window to the same normal window carries resumed")
+		check(Set(back?.keys.map { $0 } ?? []) == ["kind", "app", "title", "url", "resumed"], "the resumed event carries only its own context, nothing about the private stretch")
+		check(!resumed(deliver(.window, docsB)), "only the first recorded event after the stretch carries resumed")
+		// 普通 → 无痕 → 另一个普通窗口(同标题不同网址:折叠方只按同键判断会把无痕那段并进去)。
+		_ = deliver(.window, incognito)
+		check(resumed(deliver(.window, docs)), "a same-title window with another URL after a private window carries resumed")
+		// 还在无痕窗口时同一 App 重新激活(去重掉)也不清标记。
+		_ = deliver(.window, incognito)
+		check(deliver(.app, incognito) == nil, "re-activating while private is still deduped")
+		check(resumed(deliver(.window, docsB)), "after a deduped re-activation the return still carries resumed")
+		// 从别的 App 切进无痕窗口:那条不带标题的切换本身不是可记录的情境,不带 resumed;之后切回别的 App 带。
+		_ = deliver(.app, terminal, dedupe: false)
+		let entered = deliver(.app, incognito, dedupe: false)
+		check(entered != nil && !resumed(entered), "the untitled switch into a private window is not a resumed event")
+		check(resumed(deliver(.app, terminal, dedupe: false)), "switching from a private window to another app carries resumed")
+
+		// 普通 → 排除站点 → 普通:排除标记不带,回来那条带。
+		state = RecorderDeliveryState()
+		_ = deliver(.app, docs, dedupe: false, policy: siteOff)
+		let marker = deliver(.window, bank, policy: siteOff)
+		check((marker?["app"] as? [String: Any])?["excluded"] as? Bool == true && !resumed(marker), "the excluded-site marker is not a resumed event")
+		check(resumed(deliver(.window, docs, policy: siteOff)), "returning from an excluded site carries resumed")
+		// 同一串事件,不排除这个站点的订阅者:银行页照常记,不带 resumed。
+		state = RecorderDeliveryState()
+		_ = deliver(.app, docs, dedupe: false, policy: open)
+		check(!resumed(deliver(.window, bank, policy: open)) && !resumed(deliver(.window, docs, policy: open)), "a subscriber that records the site never sees resumed")
+
+		// 排除 App → 别的 App:切进排除 App 那条已标出开头,之后那条照样带(合同:没记之后的第一条)。
+		state = RecorderDeliveryState()
+		_ = deliver(.app, terminal, dedupe: false, policy: appOff)
+		let excluded = deliver(.app, docs, dedupe: false, policy: appOff)
+		check((excluded?["app"] as? [String: Any])?["excluded"] as? Bool == true && !resumed(excluded), "the excluded-app switch is not a resumed event")
+		_ = deliver(.window, mail(), policy: appOff)
+		check(resumed(deliver(.app, terminal, dedupe: false, policy: appOff)), "the first app after an excluded app carries resumed")
+
+		// 无标题的普通窗口与无痕情境同键:回来那条不能被去重吞掉。
+		let untitled = RecorderContext(name: "Google Chrome", bundleId: "com.google.Chrome")
+		state = RecorderDeliveryState()
+		_ = deliver(.app, untitled, dedupe: false)
+		_ = deliver(.window, incognito)
+		let untitledBack = deliver(.window, untitled)
+		check(untitledBack != nil && resumed(untitledBack), "an untitled normal window after a private one is sent with resumed, not deduped")
+		check(deliver(.window, untitled) == nil, "after that, identical events are deduped again")
+	}
+
+	static func mail() -> RecorderContext {
+		RecorderContext(name: "Google Chrome", bundleId: "com.google.Chrome", title: "Inbox", url: "https://mail.example.com/")
 	}
 
 	/// 焦点框在读值前被网页原地改成密码框(AX 身份不变):读值闸每次都重查角色 / 子角色与 Secure Input,是就不读值。
+	/// 角色 / 子角色查询失败(超时)证明不了不是密码框:也不读值,判成要丢掉待发的 .secure(Codex 第三轮 P1)。
 	static func secureFieldFlip() {
-		var role = "AXTextField"
-		var subrole = ""
+		var role: RecorderAXAttr = .value("AXTextField")
+		var subrole: RecorderAXAttr = .absent
 		var count: Int? = 5
 		var secureInput = false
 		var probes = 0
@@ -260,27 +337,108 @@ import Foundation
 			)
 		}
 		check(read() == .value("hello") && valueReads == 1, "a plain focused field is read")
-		subrole = "AXSecureTextField" // 同一个元素,type=text → type=password
+		subrole = .value("AXSecureTextField") // 同一个元素,type=text → type=password
 		check(read() == .secure && valueReads == 1, "a field that turned into a password field is not read")
-		subrole = ""
-		role = "AXSecureTextField"
+		subrole = .absent
+		role = .value("AXSecureTextField")
 		check(read() == .secure && valueReads == 1, "a secure-role field is not read")
-		role = "AXTextField"
+		role = .value("AXTextField")
 		secureInput = true
 		let probesBefore = probes
 		check(read() == .secure && valueReads == 1 && probes == probesBefore, "secure input skips the field without any AX read")
 		secureInput = false
-		role = ""
-		check(read() == .unreadable && valueReads == 1, "an unreadable role is not proven plain, so the value is not read")
-		role = "AXTextField"
+		// 子角色查询失败(超时 / App 不应答),角色照样读到 AXTextField:不读值,判成要丢掉待发(调用方 dropSecureField)。
+		subrole = .failed
+		check(read() == .secure && valueReads == 1, "a failed subrole query with an AXTextField role reads no value and drops pending text")
+		subrole = .absent
+		role = .failed
+		check(read() == .secure && valueReads == 1, "a failed role query reads no value and drops pending text")
+		role = .value("AXTextField")
+		subrole = .gone
+		check(read() == .unreadable && valueReads == 1, "a destroyed field is not read and is not treated as secure")
+		role = .absent
+		subrole = .absent
+		check(read() == .unreadable && valueReads == 1, "a field without a role is not proven plain, so the value is not read")
+		role = .value("AXTextField")
 		count = RecorderLimit.bigEditChars + 1
 		check(read() == .big && valueReads == 1, "an oversized field reports big without reading the value")
 		count = nil
-		check(read() == .value("hello") && valueReads == 2, "a field without a character count is still read")
-		check(recorderFieldState(secureInput: false, role: "AXTextField", subrole: "AXSecureTextField") == .secure, "the emit-time recheck treats a secure subrole as secure")
-		check(recorderFieldState(secureInput: true, role: "AXTextField", subrole: "") == .secure, "the emit-time recheck treats secure input as secure")
-		check(recorderFieldState(secureInput: false, role: "", subrole: "") == .unreadable, "the emit-time recheck does not call a destroyed field secure")
-		check(recorderFieldState(secureInput: false, role: "AXTextArea", subrole: "") == .plain, "an ordinary text area is plain")
+		check(read() == .value("hello") && valueReads == 2, "a field that genuinely has no subrole and no character count is still read")
+		// 报字前复核(fieldSecure):只有确认是普通框、或元素已销毁,才照常报。
+		func recheck(_ role: RecorderAXAttr, _ subrole: RecorderAXAttr, secureInput: Bool = false) -> Bool {
+			recorderRecheckDrops(recorderFieldState(secureInput: secureInput, role: role, subrole: subrole))
+		}
+		check(recheck(.value("AXTextField"), .value("AXSecureTextField")), "the emit-time recheck treats a secure subrole as secure")
+		check(recheck(.value("AXTextField"), .absent, secureInput: true), "the emit-time recheck treats secure input as secure")
+		check(recheck(.value("AXTextField"), .failed), "the emit-time recheck drops pending text when the subrole query failed")
+		check(recheck(.failed, .absent), "the emit-time recheck drops pending text when the role query failed")
+		check(recheck(.failed, .value("AXSecureTextField")) && recorderFieldState(secureInput: false, role: .failed, subrole: .value("AXSecureTextField")) == .secure, "a secure subrole wins over a failed role")
+		check(!recheck(.gone, .gone) && recorderFieldState(secureInput: false, role: .gone, subrole: .gone) == .unreadable, "the emit-time recheck does not call a destroyed field secure")
+		check(!recheck(.value("AXTextArea"), .absent) && recorderFieldState(secureInput: false, role: .value("AXTextArea"), subrole: .absent) == .plain, "an ordinary text area without a subrole is plain")
+		// AX 错误码 → 读数。
+		check(recorderAXAttr(error: .attributeUnsupported) == .absent && recorderAXAttr(error: .noValue) == .absent, "unsupported and no-value errors mean the attribute is genuinely absent")
+		check(recorderAXAttr(error: .invalidUIElement) == .gone, "an invalid element means the field is gone")
+		check(recorderAXAttr(error: .cannotComplete) == .failed && recorderAXAttr(error: .failure) == .failed && recorderAXAttr(error: .apiDisabled) == .failed && recorderAXAttr(error: .notImplemented) == .failed, "timeouts and every other error mean the query failed")
+		func wrapped(_ error: AXError) -> AnyObject {
+			var raw = error.rawValue
+			return AXValueCreate(.axError, &raw)!
+		}
+		check(recorderAXAttr(wrapped(.noValue)) == .absent && recorderAXAttr(wrapped(.attributeUnsupported)) == .absent, "an AXValue-wrapped missing attribute is absent")
+		check(recorderAXAttr(wrapped(.cannotComplete)) == .failed, "an AXValue-wrapped timeout is a failed query")
+		check(recorderAXAttr(wrapped(.invalidUIElement)) == .gone, "an AXValue-wrapped invalid element is gone")
+		check(recorderAXAttr(kCFNull) == .absent, "CFNull is an absent attribute")
+		check(recorderAXAttr("AXSecureTextField" as NSString) == .value("AXSecureTextField") && recorderAXAttr("" as NSString) == .absent, "strings are values and the empty string is absent")
+		check(recorderAXAttr(NSNumber(value: 1)) == .failed, "an unexpected value type is a failed query")
+	}
+
+	/// 边打边采样的 50ms 上限按整次读算(角色 / 子角色复核 + 值,Codex 第三轮 P2);停手那次照常复核。
+	static func sampleCutoff() {
+		var now = 0.0
+		var probeCost = 0.001
+		var valueCost = 0.001
+		var subrole: RecorderAXAttr = .absent
+		var count: Int?
+		var probes = 0
+		var valueReads = 0
+		var text = "hi"
+		func probe() -> (role: RecorderAXAttr, subrole: RecorderAXAttr, count: Int?) {
+			probes += 1
+			now += probeCost
+			return (.value("AXTextField"), subrole, count)
+		}
+		func value() -> String? { valueReads += 1; now += valueCost; return text }
+		func sample() -> (read: RecorderFieldRead, keepSampling: Bool) {
+			recorderSampleField(clock: { now }, secureInput: { false }, probe: probe, value: value)
+		}
+		let fast = sample()
+		check(fast.read == .value("hi") && fast.keepSampling, "a fast read keeps sampling")
+		probeCost = 0.045
+		valueCost = 0.01
+		let slow = sample()
+		check(slow.read == .value("hi") && !slow.keepSampling, "a slow role recheck with a fast value read stops sampling: the whole read is timed")
+		probeCost = 0.3
+		subrole = .value("AXSecureTextField")
+		let readsBefore = valueReads
+		let slowSecure = sample()
+		check(slowSecure.read == .secure && !slowSecure.keepSampling && valueReads == readsBefore, "a slow sample still honors the secure recheck and reads no value")
+		// 停了采样之后,停手那次读(recorderReadField)照常先复核角色 / 子角色。
+		let probesBefore = probes
+		check(recorderReadField(secureInput: { false }, probe: probe, value: value) == .secure && probes == probesBefore + 1 && valueReads == readsBefore, "with sampling off, the settle read still rechecks the role and subrole first")
+		probeCost = 0.001
+		valueCost = 0.001
+		subrole = .absent
+		text = String(repeating: "x", count: RecorderLimit.sampleChars + 1)
+		check(!sample().keepSampling, "text past the sampling size stops sampling")
+		text = "hi"
+		count = RecorderLimit.bigEditChars + 1
+		check(sample().read == .big && !sample().keepSampling, "an oversized field stops sampling")
+		count = nil
+		probeCost = 0.3
+		subrole = .gone
+		let slowGone = sample()
+		check(slowGone.read == .unreadable && !slowGone.keepSampling, "a slow unreadable sample stops sampling too")
+		probeCost = 0.001
+		check(sample().keepSampling, "a fast unreadable sample leaves sampling on")
 	}
 
 	static func browsers() {

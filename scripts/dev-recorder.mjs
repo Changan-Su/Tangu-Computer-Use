@@ -93,8 +93,8 @@ if (cmd === 'build') {
 			counts[key] = (counts[key] ?? 0) + 1;
 			const time = new Date(ev.t).toTimeString().slice(0, 8);
 			const detail = show
-				? JSON.stringify({ title: ev.title, url: ev.url, el: ev.el, text: ev.text, keys: ev.keys, state: ev.state })
-				: `title=${ev.title?.length ?? '-'} url=${ev.url ? 'y' : '-'} text=${ev.text?.length ?? (ev.deleted ? `-${ev.deleted}` : '-')} el=${ev.el?.role ?? '-'}${ev.keys ? ' keys' : ''}${ev.state ? ` ${ev.state}` : ''}${ev.origin ? ' agent' : ''}`;
+				? JSON.stringify({ title: ev.title, url: ev.url, el: ev.el, text: ev.text, keys: ev.keys, state: ev.state, resumed: ev.resumed })
+				: `title=${ev.title?.length ?? '-'} url=${ev.url ? 'y' : '-'} text=${ev.text?.length ?? (ev.deleted ? `-${ev.deleted}` : '-')} el=${ev.el?.role ?? '-'}${ev.keys ? ' keys' : ''}${ev.state ? ` ${ev.state}` : ''}${ev.origin ? ' agent' : ''}${ev.app?.excluded ? ' excluded' : ''}${ev.resumed ? ' resumed' : ''}`;
 			console.log(`${time} ${ev.kind.padEnd(6)} ${(ev.app?.name ?? '').padEnd(22)} ${detail}`);
 		},
 	});

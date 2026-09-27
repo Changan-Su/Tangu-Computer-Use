@@ -17,8 +17,10 @@ import Foundation
 //   - AX 读取全在独立的 recorder 线程(自己的 CFRunLoop)上做,不占 NSApp 主线程(agent 光标 / 边缘光效在那画)。
 //     NSEvent 全局监听与 NSWorkspace / 分布式通知只能挂在主线程,回调里只取几个数就转交 recorder 线程。
 // 隐私闸在读 AX **之前**:硬排除名单(密码管理器等)与「所有订阅者都排除了的 App」不建 observer、不读标题;
-// 安全输入框 / Secure Input 期间不读值,每次读值 / 报字前都重查(网页能把已聚焦的输入框原地改成密码框);
+// 安全输入框 / Secure Input 期间不读值,每次读值 / 报字前都重查(网页能把已聚焦的输入框原地改成密码框;
+// 角色或子角色没查到也按安全输入框算,证明不了不是就不读);
 // 无痕窗口只留激活时那一条不带标题的 App 切换,不发 window 事件(Safari 判不出,整个按无痕处理)。
+// 没记的情境(无痕 / 排除)之后第一条可记录的情境事件带 `resumed: true`,折叠方据此切段(recorderContextDelivery)。
 // 情境(无痕 / 排除站点)在读基线、开始一段输入、停手报字、记点击 / 快捷键之前先对齐(refreshIfStale;
 // 浏览器里标题没变也按快路重读网址,同标题换站点算换了情境),不拿上一个窗口 / 标签页 / 页面的情境去判;
 // 点击另按窗口列表确认落在前台 App 自己的窗口上。
@@ -34,6 +36,8 @@ enum RecorderLimit {
 	static let bigEditChars = 20_000
 	/// 不超过这个长度的输入框才边打边采样(聊天框、搜索框);更大的只在停手时读一次。
 	static let sampleChars = 2_000
+	/// 一次采样(整次读:角色 / 子角色复核 + 值)超过这么久的 App 不再边打边采样。
+	static let sampleSeconds = 0.05
 }
 
 /// 始终排除:不建 observer、不读标题,只发一条 `app.excluded` 的切换。桌面下发的排除表叠加在这之上,改不掉这份。
@@ -179,24 +183,73 @@ func recorderClickLabelAllowed(role: String, subrole: String) -> Bool {
 /// 标签只从标题 / 描述来(弹出按钮这类只有值、没有标题 / 描述的控件因此不带标签)。
 let recorderClickAttributes: [String] = [kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute]
 
+/// 一个 AX 属性的读数。安全输入框的复核靠它分清「这个框本来就没有子角色」与「子角色没查到」——
+/// 后者证明不了不是密码框(Codex 第三轮 P1:子角色查询失败被折成空串,角色仍是 AXTextField 就当普通框读了值)。
+enum RecorderAXAttr: Equatable {
+	case value(String)
+	/// 确实没有这个属性(AttributeUnsupported / NoValue / CFNull / 空串)。
+	case absent
+	/// 元素已销毁(InvalidUIElement)。
+	case gone
+	/// 查询失败:超时(CannotComplete)、App 不应答、API 关了等其他一切错误。
+	case failed
+}
+
+func recorderAXAttr(error: AXError) -> RecorderAXAttr {
+	switch error {
+	case .attributeUnsupported, .noValue: return .absent
+	case .invalidUIElement: return .gone
+	default: return .failed
+	}
+}
+
+/// AXUIElementCopyMultipleAttributeValues 返回数组里的一项 → 读数。缺的属性是 AXValue(axError)或 CFNull;
+/// 不是字符串的值按查询失败算(角色 / 子角色只会是字符串)。
+func recorderAXAttr(_ value: AnyObject) -> RecorderAXAttr {
+	let ref = value as CFTypeRef
+	if CFGetTypeID(ref) == CFNullGetTypeID() { return .absent }
+	if CFGetTypeID(ref) == AXValueGetTypeID() {
+		let axValue = unsafeBitCast(ref, to: AXValue.self)
+		guard AXValueGetType(axValue) == .axError else { return .failed }
+		var raw: Int32 = 0
+		guard AXValueGetValue(axValue, .axError, &raw), let error = AXError(rawValue: raw) else { return .failed }
+		return recorderAXAttr(error: error)
+	}
+	guard let text = value as? String else { return .failed }
+	return text.isEmpty ? .absent : .value(text)
+}
+
 enum RecorderFieldState: Equatable {
 	case plain
 	/// 安全输入框,或 Secure Input 开着。
 	case secure
-	/// 角色读不到(元素已销毁 / 超时):证明不了还是普通框。
+	/// 角色或子角色查询失败(超时 / App 不应答):证明不了不是密码框。不读值,待发输入丢掉。
+	case unconfirmed
+	/// 元素已销毁,或根本没有角色:不是(或已不再是)能读值的输入框。
 	case unreadable
 }
 
-func recorderFieldState(secureInput: Bool, role: String, subrole: String) -> RecorderFieldState {
+func recorderFieldState(secureInput: Bool, role: RecorderAXAttr, subrole: RecorderAXAttr) -> RecorderFieldState {
 	if secureInput { return .secure }
-	if recorderIsSecureField(role: role, subrole: subrole) { return .secure }
-	return role.isEmpty ? .unreadable : .plain
+	// 读到的任何一项是安全输入框就是安全输入框(另一项失败了也一样)。
+	if role == .value("AXSecureTextField") || subrole == .value("AXSecureTextField") { return .secure }
+	if role == .failed || subrole == .failed { return .unconfirmed }
+	guard case .value = role, subrole != .gone else { return .unreadable }
+	return .plain
+}
+
+/// 报字前复核(只查 Secure Input 与角色 / 子角色,不读值)的结论:true = 丢掉。安全输入框、或角色 / 子角色没查到 → 丢。
+/// 元素已销毁 / 没有角色(.unreadable)不丢:要报的内容是它还确认是普通框时读的,销毁了也不会再变成密码框
+/// (有的聊天 App 发送后直接换掉输入框,停手时靠最后一次采样兜底)。
+func recorderRecheckDrops(_ state: RecorderFieldState) -> Bool {
+	state == .secure || state == .unconfirmed
 }
 
 enum RecorderFieldRead: Equatable {
-	/// 此刻是安全输入框 / Secure Input 开着:值没读。调用方丢掉待发、基线与这个框的 ValueChanged 观察。
+	/// 此刻是安全输入框 / Secure Input 开着,或角色 / 子角色查询失败(证明不了不是):值没读。
+	/// 调用方丢掉待发、基线与这个框的 ValueChanged 观察(要等焦点换走再回来才重新看它)。
 	case secure
-	/// 角色或值读不到:值没读到(停手时退回最后一次采样)。
+	/// 元素已销毁 / 没有角色,或值读不到:值没读到(停手时退回最后一次采样)。
 	case unreadable
 	/// 超过 bigEditChars:只能报 bigEdit。
 	case big
@@ -205,23 +258,42 @@ enum RecorderFieldRead: Equatable {
 
 /// 读焦点框的值(基线、采样、停手)的唯一入口。先查 Secure Input,再重查角色 / 子角色(与字数同一次 IPC)——
 /// 网页能把已聚焦的普通输入框原地改成密码框而 AX 身份不变,聚焦时查过的那一次不算数。
-/// 安全输入框 / Secure Input → .secure,值根本不读;角色读不到 → .unreadable,也不读值。
+/// 安全输入框 / Secure Input / 角色或子角色没查到 → .secure,值根本不读;元素已销毁 / 没有角色 → .unreadable,也不读值。
 /// 读数经闭包注入(真路径是 AX,单测是假读数)。
 func recorderReadField(
 	secureInput: () -> Bool,
-	probe: () -> (role: String, subrole: String, count: Int?),
+	probe: () -> (role: RecorderAXAttr, subrole: RecorderAXAttr, count: Int?),
 	value: () -> String?
 ) -> RecorderFieldRead {
 	if secureInput() { return .secure }
 	let (role, subrole, count) = probe()
 	switch recorderFieldState(secureInput: false, role: role, subrole: subrole) {
-	case .secure: return .secure
+	case .secure, .unconfirmed: return .secure
 	case .unreadable: return .unreadable
 	case .plain: break
 	}
 	if let count, count > RecorderLimit.bigEditChars { return .big }
 	guard let text = value() else { return .unreadable }
 	return text.utf16.count > RecorderLimit.bigEditChars ? .big : .value(text)
+}
+
+/// 边打边采样的一次读:整次读(Secure Input、角色 / 子角色复核、值)计时。超过 50ms 或文本大了 → 之后不再采样,
+/// 退回只在停手时读 —— 停手那次照常先复核 Secure Input 与角色 / 子角色,报字前再核一次(flushText),与采不采样无关。
+/// 只给读值计时的话,角色查询慢(近 300ms 超时)、读值快的 App(IntelliJ 等)会被连续输入反复慢查询(Codex 第三轮 P2)。
+func recorderSampleField(
+	clock: () -> Double,
+	secureInput: () -> Bool,
+	probe: () -> (role: RecorderAXAttr, subrole: RecorderAXAttr, count: Int?),
+	value: () -> String?
+) -> (read: RecorderFieldRead, keepSampling: Bool) {
+	let started = clock()
+	let read = recorderReadField(secureInput: secureInput, probe: probe, value: value)
+	let fast = clock() - started <= RecorderLimit.sampleSeconds
+	switch read {
+	case .big: return (read, false)
+	case .value(let text): return (read, fast && text.utf16.count <= RecorderLimit.sampleChars)
+	case .secure, .unreadable: return (read, fast)
+	}
 }
 
 /// 地址栏的描述 / 标题(浏览器 URL 的兜底来源)。
@@ -416,20 +488,49 @@ func recorderContextKey(_ body: [String: Any]) -> String {
 	        body["title"] as? String ?? "", body["url"] as? String ?? ""].joined(separator: "\u{1F}")
 }
 
-/// 一条 app / window 情境事件对某个订阅者:发什么(nil = 不发)、之后记住的情境键。
+/// 一个订阅者的情境投递状态。只在 recorder 线程读写。
+struct RecorderDeliveryState: Equatable {
+	/// 上一次发给它的 app / window 情境键(去重 + 判断要不要补发快照)。
+	var lastKey: String?
+	/// 最近处理过的情境对它没记(无痕窗口 / 排除 App / 排除站点):下一条可记录的情境事件带 `resumed: true`。
+	var unrecorded = false
+}
+
+/// 这个情境对该订阅者算不算「记了」:标题 / 网址照常进事件。无痕窗口、排除 App、排除站点(含设了排除站点而网址没读到)不算。
+func recorderContextRecorded(_ context: RecorderContext, policy: RecorderPolicy) -> Bool {
+	guard let body = recorderEventBody(kind: .window, context: context, policy: policy) else { return false }
+	return (body["app"] as? [String: Any])?["excluded"] as? Bool != true
+}
+
+/// 一条 app / window 情境事件对某个订阅者:发什么(nil = 不发),并更新它的投递状态。
 ///   - dedupe 且与上一条同键 → 不发;
 ///   - 被滤掉的 window 事件(无痕窗口;排除 App 里的窗口变化):不发,但键记成这个情境的 app 事件的键。
 ///     同一浏览器里从普通窗口 A 切进无痕窗口、再切回 A 时,回来的那条必须照常发出 —— 键若还停在 A,它会被当成重复吞掉,
 ///     中间那段就全算进了 A。记成无痕情境的键(不带标题),还在无痕窗口时同一 App 重新激活的那条 app 事件照样去重。
-///     排除 App 的键本来就是切进来时那条,记不记都一样。
-func recorderContextDelivery(kind: RecorderKind, context: RecorderContext?, policy: RecorderPolicy, lastKey: String?, dedupe: Bool) -> (body: [String: Any]?, key: String?) {
-	guard let body = recorderEventBody(kind: kind, context: context, policy: policy) else {
-		if kind == .window, let app = recorderEventBody(kind: .app, context: context, policy: policy) { return (nil, recorderContextKey(app)) }
-		return (nil, lastKey)
+///     排除 App 的键本来就是切进来时那条,记不记都一样;
+///   - 断点(`resumed: true`,形状见 Genesis desktop/shared/computerHistory.ts):没记的情境(无痕窗口、排除 App / 站点)之后,
+///     第一条可记录的情境事件带上它 —— 只是一个标记,不带那段的任何时间或内容;折叠方见到它就切段,不跨过它合并,
+///     没记的那段就不会被算进前后的普通页面。它照发不去重(无标题的普通窗口与无痕情境同键,去重会把回来的那条吞掉)。
+///     切进排除 App 那条不带标题的切换已经标出了没记那段的开头,之后切到别的 App 照样带:合同就是「没记之后的第一条」,
+///     折叠方不必分辨哪种没记的情境发过标记;把排除标记滤掉再显示的消费方,A → 排除 App → A 也不会被并成一段。
+///     无痕窗口那条不带标题的切换与排除标记本身都不是可记录的情境,不带它。
+func recorderContextDelivery(kind: RecorderKind, context: RecorderContext?, policy: RecorderPolicy, state: inout RecorderDeliveryState, dedupe: Bool) -> [String: Any]? {
+	guard let context else { return nil }
+	let recorded = recorderContextRecorded(context, policy: policy)
+	if !recorded { state.unrecorded = true }
+	guard var body = recorderEventBody(kind: kind, context: context, policy: policy) else {
+		if kind == .window, let app = recorderEventBody(kind: .app, context: context, policy: policy) { state.lastKey = recorderContextKey(app) }
+		return nil
 	}
 	let key = recorderContextKey(body)
-	if dedupe && key == lastKey { return (nil, lastKey) }
-	return (body, key)
+	let resumed = recorded && state.unrecorded
+	if dedupe && key == state.lastKey && !resumed { return nil }
+	if resumed {
+		body["resumed"] = true
+		state.unrecorded = false
+	}
+	state.lastKey = key
+	return body
 }
 
 func recorderJSONLine(_ object: [String: Any]) -> Data? {
@@ -733,8 +834,8 @@ final class RecorderAgentGate {
 final class RecorderSubscriber {
 	let fd: Int32
 	let policy: RecorderPolicy
-	/// 只在 recorder 线程读写:上一次发给它的 app/window 情境键(去重 + 判断要不要补发快照)。
-	var lastContextKey: String?
+	/// 只在 recorder 线程读写:上一次发给它的 app/window 情境键,以及要不要在下一条可记录的情境事件上带 resumed。
+	var delivery = RecorderDeliveryState()
 	private let queue: DispatchQueue
 	private let lock = NSLock()
 	private let maxPending: Int
@@ -1065,9 +1166,7 @@ final class ActivityRecorder {
 		for subscriber in subscriberSnapshot() {
 			let delivered: [String: Any]?
 			if kind == .app || kind == .window {
-				let (body, key) = recorderContextDelivery(kind: kind, context: context, policy: subscriber.policy, lastKey: subscriber.lastContextKey, dedupe: dedupe)
-				subscriber.lastContextKey = key
-				delivered = body
+				delivered = recorderContextDelivery(kind: kind, context: context, policy: subscriber.policy, state: &subscriber.delivery, dedupe: dedupe)
 			} else {
 				delivered = recorderEventBody(kind: kind, context: context, policy: subscriber.policy)
 			}
@@ -1388,26 +1487,40 @@ final class ActivityRecorder {
 		}
 	}
 
-	/// recorderReadField 的 AX 版。withCount:基线 / 停手把字数与角色放在同一次 IPC 里取(与以前读字数 + 读值一样是两次);
-	/// 采样不取字数(比以前多一次角色读取)。value 缺省读 AXValue。
-	private func readField(_ element: AXUIElement, withCount: Bool, value: (() -> String?)? = nil) -> RecorderFieldRead {
-		recorderReadField(
+	/// recorderSampleField 的 AX 版(整次读计时 + 读数)。withCount:基线 / 停手把字数与角色放在同一次 IPC 里取
+	/// (与以前读字数 + 读值一样是两次);采样不取字数(比以前多一次角色读取,计进 50ms 上限)。
+	private func sampleField(_ element: AXUIElement, withCount: Bool) -> (read: RecorderFieldRead, keepSampling: Bool) {
+		recorderSampleField(
+			clock: { CFAbsoluteTimeGetCurrent() },
 			secureInput: recorderSecureInputActive,
-			probe: { [self] in
-				let attributes = withCount ? [kAXRoleAttribute, kAXSubroleAttribute, kAXNumberOfCharactersAttribute] : [kAXRoleAttribute, kAXSubroleAttribute]
-				let values = axMulti(element, attributes)
-				return (values[0] as? String ?? "", values[1] as? String ?? "", withCount ? (values[2] as? NSNumber)?.intValue : nil)
-			},
-			value: value ?? { [self] in axCopy(element, kAXValueAttribute) as? String }
+			probe: { [self] in fieldIdentity(element, withCount: withCount) },
+			value: { [self] in axCopy(element, kAXValueAttribute) as? String }
 		)
 	}
 
-	/// 报字之前再核一次(只查角色与 Secure Input,不读值):读值与报出之间,这个框可能刚被改成密码框。
-	/// 角色读不到(元素已销毁)不算安全输入框 —— 要报的内容是它还是普通框时读的。
+	private func readField(_ element: AXUIElement, withCount: Bool) -> RecorderFieldRead {
+		sampleField(element, withCount: withCount).read
+	}
+
+	/// 一次 IPC 取角色、子角色(与字数),逐项分清「确实没有」与「查询失败」。整次调用失败 → 两项都按那次的错误算
+	/// (元素已销毁 → .gone,其余一律 .failed;整次调用的「没有这个属性」说明不了某一项)。
+	private func fieldIdentity(_ element: AXUIElement, withCount: Bool) -> (role: RecorderAXAttr, subrole: RecorderAXAttr, count: Int?) {
+		let attributes = withCount ? [kAXRoleAttribute, kAXSubroleAttribute, kAXNumberOfCharactersAttribute] : [kAXRoleAttribute, kAXSubroleAttribute]
+		var values: CFArray?
+		let status = AXUIElementCopyMultipleAttributeValues(element, attributes as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &values)
+		guard status == .success, let array = values as? [AnyObject], array.count == attributes.count else {
+			let failed: RecorderAXAttr = status == .invalidUIElement ? .gone : .failed
+			return (failed, failed, nil)
+		}
+		return (recorderAXAttr(array[0]), recorderAXAttr(array[1]), withCount ? (array[2] as? NSNumber)?.intValue : nil)
+	}
+
+	/// 报字之前再核一次(只查角色 / 子角色与 Secure Input,不读值):读值与报出之间,这个框可能刚被改成密码框。
+	/// 角色或子角色没查到 → 证明不了不是,按安全输入框丢;元素已销毁不算(见 recorderRecheckDrops)。
 	private func fieldSecure(_ element: AXUIElement) -> Bool {
 		if recorderSecureInputActive() { return true }
-		let values = axMulti(element, [kAXRoleAttribute, kAXSubroleAttribute])
-		return recorderFieldState(secureInput: false, role: values[0] as? String ?? "", subrole: values[1] as? String ?? "") == .secure
+		let (role, subrole, _) = fieldIdentity(element, withCount: false)
+		return recorderRecheckDrops(recorderFieldState(secureInput: false, role: role, subrole: subrole))
 	}
 
 	/// 焦点框此刻是安全输入框(或 Secure Input 开着):待发输入、差分基线、这个框的 ValueChanged 观察全部立刻丢掉,不报。
@@ -1468,21 +1581,16 @@ final class ActivityRecorder {
 		guard var current = pending, let focus = focusElement, CFEqual(current.element, focus), let live = context,
 			wants(.text, current.context), wants(.text, live)
 		else { return }
-		// 只给读值本身计时(角色复核那次 IPC 不算进去,不然慢一点的 App 会因此停掉采样)。
-		var readTime = 0.0
+		// 整次读(角色 / 子角色复核 + 值)超过 50ms 的 App、或者文本变大了:退回只在停手时读,不给目标 App 添负担。
+		// 停手那次照常复核(flushText 走同一个 readField,报字前再 fieldSecure 一次),与采不采样无关。
+		let (read, keepSampling) = sampleField(focus, withCount: false)
+		if !keepSampling { focusSampling = false }
 		let value: String
-		switch readField(focus, withCount: false, value: { [self] in
-			let started = CFAbsoluteTimeGetCurrent()
-			defer { readTime = CFAbsoluteTimeGetCurrent() - started }
-			return axCopy(focus, kAXValueAttribute) as? String
-		}) {
+		switch read {
 		case .secure: return dropSecureField(focus)
-		case .unreadable: return
-		case .big: focusSampling = false; return
+		case .unreadable, .big: return
 		case .value(let text): value = text
 		}
-		// 读一次超过 50ms 的 App、或者文本变大了:退回只在停手时读,不给目标 App 添负担。
-		if readTime > 0.05 || value.utf16.count > RecorderLimit.sampleChars { focusSampling = false }
 		if value.isEmpty, let latest = current.latest, !latest.isEmpty {
 			// 输入框被清空(聊天框发送的典型形态):清空前那版立刻当作一段输入报出去,基线归零。
 			// 报之前先确认情境没过时(这段输入期间页面可能已同标题换到排除站点);刷新若换了情境,待发已被报掉或丢掉。
@@ -1527,7 +1635,8 @@ final class ActivityRecorder {
 			setBaseline(element, nil)
 			return emit(.text, context: current.context, t: current.lastChange, fields: ["el": current.el, "bigEdit": true], agent: current.agent)
 		case .unreadable:
-			// 元素已销毁 / 超时:用最后一次采样兜底(有的聊天 App 发送后直接换掉输入框)。采样时它还是普通框(每次采样前都复核过)。
+			// 元素已销毁 / 没有角色 / 值读不到:用最后一次采样兜底(有的聊天 App 发送后直接换掉输入框)。采样时它还确认是普通框
+			// (每次采样前都复核过角色与子角色)。查询超时不会走到这里 —— 那是 .secure,待发已丢。
 			guard let latest = current.latest else { return }
 			final = latest
 		case .value(let text): final = text
@@ -1606,7 +1715,8 @@ final class ActivityRecorder {
 		emit(.system, context: nil, fields: ["state": state])
 		if wasSuspended && !suspended {
 			// 回来了:重新拍一次前台情境,时间线从这里接上。
-			for subscriber in subscriberSnapshot() { subscriber.lastContextKey = nil }
+			// 只清去重键;「没记」的标记留着 —— 锁屏前在无痕窗口里,解锁后回到普通页面那条照样带 resumed。
+			for subscriber in subscriberSnapshot() { subscriber.delivery.lastKey = nil }
 			observedPid = 0
 			activated(NSWorkspace.shared.frontmostApplication)
 		}
