@@ -12,7 +12,18 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
+# Tangu 新增:`#[implement]`(电脑历史的 UIA 事件处理器)展开后引用 windows_core,须直接依赖、版本与 windows 一致。
+windows-core = "0.58"
 windows = { version = "0.58", features = [
+    "implement",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Pipes",
+    "Win32_System_RemoteDesktop",
+    "Win32_System_StationsAndDesktops",
     "Win32_UI_Accessibility",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",

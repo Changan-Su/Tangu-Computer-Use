@@ -5,3 +5,4 @@ prebuilt/
 .DS_Store
 build/
 /node_modules
+native/*/bridge-rs/target/

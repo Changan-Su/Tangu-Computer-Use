@@ -3,10 +3,14 @@
 //! This crate provides the JSON-lines protocol types used to communicate
 //! between the TypeScript host and the Rust helper binary.
 
+pub mod agent_marker;
 pub mod capture;
 pub mod error;
 pub mod input;
 pub mod protocol;
+#[cfg(windows)]
+pub mod recorder;
+pub mod recorder_logic;
 pub mod refs;
 pub mod state;
 pub mod uia;
