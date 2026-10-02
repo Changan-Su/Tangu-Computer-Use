@@ -81,7 +81,7 @@ function windowRect(hwnd) {
 
 const user = randomBytes(4).toString("hex");
 const pipe = `\\\\.\\pipe\\tangu-computer-use-recorder-probe-${user}`;
-const server = spawn(exe, ["serve", "--pipe", pipe], { stdio: ["ignore", "inherit", "inherit"], windowsHide: true });
+const server = spawn(exe, ["serve", "--pipe", pipe], { stdio: ["ignore", "inherit", "inherit"], windowsHide: true, env: { ...process.env, TANGU_RECORDER_DEBUG: "1" } });
 server.on("exit", (code) => console.log(`[probe] serve exited with ${code}`));
 
 function subscribe(policy, label) {
@@ -129,6 +129,12 @@ async function connectWithRetry(policy, label) {
 }
 
 const since = (events, t0) => events.filter((e) => e.t >= t0 - 50);
+/** recorder 线程此刻卡在哪一步(phase / phaseMs / backlog),每个场景后打一行,卡死时直接看出卡在哪个 UIA 调用。 */
+async function logDiag(label) {
+	const d = await diagnostics();
+	console.log(`[probe] diag after ${label}: ${JSON.stringify(d?.result)}`);
+	(findings.diag ??= []).push({ label, ...d?.result });
+}
 
 async function main() {
 	const main = await connectWithRetry({}, "open");
@@ -149,6 +155,7 @@ async function main() {
 	findings.notepad = np;
 	focus(np.hwnd);
 	await sleep(1500);
+	await logDiag("notepad-switch");
 	const npEvents = () => since(main.events, t0).filter((e) => e.app?.bundleId === "notepad.exe");
 	check("switching to Notepad emits an app event with the exe name", npEvents().some((e) => e.kind === "app"), JSON.stringify(npEvents().slice(0, 2)));
 	check("Notepad app event has a display name", npEvents().some((e) => e.kind === "app" && e.app?.name && e.app.name !== "notepad.exe"), JSON.stringify(npEvents().find((e) => e.kind === "app")?.app));
@@ -158,6 +165,7 @@ async function main() {
 	await sleep(3500);
 	const typed = since(main.events, t0).filter((e) => e.kind === "text");
 	check("typing in Notepad produces a text event", typed.some((e) => e.text?.includes("hello world")), JSON.stringify(typed));
+	await logDiag("notepad-typing");
 	check("text event carries the field role", typed.some((e) => typeof e.el?.role === "string"), JSON.stringify(typed[0]?.el));
 
 	t0 = Date.now();
@@ -176,6 +184,7 @@ async function main() {
 	await sleep(1200);
 	sendKeys("{ESC}");
 	await sleep(500);
+	await logDiag("notepad-click");
 	const clicks = since(main.events, t0).filter((e) => e.kind === "click");
 	check("clicking a menu item records role and label", clicks.some((e) => e.el?.role === "MenuItem" && e.el?.label), JSON.stringify(clicks), false);
 	check("a click in Notepad is recorded", clicks.length > 0, JSON.stringify(clicks));
@@ -190,6 +199,7 @@ async function main() {
 	const agentResult = await stdioFocus(np.pid);
 	findings.agentFocus = agentResult;
 	await sleep(1500);
+	await logDiag("agent-focus");
 	const agentEvents = since(main.events, t0).filter((e) => e.app?.bundleId === "notepad.exe");
 	check("foreground change by the agent carries origin=agent", agentEvents.some((e) => e.origin === "agent"), JSON.stringify(agentEvents));
 	explorer.unref();

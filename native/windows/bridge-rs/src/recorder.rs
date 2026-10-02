@@ -127,6 +127,30 @@ impl Outbox {
 }
 
 static SUBSCRIBERS: AtomicUsize = AtomicUsize::new(0);
+static POSTED: AtomicU64 = AtomicU64::new(0);
+static HANDLED: AtomicU64 = AtomicU64::new(0);
+
+/// 观测仪器:recorder 线程此刻在做哪一步、从什么时候开始(diagnostics 报出来;卡死时一眼看出卡在哪个 UIA 调用)。
+/// TANGU_RECORDER_DEBUG=1 时每一步也写 stderr。
+fn phase_slot() -> &'static Mutex<(&'static str, i64)> {
+    static PHASE: OnceLock<Mutex<(&'static str, i64)>> = OnceLock::new();
+    PHASE.get_or_init(|| Mutex::new(("idle", 0)))
+}
+
+fn debug_enabled() -> bool {
+    static DEBUG: OnceLock<bool> = OnceLock::new();
+    *DEBUG.get_or_init(|| std::env::var_os("TANGU_RECORDER_DEBUG").is_some_and(|v| v == "1"))
+}
+
+fn phase(name: &'static str) {
+    let now = now_ms();
+    if let Ok(mut slot) = phase_slot().lock() {
+        *slot = (name, now);
+    }
+    if debug_enabled() && name != "idle" {
+        eprintln!("[recorder] {now} {name}");
+    }
+}
 static LAST_ACTIVITY_MS: AtomicU64 = AtomicU64::new(0);
 static NEXT_SUB_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -281,6 +305,9 @@ fn serve_client(raw: isize) {
                 "pid": std::process::id(),
                 "subscribers": SUBSCRIBERS.load(Ordering::Acquire),
                 "os": "windows",
+                "phase": phase_slot().lock().map(|p| p.0).unwrap_or("?"),
+                "phaseMs": phase_slot().lock().map(|p| if p.1 > 0 { now_ms() - p.1 } else { 0 }).unwrap_or(-1),
+                "backlog": POSTED.load(Ordering::Acquire).saturating_sub(HANDLED.load(Ordering::Acquire)),
             }});
             let _ = writeln!(writer, "{reply}");
             return;
@@ -366,7 +393,9 @@ fn sender() -> &'static Mutex<Option<Sender<Msg>>> {
 fn post(msg: Msg) {
     if let Ok(guard) = sender().lock() {
         if let Some(tx) = guard.as_ref() {
-            let _ = tx.send(msg);
+            if tx.send(msg).is_ok() {
+                POSTED.fetch_add(1, Ordering::AcqRel);
+            }
         }
     }
 }
@@ -559,6 +588,24 @@ impl Recorder {
     }
 
     fn handle(&mut self, msg: Msg) {
+        phase(match &msg {
+            Msg::Subscribe { .. } => "msg:subscribe",
+            Msg::Unsubscribe(_) => "msg:unsubscribe",
+            Msg::Foreground(_) => "msg:foreground",
+            Msg::NameChange(_) => "msg:namechange",
+            Msg::Click { .. } => "msg:click",
+            Msg::Key { .. } => "msg:key",
+            Msg::KeyActivity { .. } => "msg:keyactivity",
+            Msg::FocusChanged => "msg:focus",
+            Msg::ValueChanged => "msg:value",
+            Msg::System(_) => "msg:system",
+        });
+        self.dispatch(msg);
+        HANDLED.fetch_add(1, Ordering::AcqRel);
+        phase("idle");
+    }
+
+    fn dispatch(&mut self, msg: Msg) {
         match msg {
             Msg::Subscribe { id, policy, outbox } => self.subscribe(id, policy, outbox),
             Msg::Unsubscribe(id) => {
@@ -627,6 +674,7 @@ impl Recorder {
         self.asleep = false;
         self.hooks = start_hooks();
         let handler: IUIAutomationFocusChangedEventHandler = FocusHandler.into();
+        phase("uia:AddFocusChangedEventHandler");
         if unsafe { self.uia.AddFocusChangedEventHandler(None, &handler) }.is_ok() {
             self.focus_handler = Some(handler);
         }
@@ -879,6 +927,7 @@ impl Recorder {
     }
 
     fn walk_browser(&self, hwnd: isize) -> BrowserWindow {
+        phase("uia:walkBrowser");
         let mut found = BrowserWindow { address: None, private: false };
         let deadline = Instant::now() + WALK_BUDGET;
         let Ok(cache) = (unsafe { self.uia.CreateCacheRequest() }) else { return found };
@@ -946,6 +995,7 @@ impl Recorder {
             return self.release_and_flush();
         }
         // 一次跨进程调用取齐判断要的属性(类型、密码框、进程、名字、两种模式可不可写)。
+        phase("uia:GetFocusedElementBuildCache");
         let element = self.focus_cache.as_ref().and_then(|cache| unsafe { self.uia.GetFocusedElementBuildCache(cache) }.ok());
         self.set_focus(element, &context);
     }
@@ -957,6 +1007,7 @@ impl Recorder {
 
     fn set_focus(&mut self, element: Option<IUIAutomationElement>, context: &Context) {
         if let (Some(element), Some(current)) = (&element, &self.focus) {
+            phase("uia:CompareElements");
             let same = unsafe { self.uia.CompareElements(element, &current.element) }.is_ok_and(|b| b.as_bool());
             if same {
                 // 同一个元素再次聚焦:网页可能已原地把它改成了密码框。复核一次,是就立刻撒手。
@@ -986,6 +1037,7 @@ impl Recorder {
         .then(|| text_range_editable(&element))
         .flatten();
         let Some(mode) = logic::text_mode(control_type, is_password, value_editable, text_editable) else { return };
+        phase(if mode == TextMode::Value { "uia:AddPropertyChangedEventHandler" } else { "uia:AddAutomationEventHandler" });
         let registered = unsafe {
             match mode {
                 TextMode::Value => self.uia.AddPropertyChangedEventHandlerNativeArray(
@@ -1022,6 +1074,7 @@ impl Recorder {
     fn release_focus(&mut self) {
         self.sample_deadline = None;
         if let Some(focus) = self.focus.take() {
+            phase("uia:RemoveValueHandler");
             unsafe {
                 match focus.mode {
                     TextMode::Value => {
@@ -1227,6 +1280,7 @@ impl Recorder {
         for property in [UIA_ControlTypePropertyId, UIA_NamePropertyId, UIA_ProcessIdPropertyId] {
             let _ = unsafe { cache.AddProperty(property) };
         }
+        phase("uia:ElementFromPointBuildCache");
         let Ok(hit) = (unsafe { self.uia.ElementFromPointBuildCache(point, &cache) }) else { return };
         if unsafe { hit.CachedProcessId() }.unwrap_or(0) as u32 != self.fg_pid {
             return;
@@ -1333,6 +1387,7 @@ fn field_secure(element: &IUIAutomationElement) -> bool {
 }
 
 fn read_field(element: &IUIAutomationElement, mode: TextMode) -> FieldRead {
+    phase("uia:readField");
     match unsafe { element.CurrentIsPassword() } {
         Ok(is_password) if is_password.as_bool() => return FieldRead::Secure,
         Ok(_) => {}
