@@ -178,7 +178,7 @@ pub fn serve(pipe: &str) -> i32 {
 fn idle_watchdog() {
     loop {
         thread::sleep(Duration::from_secs(5));
-        let idle = now_ms() as u64 - LAST_ACTIVITY_MS.load(Ordering::Acquire);
+        let idle = (now_ms() as u64).saturating_sub(LAST_ACTIVITY_MS.load(Ordering::Acquire));
         if SUBSCRIBERS.load(Ordering::Acquire) == 0 && idle >= IDLE_EXIT.as_millis() as u64 {
             std::process::exit(0);
         }

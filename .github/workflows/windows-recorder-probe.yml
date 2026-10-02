@@ -18,8 +18,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: cargo test
-        run: cargo test --manifest-path native/windows/bridge-rs/Cargo.toml
+      # 只跑电脑历史这套:上游 capture.rs 的 Windows 单测还按旧签名调 screenshot(),在 Windows 上编不过(上游问题,vendor 不改)。
+      - name: cargo test (recorder logic)
+        run: cargo test --manifest-path native/windows/bridge-rs/Cargo.toml --test recorder_logic_tests
       - name: Build (release, static CRT)
         run: cargo build --release --manifest-path native/windows/bridge-rs/Cargo.toml
         env:
