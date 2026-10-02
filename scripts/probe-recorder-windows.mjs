@@ -193,11 +193,18 @@ async function main() {
 	check("a click in Notepad is recorded", clicks.length > 0, JSON.stringify(clicks));
 
 	// ── agent 标记:stdio 助手 focusWindow 期间切过去的前台 → origin:"agent" ──
-	const explorer = spawn("explorer.exe", [os.tmpdir()], { detached: true, stdio: "ignore" });
+	// 另开一个记事本进程当「别的窗口」(Explorer 的主窗口句柄可能是桌面 Progman,置前后前台会落回记事本,前提不成立)。
+	const other = spawn("notepad.exe", [], { detached: true, stdio: "ignore" });
 	await sleep(2500);
-	const other = mainWindowOf("explorer").find((w) => w.title) ;
-	if (other) focus(other.hwnd);
-	await sleep(1200);
+	const otherWin = mainWindowOf("notepad").find((w) => w.pid !== np.pid);
+	const fg = () => Number(ps(`${USER32} [W.U]::GetForegroundWindow().ToInt64()`)) || 0;
+	for (let i = 0; i < 3 && otherWin && fg() !== otherWin.hwnd; i++) {
+		focus(otherWin.hwnd);
+		await sleep(800);
+	}
+	findings.agentPrecondition = { foreground: fg(), notepad: np.hwnd, other: otherWin };
+	check("precondition: another window is in front before the agent acts", otherWin && fg() === otherWin.hwnd, JSON.stringify(findings.agentPrecondition));
+	await sleep(800);
 	t0 = Date.now();
 	const agentResult = await stdioFocus(np.pid);
 	findings.agentFocus = agentResult;
@@ -205,7 +212,7 @@ async function main() {
 	await logDiag("agent-focus");
 	const agentEvents = since(main.events, t0).filter((e) => e.app?.bundleId === "notepad.exe");
 	check("foreground change by the agent carries origin=agent", agentEvents.some((e) => e.origin === "agent"), JSON.stringify(agentEvents));
-	explorer.unref();
+	other.unref();
 
 	// ── 浏览器 ──
 	const chrome = ["C:/Program Files/Google/Chrome/Application/chrome.exe", "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe"].find(existsSync);

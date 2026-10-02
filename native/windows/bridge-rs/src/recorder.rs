@@ -587,6 +587,7 @@ impl Recorder {
                 Err(RecvTimeoutError::Disconnected) => return,
             }
             self.fire_due();
+            phase("idle");
         }
     }
 
