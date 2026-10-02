@@ -1,5 +1,20 @@
 # 更新日志
 
+## 未发布
+
+- 「电脑历史」采集支持 Windows（协议仍是 13，与 macOS 同一套 `recordSubscribe` 订阅格式）。新增 `windows-bridge.exe serve --pipe <名字>` 常驻模式：采集器跑在独立进程里，监听只有当前用户和 SYSTEM 能连、拒绝远程客户端的命名管道，最后一个订阅者断开 60 秒后自行退出；`windows-bridge.exe recorder-protocol` 打印协议号。原有的 stdio 助手和它的协议版本不变。
+- 记录内容与 macOS 相同：前台 App 切换（exe 名 + 文件说明里的显示名）、窗口标题、浏览器地址栏网址（去掉查询串）、焦点可编辑输入框里新打的字（UI Automation 的 Value / Text 模式）、点击的控件类型和按钮名、Ctrl / Win 组合快捷键。不截图，不录原始按键；键盘钩子只用来判断「有没有在打字」和识别组合键。锁屏、睡眠期间暂停。
+- 始终不记录：密码框（UI Automation 的 IsPassword，报出前再复核一次）、密码管理器与 Windows 凭据界面、无痕 / InPrivate 窗口。Edge 与 Firefox 系的无痕窗口按标题标记识别；Chrome 等 Chromium 系浏览器在 Windows 上无痕窗口的标题没有标记，只能看工具栏上的无痕按钮，遍历没走完时这个窗口先按无痕处理（只留一条不带标题的切换），之后自动重走，最多 5 次。
+- agent 通过 Computer Use 操作（`act`、`actBatch`、`focusWindow`、`openBrowserLocation`）期间及之后 750 毫秒，stdio 助手持有命名互斥体 `Local\tangu-computer-use-agent-active`，采集器据此把这段时间的事件标成 agent 所为。
+- 已知限制：与 macOS 相同，管道只校验同一 Windows 用户，不校验对端身份。第一次读某个 Chromium 窗口时，Chrome 会在那一刻打开自己的无障碍支持，这一次可能要 1 秒左右。
+- 新增 `scripts/probe-recorder-windows.mjs` 与 CI 工作流 `windows-recorder-probe`：在 Windows 真桌面上操作记事本、Chrome、Edge，核对事件与隐私边界。
+
+Computer History recording now works on Windows too, with the same `recordSubscribe` format and protocol 13 as macOS. The new `windows-bridge.exe serve --pipe <name>` mode runs the recorder as its own resident process. It listens on a named pipe that only the current user and SYSTEM can open, rejects remote clients, and exits 60 seconds after its last subscriber disconnects. `windows-bridge.exe recorder-protocol` prints the protocol number. The stdio helper and its protocol version are unchanged. The recorder captures the same things as on macOS: app switches (exe name plus the display name from the file description), window titles, browser URLs from the address bar without query strings, newly typed text in the focused editable field (UI Automation Value or Text pattern), the type and label of clicked controls, and Ctrl and Win shortcuts. It takes no screenshots and records no raw keystrokes. The keyboard hook only tells whether someone is typing and recognizes key combinations. Recording pauses while the session is locked or asleep.
+
+Password fields (UI Automation IsPassword, checked again before text is reported), password managers, Windows credential prompts and private or InPrivate windows are never recorded. Private windows in Edge and Firefox-based browsers are recognized by their title. On Windows, private windows in Chrome and other Chromium browsers have no marker in the title, so the recorder looks for the private-mode button in the toolbar. Until that walk finishes, the window is treated as private and leaves only an untitled switch, and the walk is retried automatically up to 5 times. While an agent acts through Computer Use (`act`, `actBatch`, `focusWindow`, `openBrowserLocation`) and for 750 ms afterwards, the stdio helper holds the named mutex `Local\tangu-computer-use-agent-active`, and the recorder marks events from that time as agent actions.
+
+Known limitations: as on macOS, the pipe only checks that the client runs as the same Windows user. It doesn't check who the client is. The first time the recorder reads a Chromium window, Chrome turns on its accessibility support, which can take about a second once. The new `scripts/probe-recorder-windows.mjs` and the `windows-recorder-probe` CI workflow drive Notepad, Chrome and Edge on a real Windows desktop and check the events and privacy limits.
+
 ## 0.6.0 — 2026-09-27
 
 - 新增「电脑历史」采集（macOS，协议 13）：Forsion 桌面端开启该功能后，helper 通过新的 `recordSubscribe` 订阅，把前台 App 切换、窗口标题、浏览器网址（去掉查询串）、焦点输入框里新打的字、点击的控件名和 ⌘ / ⌃ 快捷键推给桌面端。只需要「辅助功能」授权，不截图、不录原始按键。helper 自己不落盘，保存、保留期、清除、暂停都由桌面端负责；最后一个订阅者断开后，所有观察者随即拆除。

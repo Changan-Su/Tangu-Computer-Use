@@ -62,8 +62,9 @@ function mainWindowOf(name) {
 	});
 }
 function focus(hwnd) {
-	// Alt 轻敲一下解除前台锁(SetForegroundWindow 对后台进程的限制),再置前。
-	ps(`${USER32} [W.U]::keybd_event(0x12,0,0,[IntPtr]::Zero); [W.U]::keybd_event(0x12,0,2,[IntPtr]::Zero); [W.U]::ShowWindow([IntPtr]${hwnd}, 9) | Out-Null; [W.U]::SetForegroundWindow([IntPtr]${hwnd}) | Out-Null`);
+	// 按住 Alt 解除前台锁(SetForegroundWindow 对后台进程的限制),再置前。Alt 按下抬起之间垫一个空键(F24):
+	// 单独轻敲 Alt 会让记事本进菜单模式、让 Chrome 聚焦到应用菜单按钮,焦点被抢,打的字进不了输入框。
+	ps(`${USER32} [W.U]::keybd_event(0x12,0,0,[IntPtr]::Zero); [W.U]::keybd_event(0x87,0,0,[IntPtr]::Zero); [W.U]::keybd_event(0x87,0,2,[IntPtr]::Zero); [W.U]::keybd_event(0x12,0,2,[IntPtr]::Zero); [W.U]::ShowWindow([IntPtr]${hwnd}, 9) | Out-Null; [W.U]::SetForegroundWindow([IntPtr]${hwnd}) | Out-Null`);
 }
 function sendKeys(keys) {
 	ps(`Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('${keys.replace(/'/g, "''")}')`);
