@@ -111,7 +111,7 @@ function subscribe(policy, label) {
 			}
 		});
 		socket.on("error", reject);
-		setTimeout(() => reject(new Error("subscribe timeout")), 10_000);
+		setTimeout(() => { socket.destroy(); reject(new Error("subscribe timeout")); }, 5_000);
 	});
 }
 
@@ -120,6 +120,7 @@ async function connectWithRetry(policy, label) {
 		try {
 			return await subscribe(policy, label);
 		} catch (e) {
+			if (i % 10 === 0) console.log(`[probe] connect attempt ${i} (${label}): ${e.code || e.message}`);
 			if (!String(e.code || e.message).match(/ENOENT|EBUSY|timeout/)) throw e;
 			await sleep(250);
 		}

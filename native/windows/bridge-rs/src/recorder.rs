@@ -45,7 +45,7 @@ use windows::Win32::Storage::FileSystem::{
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Pipes::{
-    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PeekNamedPipe, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
     PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
 };
 use windows::Win32::System::RemoteDesktop::{
@@ -72,6 +72,7 @@ use crate::recorder_logic::{self as logic, limit, Context, DeliveryState, Kind, 
 const IDLE_EXIT: Duration = Duration::from_secs(60);
 const SUBSCRIBER_QUEUE: usize = 256;
 const MAX_LINE_BYTES: u64 = 64 * 1024;
+const PEEK_INTERVAL: Duration = Duration::from_millis(300);
 
 const WINDOW_DEBOUNCE: Duration = Duration::from_millis(300);
 const TEXT_DEBOUNCE: Duration = Duration::from_millis(1500);
@@ -313,10 +314,26 @@ fn serve_client(raw: isize) {
     let sub_id = NEXT_SUB_ID.fetch_add(1, Ordering::AcqRel);
     SUBSCRIBERS.fetch_add(1, Ordering::AcqRel);
     post(Msg::Subscribe { id: sub_id, policy: Policy::from_json(request.get("policy")), outbox: Arc::clone(&outbox) });
-    // 订阅连接之后的内容一律不认(只读到 EOF 判断对端关没关);不限行长会被塞爆内存,所以按块读掉。
+    // 订阅之后对端发什么都不认,只判断它关没关。**不能**阻塞在 ReadFile 上等 EOF:同步打开的管道上,同一个文件对象
+    // (try_clone 复制出的句柄共享它)的 I/O 是串行的,挂着的读会把写线程的回包和事件全部卡住(CI 实测:回包永远到不了)。
+    // 所以按 PeekNamedPipe 轮询:出错 = 对端关了 / 我们断开了;有数据才读(不会阻塞),读了就丢。
     let mut sink = reader.into_inner().into_inner();
+    let pipe = HANDLE(sink.as_raw_handle());
     let mut buffer = [0u8; 4096];
-    while matches!(sink.read(&mut buffer), Ok(n) if n > 0) {}
+    loop {
+        let mut available = 0u32;
+        if unsafe { PeekNamedPipe(pipe, None, 0, None, Some(&mut available), None) }.is_err() {
+            break;
+        }
+        if available == 0 {
+            thread::sleep(PEEK_INTERVAL);
+            continue;
+        }
+        let want = (available as usize).min(buffer.len());
+        if !matches!(sink.read(&mut buffer[..want]), Ok(n) if n > 0) {
+            break;
+        }
+    }
     post(Msg::Unsubscribe(sub_id));
     drop(outbox);
     SUBSCRIBERS.fetch_sub(1, Ordering::AcqRel);
