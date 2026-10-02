@@ -1,5 +1,13 @@
 # 更新日志
 
+## 0.6.1 — 2026-10-02
+
+- 修复：在 Forsion 里停用再启用 Computer Use 插件（引擎不重启的热插拔）时，每次启用都会多挂一组进程退出监听，开关拨多了会报 `MaxListenersExceededWarning`，退出时收尾也会重复执行。现在停用会摘掉这组监听，再启用也只挂一组。
+- `types/tangu-agent.d.ts` 同步到引擎当前的插件 API（`requiresPlugins` 与生命周期）。
+- 新增 `npm run check:exit-listeners`（已并入 `npm run check`）。
+
+Turning the Computer Use plugin off and on again in Forsion, without restarting the engine, no longer adds another set of process exit listeners each time. Repeated toggling used to trigger `MaxListenersExceededWarning` and run the cleanup several times on exit. Deactivating the plugin now removes its listeners, and enabling it again adds a single set. `types/tangu-agent.d.ts` now matches the engine's current plugin API (`requiresPlugins` and the lifecycle). New `npm run check:exit-listeners`, included in `npm run check`.
+
 ## 0.6.0 — 2026-09-27
 
 - 新增「电脑历史」采集（macOS，协议 13）：Forsion 桌面端开启该功能后，helper 通过新的 `recordSubscribe` 订阅，把前台 App 切换、窗口标题、浏览器网址（去掉查询串）、焦点输入框里新打的字、点击的控件名和 ⌘ / ⌃ 快捷键推给桌面端。只需要「辅助功能」授权，不截图、不录原始按键。helper 自己不落盘，保存、保留期、清除、暂停都由桌面端负责；最后一个订阅者断开后，所有观察者随即拆除。
