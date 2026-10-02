@@ -11,6 +11,14 @@ import { SETTINGS } from './settings.ts';
 import { cliMain } from './setup.ts';
 import { shutdownComputerUseSession } from './vendor/bridge.ts';
 
+// helper 惰性启动后常驻;进程退出时收口(无 pi 的 session_shutdown 钩子)。
+// stop 放模块级、引用唯一:宿主热插拔时会在同一个模块对象上反复 activate / deactivate(启动时每个插件先 activate、
+// 未启用的随即 deactivate;停用后再启用;activate 抛错也补调一次 deactivate)。每次 activate 新建 stop 的话 deactivate
+// 摘不掉,每拨一次开关叠一组监听 → MaxListenersExceededWarning、退出时 shutdown 跑 N 遍。
+// 同 id 升级 import 的是新一代模块,自带一个 stop:各代只摘自己的,互不干扰。
+const EXIT_EVENTS = ['exit', 'SIGTERM', 'SIGINT'] as const;
+const stop = (): void => { void shutdownComputerUseSession(); };
+
 const plugin: TanguPlugin = {
   activate(ctx) {
     ctx.registerPlugin({
@@ -47,15 +55,17 @@ const plugin: TanguPlugin = {
       ctx.registerCommand({ name: 'computer-use', summary: 'Computer Use: setup / doctor / stop', run: cliMain });
     }
 
-    // helper 惰性启动后常驻;进程退出时收口(无 pi 的 session_shutdown 钩子)。
-    const stop = (): void => { void shutdownComputerUseSession(); };
-    process.once('exit', stop);
-    process.once('SIGTERM', stop);
-    process.once('SIGINT', stop);
+    // 先摘再挂:同一模块对象上再 activate(停用后再启用、抛错后再次激活)也只挂一组。
+    for (const ev of EXIT_EVENTS) {
+      process.off(ev, stop);
+      process.once(ev, stop);
+    }
 
     ctx.log('computer-use plugin registered');
   },
   deactivate() {
+    // 只摘本模块自己的 stop(新一代模块与宿主的监听不动),helper 照旧收口。
+    for (const ev of EXIT_EVENTS) process.off(ev, stop);
     void shutdownComputerUseSession();
   },
 };

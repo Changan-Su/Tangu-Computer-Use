@@ -54,7 +54,7 @@
     "check:platform": "node scripts/platform-contract.check.mjs",
     "check:blindclick": "node scripts/blind-click.check.mjs",
     "check:liveview": "node scripts/live-view.check.mjs",
-    "check": "npm run check:platform && npm run check:no-foreground && npm run check:helper-path && npm run check:highlight && npm run check:permissions && npm run check:plugin && npm run check:helper-refresh && npm run check:installer && npm run check:cli-exit && npm run check:recorder-logic",
+    "check": "npm run check:platform && npm run check:no-foreground && npm run check:helper-path && npm run check:highlight && npm run check:permissions && npm run check:plugin && npm run check:helper-refresh && npm run check:installer && npm run check:cli-exit && npm run check:recorder-logic && npm run check:exit-listeners",
     "build:native": "node scripts/build-native.mjs",
     "build:windows": "node scripts/build-native.mjs --platform windows",
     "build:linux": "node scripts/build-native.mjs --platform linux",
@@ -65,6 +65,7 @@
     "check:helper-signal": "node scripts/helper-signal.check.mjs",
     "check:installer": "node scripts/keychain-free-install.check.mjs",
     "check:cli-exit": "node scripts/cli-exit.check.mjs",
+    "check:exit-listeners": "node scripts/exit-listeners.check.mjs",
     "check:recorder-logic": "node scripts/recorder-logic.check.mjs",
     "check:recorder": "node scripts/recorder.check.mjs"
   },
