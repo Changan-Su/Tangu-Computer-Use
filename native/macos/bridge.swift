@@ -1277,16 +1277,19 @@ final class Bridge {
 		}
 		let x = try doubleArg(request, "x")
 		let y = try doubleArg(request, "y")
+		// Tangu(协议 14):width/height 可一起省 = 只挪不缩放。贴边面板拖动时每帧都在挪目标窗口,
+		// 同尺寸再写一遍 kAXSize 会让一些 App 每帧重排一次。参数全部校验完才动窗口:报错了就不该已经挪过。
+		var size: CGSize?
+		if request["width"] != nil || request["height"] != nil {
+			size = CGSize(width: max(100.0, try doubleArg(request, "width")), height: max(80.0, try doubleArg(request, "height")))
+		}
 		var origin = CGPoint(x: x, y: y)
 		guard let originValue = AXValueCreate(.cgPoint, &origin) else {
 			throw BridgeFailure(message: "Failed to create AX frame values", code: "frame_value_failed")
 		}
 		let positionStatus = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, originValue)
-		// Tangu(协议 14):width/height 可省 = 只挪不缩放。贴边面板拖动时每帧都在挪目标窗口,
-		// 同尺寸再写一遍 kAXSize 会让一些 App 每帧重排一次。
 		var sizeStatus: AXError?
-		if request["width"] != nil || request["height"] != nil {
-			var size = CGSize(width: max(100.0, try doubleArg(request, "width")), height: max(80.0, try doubleArg(request, "height")))
+		if var size {
 			guard let sizeValue = AXValueCreate(.cgSize, &size) else {
 				throw BridgeFailure(message: "Failed to create AX frame values", code: "frame_value_failed")
 			}
@@ -3122,8 +3125,16 @@ final class Bridge {
 		let app = AXUIElementCreateApplication(pid)
 		AXUIElementSetMessagingTimeout(app, 1.0)
 		var result: [String: Any] = [:]
-		if let window = copyAttribute(app, attribute: kAXFocusedWindowAttribute as CFString).flatMap(asAXElement) {
-			result["windowTitle"] = stringAttribute(window, attribute: kAXTitleAttribute as CFString) ?? ""
+		let focusedWindow = copyAttribute(app, attribute: kAXFocusedWindowAttribute as CFString).flatMap(asAXElement)
+		// 给了 windowId(贴边面板总会给)就只读那一扇窗:同一 App 的另一扇窗里的选区不属于这段对话。
+		// 对不上(或配不出 AX 窗口)一律不读 —— 宁可漏引用,不可张冠李戴。
+		if let windowId = optionalIntArg(request, "windowId").map({ UInt32($0) }) {
+			guard let expected = windowElement(pid: pid, windowId: windowId), let focusedWindow, CFEqual(expected, focusedWindow) else {
+				return ["otherWindow": true]
+			}
+		}
+		if let focusedWindow {
+			result["windowTitle"] = stringAttribute(focusedWindow, attribute: kAXTitleAttribute as CFString) ?? ""
 		}
 		guard let element = copyAttribute(app, attribute: kAXFocusedUIElementAttribute as CFString).flatMap(asAXElement) else {
 			return result
@@ -3173,13 +3184,19 @@ final class Bridge {
 	}
 
 	/// 选中行 → 一行人话:自己的标题/值/描述,没有就拼前几个子孙里的文字(表格行的文字在单元格里)。
+	/// 密码框一律跳过(行本身、以及行里的每个子孙):第三方 App 可能把明文挂在 AX value 上。
 	private func describeSelected(_ element: AXUIElement) -> String {
+		let isSecure = { (el: AXUIElement) in
+			self.isSecureTextElement(role: self.stringAttribute(el, attribute: kAXRoleAttribute as CFString) ?? "",
+				subrole: self.stringAttribute(el, attribute: kAXSubroleAttribute as CFString) ?? "")
+		}
+		if isSecure(element) { return "" }
 		for attribute in [kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute] {
 			if let text = stringAttribute(element, attribute: attribute as CFString), !text.isEmpty { return String(text.prefix(200)) }
 		}
 		let texts = collectDescendants(startingAt: element, maxDepth: 3).compactMap { child -> String? in
 			let role = stringAttribute(child, attribute: kAXRoleAttribute as CFString) ?? ""
-			guard role == "AXStaticText" || role == "AXTextField" else { return nil }
+			guard role == "AXStaticText" || role == "AXTextField", !isSecure(child) else { return nil }
 			return stringAttribute(child, attribute: kAXValueAttribute as CFString).flatMap { $0.isEmpty ? nil : $0 }
 		}
 		return String(texts.prefix(4).joined(separator: " · ").prefix(200))
