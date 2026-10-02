@@ -78,6 +78,17 @@ fn private_markers() {
 }
 
 #[test]
+fn private_verdicts_fail_closed() {
+    assert!(title_marks_private("MSEdge.exe") && title_marks_private("firefox.exe"));
+    assert!(!title_marks_private("chrome.exe"), "Chrome incognito titles carry no marker on Windows");
+    assert_eq!(private_verdict(false, true, false), PrivateVerdict::Private, "a toolbar hint wins even mid-walk");
+    assert_eq!(private_verdict(true, true, true), PrivateVerdict::Private);
+    assert_eq!(private_verdict(true, false, false), PrivateVerdict::Normal, "title-trusted browsers need no complete walk");
+    assert_eq!(private_verdict(false, false, true), PrivateVerdict::Normal, "a complete walk without a hint proves normal");
+    assert_eq!(private_verdict(false, false, false), PrivateVerdict::Unknown, "an incomplete walk proves nothing");
+}
+
+#[test]
 fn urls_are_sanitized() {
     assert_eq!(sanitize_url("https://example.com/path?token=abc#frag").as_deref(), Some("https://example.com/path"));
     assert_eq!(sanitize_url("https://user:pw@example.com/a").as_deref(), Some("https://example.com/a"));

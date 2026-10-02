@@ -139,6 +139,42 @@ pub fn is_browser(exe: &str) -> bool {
     exe_in(BROWSER_EXES, exe)
 }
 
+/// 无痕窗口的标题一定带标记的浏览器:Edge 的 InPrivate 窗口标题带「[InPrivate]」,Firefox 系带「Private Browsing」。
+/// 这几家标题没标记就可以信是普通窗口。**Chromium 系(Chrome、Brave 等)在 Windows 上无痕窗口的标题没有任何标记**
+/// (CI 实测:无痕窗口标题就是「Example Domain - Google Chrome」),只能靠工具栏上的无痕提示判定。
+pub const TITLE_MARKS_PRIVATE_EXES: &[&str] = &[
+    "msedge.exe",
+    "firefox.exe",
+    "librewolf.exe",
+    "waterfox.exe",
+    "floorp.exe",
+    "zen.exe",
+];
+
+pub fn title_marks_private(exe: &str) -> bool {
+    exe_in(TITLE_MARKS_PRIVATE_EXES, exe)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrivateVerdict {
+    Private,
+    Normal,
+    /// 判不了(工具栏遍历没走完):调用方按无痕处理,下次刷新再遍历 —— 失败即关闭。
+    Unknown,
+}
+
+/// 标题里没有无痕标记的浏览器窗口(有标记的调用方已经直接按无痕处理)算不算无痕:工具栏上找到无痕提示 → 无痕;
+/// 标题可信的浏览器 → 普通;遍历走完了也没找到 → 普通;遍历没走完 → 判不了。
+pub fn private_verdict(title_trusted: bool, hint_found: bool, walk_complete: bool) -> PrivateVerdict {
+    if hint_found {
+        PrivateVerdict::Private
+    } else if title_trusted || walk_complete {
+        PrivateVerdict::Normal
+    } else {
+        PrivateVerdict::Unknown
+    }
+}
+
 pub fn has_private_marker(text: &str) -> bool {
     let lower = text.to_lowercase();
     PRIVATE_MARKERS.iter().any(|marker| lower.contains(marker))

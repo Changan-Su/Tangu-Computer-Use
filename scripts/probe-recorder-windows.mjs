@@ -219,7 +219,8 @@ async function main() {
 		const win = mainWindowOf("chrome").find((w) => w.title);
 		findings.chromeNormal = win;
 		if (win) focus(win.hwnd);
-		await sleep(2500);
+		// 第一次遍历可能走不完(Chrome 此刻才打开无障碍):采集器按无痕先不记,约 1 秒后自己重走,这里多等几轮。
+		await sleep(6000);
 		const ev = since(main.events, t0).filter((e) => e.app?.bundleId === "chrome.exe");
 		check("Chrome normal window has a title", ev.some((e) => e.title?.includes("Example")), JSON.stringify(ev.slice(-3)));
 		check("Chrome URL is read and sanitized", ev.some((e) => /^https:\/\/example\.com\/?$/.test(e.url ?? "")), JSON.stringify(ev.map((e) => e.url)));
@@ -262,6 +263,7 @@ async function main() {
 		await sleep(2500);
 		const incEvents = since(main.events, t0).filter((e) => e.app?.bundleId === "chrome.exe");
 		findings.chromeIncognitoEvents = incEvents;
+		check("the incognito window was observed at all", incEvents.length > 0, JSON.stringify(incEvents));
 		check("Chrome incognito never leaks title or URL", incEvents.every((e) => !String(e.title ?? "").length || !/incognito-page|Example/.test(e.title)) && incEvents.every((e) => !String(e.url ?? "").includes("incognito-page")), JSON.stringify(incEvents));
 	} else {
 		check("Chrome is installed on the runner", false, "skipped Chrome scenarios", false);
@@ -278,6 +280,7 @@ async function main() {
 		await sleep(2500);
 		const edgeEvents = since(main.events, t0).filter((e) => e.app?.bundleId === "msedge.exe");
 		findings.edgeInPrivateEvents = edgeEvents;
+		check("the InPrivate window was observed at all", edgeEvents.length > 0, JSON.stringify(edgeEvents));
 		check("Edge InPrivate never leaks title or URL", edgeEvents.every((e) => !/inprivate-page|Example/.test(e.title ?? "") && !String(e.url ?? "").includes("inprivate-page")), JSON.stringify(edgeEvents));
 	} else {
 		check("Edge is installed on the runner", false, "skipped Edge scenarios", false);

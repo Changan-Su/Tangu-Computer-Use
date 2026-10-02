@@ -67,7 +67,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::agent_marker;
-use crate::recorder_logic::{self as logic, limit, Context, DeliveryState, Kind, PendingAction, Policy, TextMode};
+use crate::recorder_logic::{self as logic, limit, Context, DeliveryState, Kind, PendingAction, Policy, PrivateVerdict, TextMode};
 
 const IDLE_EXIT: Duration = Duration::from_secs(60);
 const SUBSCRIBER_QUEUE: usize = 256;
@@ -79,8 +79,15 @@ const TEXT_DEBOUNCE: Duration = Duration::from_millis(1500);
 const SAMPLE_DELAY: Duration = Duration::from_millis(250);
 const WALK_NODE_CAP: usize = 400;
 const WALK_DEPTH_CAP: usize = 12;
-const WALK_BUDGET: Duration = Duration::from_millis(200);
+/// 拿到根元素之后的遍历预算(第一次进 Chrome 时根元素本身就可能要近 1 秒:它在那一刻才打开无障碍)。
+const WALK_BUDGET: Duration = Duration::from_millis(300);
+/// 没走完的窗口最多再遍历几次;一直走不完就一直按无痕处理(失败即关闭)。
+const WALK_ATTEMPTS: u8 = 5;
 const BROWSER_CACHE_CAP: usize = 16;
+/// 打字时没跟踪到输入框(焦点通知丢了 / 被抢走),多久重新问一次焦点。
+const REFOCUS_INTERVAL: Duration = Duration::from_secs(1);
+/// 浏览器窗口判不了无痕时,隔多久自己再刷新一次(不等下一次切标签 / 改标题)。
+const WALK_RETRY: Duration = Duration::from_secs(1);
 const UIA_TIMEOUT_MS: u32 = 1000;
 
 const WM_APP_RETARGET: u32 = WM_APP + 1;
@@ -466,7 +473,11 @@ enum FieldRead {
 
 struct BrowserWindow {
     address: Option<IUIAutomationElement>,
-    private: bool,
+    /// 工具栏上找到了无痕提示。
+    hint: bool,
+    /// 遍历走完了(没撞上节点数 / 时间上限)。
+    complete: bool,
+    attempts: u8,
 }
 
 struct HookThread {
@@ -500,6 +511,8 @@ struct Recorder {
     sample_deadline: Option<Instant>,
     baseline: Option<String>,
     browser_windows: HashMap<isize, BrowserWindow>,
+    last_refocus: Option<Instant>,
+    walk_retry: Option<Instant>,
     app_names: HashMap<String, String>,
 }
 
@@ -550,6 +563,8 @@ impl Recorder {
             sample_deadline: None,
             baseline: None,
             browser_windows: HashMap::new(),
+            last_refocus: None,
+            walk_retry: None,
             app_names: HashMap::new(),
         }
     }
@@ -560,7 +575,7 @@ impl Recorder {
 
     fn run(mut self, rx: Receiver<Msg>) {
         loop {
-            let timeout = [self.window_deadline, self.text_deadline, self.sample_deadline]
+            let timeout = [self.window_deadline, self.text_deadline, self.sample_deadline, self.walk_retry]
                 .into_iter()
                 .flatten()
                 .min()
@@ -577,7 +592,7 @@ impl Recorder {
 
     fn fire_due(&mut self) {
         let now = Instant::now();
-        if self.window_deadline.is_some_and(|d| d <= now) {
+        if self.window_deadline.is_some_and(|d| d <= now) || self.walk_retry.is_some_and(|d| d <= now) {
             self.refresh_window();
         }
         if self.sample_deadline.is_some_and(|d| d <= now) {
@@ -630,6 +645,11 @@ impl Recorder {
             Msg::Click { x, y, agent } => self.clicked(x, y, agent),
             Msg::Key { combo, agent } => self.keyed(combo, agent),
             Msg::KeyActivity { agent } => {
+                // 在打字却没跟踪到输入框:焦点通知丢了或被别的元素抢走过,限频重新问一次焦点。
+                if self.focus.is_none() && self.last_refocus.is_none_or(|at| at.elapsed() >= REFOCUS_INTERVAL) {
+                    self.last_refocus = Some(Instant::now());
+                    self.focus_changed();
+                }
                 if self.focus.is_some() {
                     self.value_changed(agent);
                 }
@@ -708,6 +728,7 @@ impl Recorder {
         self.fg_hwnd = 0;
         self.baseline = None;
         self.browser_windows.clear();
+        self.walk_retry = None;
     }
 
     /// 订阅者来去:未发的输入丢掉、差分基线作废,再按当前值重建(清除前打的字不能在清除后经旧基线冒出来)。
@@ -780,6 +801,7 @@ impl Recorder {
         self.flush_text();
         self.release_focus();
         self.window_deadline = None;
+        self.walk_retry = None;
         self.fg_pid = pid;
         self.fg_hwnd = hwnd;
         let next = self.read_context(hwnd, pid, exe);
@@ -791,6 +813,7 @@ impl Recorder {
 
     fn refresh_window(&mut self) {
         self.window_deadline = None;
+        self.walk_retry = None;
         if !self.running || self.suspended() || self.fg_hwnd == 0 {
             return;
         }
@@ -863,7 +886,7 @@ impl Recorder {
         let mut url = None;
         let mut url_unknown = false;
         if !is_private && logic::is_browser(exe) {
-            let (found, resolved, private) = self.browser_lookup(hwnd);
+            let (found, resolved, private) = self.browser_lookup(hwnd, exe);
             url = found;
             url_unknown = !resolved;
             is_private = private;
@@ -894,18 +917,32 @@ impl Recorder {
 
     // ── 浏览器网址 / 无痕(有上限、绝不展开网页内容) ──
 
-    /// (网址, 读到没有, 无痕)。每个窗口第一次走一遍有上限的遍历,记住地址栏与无痕判定;之后只按地址栏快路重读。
-    fn browser_lookup(&mut self, hwnd: isize) -> (Option<String>, bool, bool) {
-        if !self.browser_windows.contains_key(&hwnd) {
-            let walked = self.walk_browser(hwnd);
+    /// (网址, 读到没有, 无痕)。每个窗口走一遍有上限的遍历,记住地址栏与无痕判定;之后只按地址栏快路重读。
+    /// 失败即关闭:遍历没走完、又证明不了不是无痕的窗口按无痕处理(不带标题和网址),之后刷新时再走,最多 WALK_ATTEMPTS 次。
+    fn browser_lookup(&mut self, hwnd: isize, exe: &str) -> (Option<String>, bool, bool) {
+        let previous = self.browser_windows.get(&hwnd);
+        if previous.is_none_or(|w| !w.complete && !w.hint && w.attempts < WALK_ATTEMPTS) {
+            let mut walked = self.walk_browser(hwnd);
+            if let Some(previous) = self.browser_windows.remove(&hwnd) {
+                walked.attempts = previous.attempts;
+                walked.address = walked.address.or(previous.address);
+            }
+            walked.attempts += 1;
             if self.browser_windows.len() >= BROWSER_CACHE_CAP {
                 self.browser_windows.clear();
             }
             self.browser_windows.insert(hwnd, walked);
         }
-        let private = self.browser_windows.get(&hwnd).is_some_and(|w| w.private);
-        if private {
-            return (None, true, true);
+        let Some(window) = self.browser_windows.get(&hwnd) else { return (None, true, true) };
+        match logic::private_verdict(logic::title_marks_private(exe), window.hint, window.complete) {
+            PrivateVerdict::Normal => {}
+            PrivateVerdict::Private => return (None, true, true),
+            PrivateVerdict::Unknown => {
+                if window.attempts < WALK_ATTEMPTS {
+                    self.walk_retry = Some(Instant::now() + WALK_RETRY);
+                }
+                return (None, true, true);
+            }
         }
         let (url, resolved) = self.fast_url(hwnd);
         (url, resolved.unwrap_or(false), false)
@@ -931,20 +968,28 @@ impl Recorder {
 
     fn walk_browser(&self, hwnd: isize) -> BrowserWindow {
         phase("uia:walkBrowser");
-        let mut found = BrowserWindow { address: None, private: false };
-        let deadline = Instant::now() + WALK_BUDGET;
+        let mut found = BrowserWindow { address: None, hint: false, complete: false, attempts: 0 };
         let Ok(cache) = (unsafe { self.uia.CreateCacheRequest() }) else { return found };
         for property in [UIA_ControlTypePropertyId, UIA_NamePropertyId, UIA_ClassNamePropertyId, UIA_AutomationIdPropertyId] {
             let _ = unsafe { cache.AddProperty(property) };
         }
         let Ok(condition) = (unsafe { self.uia.ControlViewCondition() }) else { return found };
+        let started = Instant::now();
         let Ok(root) = (unsafe { self.uia.ElementFromHandleBuildCache(HWND(hwnd as *mut _), &cache) }) else {
             return found;
         };
+        let root_ms = started.elapsed().as_millis();
+        let deadline = Instant::now() + WALK_BUDGET;
         let mut queue = std::collections::VecDeque::from([(root, 0usize)]);
         let mut nodes = 0usize;
+        let mut stop = "done";
         while let Some((node, depth)) = queue.pop_front() {
-            if nodes >= WALK_NODE_CAP || Instant::now() >= deadline {
+            if nodes >= WALK_NODE_CAP {
+                stop = "nodeCap";
+                break;
+            }
+            if Instant::now() >= deadline {
+                stop = "deadline";
                 break;
             }
             nodes += 1;
@@ -954,16 +999,23 @@ impl Recorder {
                 continue;
             }
             let name = unsafe { node.CachedName() }.map(|b| b.to_string()).unwrap_or_default();
-            if matches!(control_type, logic::CT_BUTTON | logic::CT_SPLITBUTTON | logic::CT_MENUITEM)
-                && logic::has_private_marker(&name)
-            {
-                found.private = true;
-                found.address = None;
-                return found;
+            if matches!(control_type, logic::CT_BUTTON | logic::CT_SPLITBUTTON | logic::CT_MENUITEM) {
+                if debug_enabled() {
+                    eprintln!("[recorder] walk button {:?}", logic::truncate(&name, 60).0);
+                }
+                if logic::has_private_marker(&name) {
+                    found.hint = true;
+                    found.address = None;
+                    stop = "hint";
+                    break;
+                }
             }
             if control_type == logic::CT_EDIT && found.address.is_none() {
                 let class = unsafe { node.CachedClassName() }.map(|b| b.to_string()).unwrap_or_default();
                 let automation_id = unsafe { node.CachedAutomationId() }.map(|b| b.to_string()).unwrap_or_default();
+                if debug_enabled() {
+                    eprintln!("[recorder] walk edit name={:?} class={class:?} id={automation_id:?}", logic::truncate(&name, 60).0);
+                }
                 if logic::is_address_field(&name, &class, &automation_id) {
                     found.address = Some(node.clone());
                 }
@@ -980,6 +1032,15 @@ impl Recorder {
                     queue.push_back((child, depth + 1));
                 }
             }
+        }
+        found.complete = stop == "done";
+        if debug_enabled() {
+            eprintln!(
+                "[recorder] walk {stop} nodes={nodes} rootMs={root_ms} walkMs={} address={} hint={}",
+                started.elapsed().as_millis() - root_ms,
+                found.address.is_some(),
+                found.hint
+            );
         }
         found
     }
@@ -1030,6 +1091,9 @@ impl Recorder {
         self.focus_is_password = is_password;
         // 焦点在别的进程(浮层 / 系统输入框)里:不看。
         if pid != self.fg_pid || is_password {
+            if debug_enabled() {
+                eprintln!("[recorder] focus skipped pid={pid} fg={} password={is_password}", self.fg_pid);
+            }
             return;
         }
         let value_editable = (cached_bool(&element, UIA_IsValuePatternAvailablePropertyId) == Some(true))
@@ -1039,7 +1103,14 @@ impl Recorder {
             && cached_bool(&element, UIA_IsTextPatternAvailablePropertyId) == Some(true))
         .then(|| text_range_editable(&element))
         .flatten();
-        let Some(mode) = logic::text_mode(control_type, is_password, value_editable, text_editable) else { return };
+        let mode = logic::text_mode(control_type, is_password, value_editable, text_editable);
+        if debug_enabled() {
+            eprintln!(
+                "[recorder] focus type={} value={value_editable:?} text={text_editable:?} mode={mode:?}",
+                logic::control_type_name(control_type)
+            );
+        }
+        let Some(mode) = mode else { return };
         phase(if mode == TextMode::Value { "uia:AddPropertyChangedEventHandler" } else { "uia:AddAutomationEventHandler" });
         let registered = unsafe {
             match mode {
