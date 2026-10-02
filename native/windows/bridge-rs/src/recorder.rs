@@ -776,10 +776,6 @@ impl Recorder {
         self.subs.iter().any(|s| s.policy.wants_app(bundle_id))
     }
 
-    fn text_wanted(&self, bundle_id: &str) -> bool {
-        self.subs.iter().any(|s| s.policy.wants_text_in(bundle_id))
-    }
-
     // ── 前台与情境 ──
 
     fn on_foreground(&mut self, hwnd: isize) {
@@ -837,6 +833,9 @@ impl Recorder {
         self.emit(Kind::Window, Some(&next), None, Map::new(), agent_marker::active(), true);
         if window_changed {
             self.focus_changed();
+        } else if self.focus.is_some() && !self.wants(Kind::Text, &next) {
+            // 同一窗口里换到了排除站点 / 无痕判定翻转:输入框撒手,不再挂着读值的事件。
+            self.release_focus();
         }
     }
 
@@ -887,7 +886,7 @@ impl Recorder {
         let mut url = None;
         let mut url_unknown = false;
         if !is_private && logic::is_browser(exe) {
-            let (found, resolved, private) = self.browser_lookup(hwnd, exe);
+            let (found, resolved, private) = self.browser_lookup(hwnd, exe, title.is_some());
             url = found;
             url_unknown = !resolved;
             is_private = private;
@@ -920,7 +919,7 @@ impl Recorder {
 
     /// (网址, 读到没有, 无痕)。每个窗口走一遍有上限的遍历,记住地址栏与无痕判定;之后只按地址栏快路重读。
     /// 失败即关闭:遍历没走完、又证明不了不是无痕的窗口按无痕处理(不带标题和网址),之后刷新时再走,最多 WALK_ATTEMPTS 次。
-    fn browser_lookup(&mut self, hwnd: isize, exe: &str) -> (Option<String>, bool, bool) {
+    fn browser_lookup(&mut self, hwnd: isize, exe: &str, has_title: bool) -> (Option<String>, bool, bool) {
         let previous = self.browser_windows.get(&hwnd);
         if previous.is_none_or(|w| !w.complete && !w.hint && w.attempts < WALK_ATTEMPTS) {
             let mut walked = self.walk_browser(hwnd);
@@ -935,7 +934,8 @@ impl Recorder {
             self.browser_windows.insert(hwnd, walked);
         }
         let Some(window) = self.browser_windows.get(&hwnd) else { return (None, true, true) };
-        match logic::private_verdict(logic::title_marks_private(exe), window.hint, window.complete) {
+        // 标题读不到(空 / 读失败)就证明不了没有无痕标记:不信标题,只看遍历。
+        match logic::private_verdict(has_title && logic::title_marks_private(exe), window.hint, window.complete) {
             PrivateVerdict::Normal => {}
             PrivateVerdict::Private => return (None, true, true),
             PrivateVerdict::Unknown => {
@@ -1021,13 +1021,18 @@ impl Recorder {
                     found.address = Some(node.clone());
                 }
             }
-            if depth + 1 >= WALK_DEPTH_CAP {
-                continue;
-            }
+            // 子节点取不到、或深度到顶还有子节点:这棵子树没看过,遍历不算走完(无痕提示可能就在里面)。
             let Ok(children) = (unsafe { node.FindAllBuildCache(TreeScope_Children, &condition, &cache) }) else {
+                stop = "childrenFailed";
                 continue;
             };
             let count = unsafe { children.Length() }.unwrap_or(0);
+            if depth + 1 >= WALK_DEPTH_CAP {
+                if count > 0 {
+                    stop = "depthCap";
+                }
+                continue;
+            }
             for index in 0..count {
                 if let Ok(child) = unsafe { children.GetElement(index) } {
                     queue.push_back((child, depth + 1));
@@ -1056,7 +1061,8 @@ impl Recorder {
         self.refresh_if_stale();
         let Some(context) = self.context.clone() else { return self.release_and_flush() };
         // 无痕 / 排除 / 只记标题 / 都不要文字的 App:连焦点元素都不取(不读控件名、不挂事件)。
-        if context.hard_excluded || context.is_private || !self.text_wanted(&context.bundle_id) {
+        // 按完整情境判(含排除站点、网址读不到时的失败即关闭),不只看 App。
+        if context.hard_excluded || context.is_private || !self.wants(Kind::Text, &context) {
             return self.release_and_flush();
         }
         // 一次跨进程调用取齐判断要的属性(类型、密码框、进程、名字、两种模式可不可写)。

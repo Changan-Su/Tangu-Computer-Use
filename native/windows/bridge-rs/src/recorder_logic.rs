@@ -663,10 +663,6 @@ impl Policy {
     pub fn wants_app(&self, bundle_id: &str) -> bool {
         !self.excludes(bundle_id)
     }
-
-    pub fn wants_text_in(&self, bundle_id: &str) -> bool {
-        self.text && !self.excludes(bundle_id) && !self.title_only(bundle_id)
-    }
 }
 
 /// 一次观测时的前台情境。纯数据,过滤只看它 —— 所以能单测。
