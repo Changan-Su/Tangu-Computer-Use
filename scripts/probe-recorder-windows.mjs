@@ -101,6 +101,7 @@ function subscribe(policy, label) {
 				const msg = JSON.parse(line);
 				if (!reply) {
 					reply = msg;
+					clearTimeout(timer);
 					resolve({ reply, events, socket });
 					continue;
 				}
@@ -111,7 +112,8 @@ function subscribe(policy, label) {
 			}
 		});
 		socket.on("error", reject);
-		setTimeout(() => { socket.destroy(); reject(new Error("subscribe timeout")); }, 5_000);
+		// 只在回包之前生效(成功后清掉 —— 第四轮就是这个计时器到点把好好的订阅连接 destroy 了)。
+		const timer = setTimeout(() => { socket.destroy(); reject(new Error("subscribe timeout")); }, 5_000);
 	});
 }
 

@@ -128,6 +128,8 @@ impl Outbox {
 
 static SUBSCRIBERS: AtomicUsize = AtomicUsize::new(0);
 static POSTED: AtomicU64 = AtomicU64::new(0);
+/// 诊断:钩子装没装上(位 0 = 鼠标,1 = 键盘,2 = 前台 WinEvent,3 = 会话窗口)。
+static HOOKS: AtomicUsize = AtomicUsize::new(0);
 static HANDLED: AtomicU64 = AtomicU64::new(0);
 
 /// 观测仪器:recorder 线程此刻在做哪一步、从什么时候开始(diagnostics 报出来;卡死时一眼看出卡在哪个 UIA 调用)。
@@ -308,6 +310,7 @@ fn serve_client(raw: isize) {
                 "phase": phase_slot().lock().map(|p| p.0).unwrap_or("?"),
                 "phaseMs": phase_slot().lock().map(|p| if p.1 > 0 { now_ms() - p.1 } else { 0 }).unwrap_or(-1),
                 "backlog": POSTED.load(Ordering::Acquire).saturating_sub(HANDLED.load(Ordering::Acquire)),
+                "hooks": HOOKS.load(Ordering::Acquire),
             }});
             let _ = writeln!(writer, "{reply}");
             return;
@@ -1595,6 +1598,14 @@ fn start_hooks() -> Option<HookThread> {
         if let Some(hwnd) = session_window {
             let _ = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
         }
+        let installed = usize::from(mouse.is_some())
+            | usize::from(keyboard.is_some()) << 1
+            | usize::from(!foreground.is_invalid()) << 2
+            | usize::from(session_window.is_some()) << 3;
+        HOOKS.store(installed, Ordering::Release);
+        if debug_enabled() {
+            eprintln!("[recorder] hooks installed: {installed:#06b}");
+        }
         let _ = ready_tx.send(tid);
         retarget_name_hook(window_pid(GetForegroundWindow()));
         let mut message = MSG::default();
@@ -1623,6 +1634,7 @@ fn start_hooks() -> Option<HookThread> {
             let _ = WTSUnRegisterSessionNotification(hwnd);
             let _ = DestroyWindow(hwnd);
         }
+        HOOKS.store(0, Ordering::Release);
     });
     let tid = ready_rx.recv_timeout(Duration::from_secs(5)).ok()?;
     Some(HookThread { tid, join })
