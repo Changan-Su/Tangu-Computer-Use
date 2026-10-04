@@ -11,6 +11,10 @@ The Computer Use tools let you observe and control any on-screen application thr
 tree, OCR, and screenshots. Reach for them only when the job genuinely needs a GUI: an API, a CLI, or
 reading a file directly is always cheaper and more reliable.
 
+Forsion's own windows are not a Computer Use target. To change a Forsion setting or open one of its
+pages, use `list_ui_commands` and then `run_ui_command` / `set_ui_setting`; a tool result marked
+`[forsion]` means you are looking at Forsion itself.
+
 For a page you can simply fetch, use `curl` through bash. For pure web work prefer `browser_task` /
 `browser_*` — they are lighter. Use Computer Use when the workflow lives in a native desktop app, or
 when a web page must be handled inside the same window forest as a desktop app.

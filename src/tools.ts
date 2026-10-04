@@ -20,7 +20,7 @@ import {
 import { getComputerUseConfig } from './vendor/config.ts';
 import { isSupportedPlatform } from './helperState.ts';
 import { autoInstallFailed, ensureHelperCurrent, guideMissingPermissions } from './onboarding.ts';
-import { foregroundNote } from './foregroundNote.ts';
+import { foregroundNote, selfWindowNote } from './foregroundNote.ts';
 
 const execFileP = promisify(execFile);
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -189,7 +189,7 @@ export function makePiCtx(tcx: ToolContext, hasUI: boolean): ExtensionContext {
   };
 }
 
-/** AgentToolResult → 返回给模型的 string;image block(截图)经 collectImage 回灌;末尾附前台透明化提示。 */
+/** AgentToolResult → 返回给模型的 string;image block(截图)经 collectImage 回灌;末尾附前台透明化提示与「这是 Forsion 自己的窗口」提示。 */
 function render(result: AgentToolResult, tcx: ToolContext): string {
   const parts: string[] = [];
   for (const block of result.content) {
@@ -199,7 +199,8 @@ function render(result: AgentToolResult, tcx: ToolContext): string {
     }
   }
   const body = parts.join('\n') || '(no output)';
-  return body + foregroundNote((result as { details?: { execution?: unknown } }).details?.execution);
+  const details = (result as { details?: { execution?: unknown } }).details;
+  return body + foregroundNote(details?.execution) + selfWindowNote(details);
 }
 
 /** ensure_app:后台启动目标 app(open -g,不抢前台)+ 轮询 find_roots 直到有可观察窗口,回其 roots。 */

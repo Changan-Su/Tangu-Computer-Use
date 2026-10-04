@@ -1,5 +1,12 @@
 # 更新日志
 
+## 未发布
+
+- 目标窗口是 Forsion 自己（拉起引擎的那个桌面应用）时，`find_roots` / `observe_ui` / `act_ui` 的结果末尾附一行 `[forsion]` 提示，让模型改用界面命令（`list_ui_commands` → `run_ui_command` / `set_ui_setting`）。只提示不拦截：没有对应界面命令的地方仍可操作。技能说明同步加了这一条。
+- `npm run check:no-foreground` 增加这条提示的 9 项判据。
+
+When the target window belongs to Forsion itself (the desktop app that launched the engine), `find_roots`, `observe_ui` and `act_ui` results now end with a `[forsion]` line pointing the model to the UI tools (`list_ui_commands`, then `run_ui_command` / `set_ui_setting`). It is a hint, not a block: controls without a UI command can still be driven. The skill text carries the same rule.
+
 ## 0.6.1 — 2026-10-02
 
 - 修复：在 Forsion 里停用再启用 Computer Use 插件（引擎不重启的热插拔）时，每次启用都会多挂一组进程退出监听，开关拨多了会报 `MaxListenersExceededWarning`，退出时收尾也会重复执行。现在停用会摘掉这组监听，再启用也只挂一组。

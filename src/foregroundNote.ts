@@ -41,3 +41,19 @@ export function foregroundNote(execution: unknown): string {
   const why = steps.map((s) => s?.escalationReason).find(Boolean);
   return `\n[foreground] This action took the foreground (focus/pointer was moved to the target)${why ? ` — ${why}` : ''}. To keep actions in the background, prefer setText to fill fields; strict background-only is the plugin's "strict background" setting (act_ui no longer takes a headless parameter).`;
 }
+
+/**
+ * 自家窗口提示:目标窗口属于拉起本引擎的那个桌面应用(= Forsion 自己;托管引擎是它的直接子进程)时,
+ * 明说一句「改用界面命令」。Forsion 反馈 6a239e58:agent 用 Computer Use 去点 Forsion 自己的设置窗口,
+ * 界面一重渲染元素引用就失效(一轮里 3 次 stale ref + 1 次 stale state),而同一件事 run_ui_command 一次就办完。
+ * 只提示不拦:没有对应界面命令的地方(插件自绘页)仍只能这样操作。
+ * TUI / 独立运行时父进程是 shell(没有窗口)、父进程已死时 ppid=1,都不会命中。
+ * 读的是 details.target.pid(observe / act / wait)与 details.windows[].pid(find_roots);形状变了就静默返回空串。
+ */
+export function selfWindowNote(details: unknown, hostPid: number = process.ppid): string {
+  const d = details as { target?: { pid?: unknown }; windows?: Array<{ pid?: unknown }> } | null | undefined;
+  if (!d || typeof d !== 'object' || !(hostPid > 1)) return '';
+  const own = d.target?.pid === hostPid || (Array.isArray(d.windows) && d.windows.some((w) => w?.pid === hostPid));
+  if (!own) return '';
+  return `\n[forsion] pid ${hostPid} is Forsion itself, the app you are running in. Operate Forsion through its own UI tools (list_ui_commands, then run_ui_command / set_ui_setting): they act directly and report the outcome. Computer Use on Forsion's own windows is unreliable because the UI re-renders under you and element refs go stale; keep it for controls that have no UI command.`;
+}

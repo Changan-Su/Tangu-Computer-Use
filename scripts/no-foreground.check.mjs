@@ -20,7 +20,7 @@ const execFileP = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 async function unitTests() {
-  const { foregroundNote } = await import(path.join(here, '..', 'tangu-plugins', 'computer-use', 'dist', 'foregroundNote.js'));
+  const { foregroundNote, selfWindowNote } = await import(path.join(here, '..', 'tangu-plugins', 'computer-use', 'dist', 'foregroundNote.js'));
   const has = (s) => s.includes('[foreground]');
 
   // 无信号 → 空串
@@ -47,6 +47,19 @@ async function unitTests() {
   assert.ok(withReason.includes('foreground_required'), 'reason surfaced');
 
   console.log('✓ unit: foregroundNote 判据 9 项全过');
+
+  // 自家窗口提示(Forsion 反馈 6a239e58):目标 pid = 拉起引擎的桌面应用 → 提示改用界面命令;别的 App 不提示。
+  const own = (s) => s.includes('[forsion]');
+  assert.ok(own(selfWindowNote({ target: { pid: 80732 } }, 80732)), 'observe/act on the host app → note');
+  assert.ok(own(selfWindowNote({ windows: [{ pid: 501 }, { pid: 80732 }] }, 80732)), 'find_roots listing a host window → note');
+  assert.ok(selfWindowNote({ target: { pid: 80732 } }, 80732).includes('run_ui_command'), 'note names the UI tools');
+  assert.equal(selfWindowNote({ target: { pid: 501 } }, 80732), '', 'another app → empty');
+  assert.equal(selfWindowNote({ windows: [{ pid: 501 }] }, 80732), '', 'find_roots without host windows → empty');
+  assert.equal(selfWindowNote({ windows: [{ pid: 0 }] }, 0), '', 'browser pages carry pid 0; no host pid → empty');
+  assert.equal(selfWindowNote({ target: { pid: 1 } }, 1), '', 'orphaned engine (ppid 1) → empty');
+  assert.equal(selfWindowNote(undefined, 80732), '', 'no details → empty');
+  assert.equal(selfWindowNote({ tool: 'read_text' }, 80732), '', 'details without a target → empty');
+  console.log('✓ unit: selfWindowNote 判据 9 项全过');
 }
 
 async function frontmostBundleId() {
