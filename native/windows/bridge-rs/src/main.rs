@@ -128,6 +128,16 @@ fn with_physical_input<T>(
 fn main() {
     #[cfg(windows)]
     set_dpi_awareness();
+    // Tangu 新增:电脑历史采集器的入口(桌面端拉起,见 src/recorder.rs);不走下面的 stdio 循环与窗口事件日志。
+    let args = std::env::args().skip(1).collect::<Vec<_>>();
+    match args.first().map(String::as_str) {
+        Some("recorder-protocol") => {
+            println!("{}", windows_bridge::recorder_logic::RECORDER_PROTOCOL);
+            return;
+        }
+        Some("serve") => std::process::exit(serve_recorder(&args)),
+        _ => {}
+    }
     window::start_root_event_journal();
 
     let stdin = io::stdin();
@@ -192,6 +202,25 @@ fn main() {
     }
 }
 
+fn serve_recorder(args: &[String]) -> i32 {
+    let pipe = args
+        .iter()
+        .position(|a| a == "--pipe")
+        .and_then(|i| args.get(i + 1))
+        .cloned()
+        .unwrap_or_default();
+    #[cfg(windows)]
+    {
+        windows_bridge::recorder::serve(&pipe)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = pipe;
+        eprintln!("serve is only available on Windows");
+        2
+    }
+}
+
 #[cfg(windows)]
 fn set_dpi_awareness() {
     use windows::Win32::UI::HiDpi::{
@@ -211,6 +240,9 @@ fn handle_request(request: &Request) -> Response {
         return Response::err(&request.id, ProtocolError::new(format!("Unsupported Windows helper protocol {}; expected {}. Restart Pi to use the installed helper.", request.protocol_version, PROTOCOL_VERSION), ErrorCode::InvalidRequest));
     }
 
+    // Tangu 新增:执行动作期间亮起跨进程标记,电脑历史据此给这段时间的事件打 origin:"agent"(见 agent_marker.rs)。
+    let _agent = matches!(request.cmd.as_str(), "act" | "actBatch" | "focusWindow" | "openBrowserLocation")
+        .then(windows_bridge::agent_marker::enter);
     let result = match request.cmd.as_str() {
         "diagnostics" => Ok(diagnostics()),
         "listRoots" | "listWindows" => handle_list_roots(&request.args),

@@ -1,0 +1,37 @@
+# 电脑历史 Windows 采集器(windows-bridge.exe serve)的真机实测。开发机是 mac,Windows 行为只能在这里验:
+# cargo test(纯逻辑 + 协议)→ release 构建(与发版同样静态链接 CRT)→ scripts/probe-recorder-windows.mjs 真管道订阅、
+# 真的操作桌面(记事本、Chrome、Edge),断言事件。只读,不发布任何东西。
+# 触发:推 ci/windows-recorder* 分支,或手动运行。
+name: windows-recorder-probe
+
+on:
+  push:
+    branches: ['ci/windows-recorder**']
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # 只跑电脑历史这套:上游 capture.rs 的 Windows 单测还按旧签名调 screenshot(),在 Windows 上编不过(上游问题,vendor 不改)。
+      - name: cargo test (recorder logic)
+        run: cargo test --manifest-path native/windows/bridge-rs/Cargo.toml --test recorder_logic_tests
+      - name: Build (release, static CRT)
+        run: cargo build --release --manifest-path native/windows/bridge-rs/Cargo.toml
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
+      - name: recorder-protocol
+        run: native/windows/bridge-rs/target/release/windows-bridge.exe recorder-protocol
+      - name: Probe
+        run: node scripts/probe-recorder-windows.mjs native/windows/bridge-rs/target/release/windows-bridge.exe --out probe-results.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-recorder-probe
+          path: probe-results.json
+          if-no-files-found: ignore
