@@ -534,6 +534,21 @@ ctx.registerView({
   },
 })
 
+// ── 侧边拼接:把一扇对话面板贴在某个 App 窗口旁边,拖动 / 移动 / 缩放都像一个窗口 ──────────────
+// 面板、跟随、读划线都在宿主(electron/appDock.ts,经本包 helper 的 dockProbe / selection 命令);这里只是入口。
+// 面板打开后先列出屏上的窗口让用户挑,所以命令本身不带目标。老宿主没有这条 IPC、或不是 macOS(跟随靠 helper 的
+// CGWindowList / AX,宿主那边直接回 unsupported_platform)→ 不注册,免得给出一个点了没反应的命令。
+const dockOpen = globalThis.window && window.tangu && window.tangu.platform === 'darwin' && window.tangu.appDockOpen
+if (dockOpen) {
+  const en = () => (ctx.getLocale ? ctx.getLocale() : 'zh') === 'en'
+  ctx.registerCommand({
+    id: 'dock-chat',
+    title: () => (en() ? 'Dock a chat beside an app' : '把对话贴到应用旁边'),
+    keywords: 'side panel dock attach app window chat 侧边 贴边 拼接 应用 窗口 对话 tiebian pinjie',
+    run: () => { void dockOpen() },
+  })
+}
+
 // 纯函数暴露给 check.mjs(宿主装载时 ctx 存在,check 里只取这个挂点)。
 globalThis.__CU_LIVE_TEST__ = {
   explain, ago, describe, PLUGIN_ID, VIEW_ID, TICK_MS, IDLE_TICK_MS,

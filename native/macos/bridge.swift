@@ -369,7 +369,7 @@ final class InputSuppressionGuard {
 }
 
 final class Bridge {
-	private let protocolVersion = 13
+	private let protocolVersion = 14
 	private let refStore = AXRefStore()
 	private let inputSuppressionGuard = InputSuppressionGuard()
 	private let physicalInputLock = NSRecursiveLock()
@@ -791,6 +791,12 @@ final class Bridge {
 			return try axReadText(request)
 		case "getMousePosition":
 			return getMousePosition()
+		case "dockCandidates":
+			return dockCandidates(request)
+		case "dockProbe":
+			return try dockProbe(request)
+		case "selection":
+			return try selection(request)
 		case "recordSubscribe":
 			// 只在 serve socket 的专用连接上有意义(processClient 截走了那条路);stdin 模式没有能长开的连接。
 			throw BridgeFailure(message: "recordSubscribe needs a dedicated connection to the serve socket", code: "unsupported")
@@ -1271,20 +1277,29 @@ final class Bridge {
 		}
 		let x = try doubleArg(request, "x")
 		let y = try doubleArg(request, "y")
-		let width = max(100.0, try doubleArg(request, "width"))
-		let height = max(80.0, try doubleArg(request, "height"))
+		// Tangu(协议 14):width/height 可一起省 = 只挪不缩放。贴边面板拖动时每帧都在挪目标窗口,
+		// 同尺寸再写一遍 kAXSize 会让一些 App 每帧重排一次。参数全部校验完才动窗口:报错了就不该已经挪过。
+		var size: CGSize?
+		if request["width"] != nil || request["height"] != nil {
+			size = CGSize(width: max(100.0, try doubleArg(request, "width")), height: max(80.0, try doubleArg(request, "height")))
+		}
 		var origin = CGPoint(x: x, y: y)
-		var size = CGSize(width: width, height: height)
-		guard let originValue = AXValueCreate(.cgPoint, &origin), let sizeValue = AXValueCreate(.cgSize, &size) else {
+		guard let originValue = AXValueCreate(.cgPoint, &origin) else {
 			throw BridgeFailure(message: "Failed to create AX frame values", code: "frame_value_failed")
 		}
 		let positionStatus = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, originValue)
-		let sizeStatus = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
+		var sizeStatus: AXError?
+		if var size {
+			guard let sizeValue = AXValueCreate(.cgSize, &size) else {
+				throw BridgeFailure(message: "Failed to create AX frame values", code: "frame_value_failed")
+			}
+			sizeStatus = AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, sizeValue)
+		}
 		let frame = frameForWindow(window)
 		return [
 			"ok": positionStatus == .success || sizeStatus == .success,
 			"positionStatus": Int(positionStatus.rawValue),
-			"sizeStatus": Int(sizeStatus.rawValue),
+			"sizeStatus": sizeStatus.map { Int($0.rawValue) } ?? NSNull(),
 			"framePoints": ["x": frame.origin.x, "y": frame.origin.y, "w": frame.width, "h": frame.height],
 		]
 	}
@@ -3036,6 +3051,155 @@ final class Bridge {
 	private func getMousePosition() -> [String: Any] {
 		let position = NSEvent.mouseLocation
 		return ["x": position.x, "y": position.y]
+	}
+
+	// MARK: - Tangu:App 侧边拼接(协议 14)
+	// Forsion 的对话面板贴在某个 App 窗口旁边、像一个窗口那样一起动。跟随走 CGWindowList —— WindowServer 的
+	// 实时 bounds,用户拖窗口的过程中也在变(AX 的 kAXPosition 不保证拖动中更新);一次 ~0.1ms、零 AX 往返,
+	// 桌面端按 60Hz 轮询 dockProbe。反方向(拖面板带着目标走)复用 setWindowFrame。
+
+	/// 可贴靠的窗口,前→后(z 序:最上面那个多半就是用户刚在用的)。只收普通 App(.regular)的屏上 layer-0 窗口;
+	/// excludePids = 调用方自己(Forsion 的窗口不该出现在候选里)。
+	private func dockCandidates(_ request: [String: Any]) -> [String: Any] {
+		let excluded = Set(((request["excludePids"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.int32Value } + [getpid()])
+		var regular: [Int32: NSRunningApplication] = [:]
+		for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+			regular[app.processIdentifier] = app
+		}
+		let entries = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+		var windows: [[String: Any]] = []
+		for entry in entries {
+			guard let pid = (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+				!excluded.contains(pid), let app = regular[pid],
+				((entry[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0) == 0,
+				let windowId = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+				let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
+				let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+				bounds.width >= 200, bounds.height >= 150
+			else { continue }
+			// kCGWindowName 要屏幕录制权限;没有就退到 AX 标题(只要辅助功能)。
+			var title = (entry[kCGWindowName as String] as? String) ?? ""
+			if title.isEmpty, let window = windowElement(pid: pid, windowId: windowId) {
+				title = stringAttribute(window, attribute: kAXTitleAttribute as CFString) ?? ""
+			}
+			var item: [String: Any] = [
+				"pid": Int(pid), "windowId": Int(windowId), "app": app.localizedName ?? processName(pid: pid) ?? "", "title": title,
+				"x": bounds.origin.x, "y": bounds.origin.y, "w": bounds.width, "h": bounds.height,
+			]
+			if let bundleId = app.bundleIdentifier { item["bundleId"] = bundleId }
+			windows.append(item)
+			if windows.count == 24 { break }
+		}
+		return ["windows": windows]
+	}
+
+	/// 一个窗口此刻的位置/在不在屏上 + 前台 App 的 pid。只读 CGWindowList,不碰 AX。
+	/// onScreen=false:最小化、App 被隐藏、在别的桌面(Space)。exists=false:窗口已关。
+	private func dockProbe(_ request: [String: Any]) throws -> [String: Any] {
+		let windowId = UInt32(try intArg(request, "windowId"))
+		let frontPid = Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)
+		// ⚠️别用 CGWindowListCreateDescriptionFromArray:对别的进程的窗口恒返回空数组(07-29 实测)。
+		// ⚠️.optionIncludingWindow 单用只回**屏上**的窗口:最小化 / App 被隐藏 / 在别的桌面时回空(10-02 实测),
+		// 拿空当「窗口关了」会把贴边面板一并关掉。回空时再到全量表里找一次(几 ms,只在窗口不在屏上时走;桌面端此时也降频)。
+		let match = { (list: [[String: Any]]?) in list?.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowId }) }
+		guard let entry = match(CGWindowListCopyWindowInfo([.optionIncludingWindow], windowId) as? [[String: Any]])
+			?? match(CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]]),
+			let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
+			let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
+		else {
+			return ["exists": false, "frontPid": frontPid]
+		}
+		return [
+			"exists": true,
+			"onScreen": (entry[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? false,
+			"x": bounds.origin.x, "y": bounds.origin.y, "w": bounds.width, "h": bounds.height,
+			"frontPid": frontPid,
+		]
+	}
+
+	/// 目标 App 此刻的划线文本,没有就给选中项(列表/表格里选中的行:Finder 里的文件、邮件列表里的邮件)。只读。
+	/// App 失去前台后焦点元素与选区仍在,所以用户点进 Forsion 面板那一刻再读也来得及。密码框一律不读。
+	private func selection(_ request: [String: Any]) throws -> [String: Any] {
+		let pid = Int32(try intArg(request, "pid"))
+		ensureEnhancedAccessibility(pid: pid)
+		let app = AXUIElementCreateApplication(pid)
+		AXUIElementSetMessagingTimeout(app, 1.0)
+		var result: [String: Any] = [:]
+		let focusedWindow = copyAttribute(app, attribute: kAXFocusedWindowAttribute as CFString).flatMap(asAXElement)
+		// 给了 windowId(贴边面板总会给)就只读那一扇窗:同一 App 的另一扇窗里的选区不属于这段对话。
+		// 对不上(或配不出 AX 窗口)一律不读 —— 宁可漏引用,不可张冠李戴。
+		if let windowId = optionalIntArg(request, "windowId").map({ UInt32($0) }) {
+			guard let expected = windowElement(pid: pid, windowId: windowId), let focusedWindow, CFEqual(expected, focusedWindow) else {
+				return ["otherWindow": true]
+			}
+		}
+		if let focusedWindow {
+			result["windowTitle"] = stringAttribute(focusedWindow, attribute: kAXTitleAttribute as CFString) ?? ""
+		}
+		guard let element = copyAttribute(app, attribute: kAXFocusedUIElementAttribute as CFString).flatMap(asAXElement) else {
+			return result
+		}
+		let role = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
+		let subrole = stringAttribute(element, attribute: kAXSubroleAttribute as CFString) ?? ""
+		if isSecureTextElement(role: role, subrole: subrole) {
+			result["element"] = ["role": role, "secure": true]
+			return result
+		}
+		result["element"] = [
+			"role": role,
+			"subrole": subrole,
+			"title": stringAttribute(element, attribute: kAXTitleAttribute as CFString) ?? "",
+			"description": stringAttribute(element, attribute: kAXDescriptionAttribute as CFString) ?? "",
+			"value": String(displayValue(element, role: role, subrole: subrole).prefix(200)),
+		]
+		if let text = selectedText(around: element), !text.isEmpty {
+			result["text"] = String(text.prefix(20_000))
+			return result
+		}
+		let rows = axElementArrayIfPresent(element, attribute: kAXSelectedRowsAttribute as CFString)
+			?? axElementArrayIfPresent(element, attribute: kAXSelectedChildrenAttribute as CFString) ?? []
+		let items = rows.prefix(20).map(describeSelected).filter { !$0.isEmpty }
+		if !items.isEmpty { result["items"] = Array(items) }
+		return result
+	}
+
+	/// 焦点元素自己没有选区时往上找(网页里焦点常落在链接/段落上,选区挂在 AXWebArea)。
+	/// 原生控件给 kAXSelectedText;WebKit/Chromium 的正文选区只认 text marker。
+	private func selectedText(around start: AXUIElement) -> String? {
+		var current: AXUIElement? = start
+		for _ in 0..<8 {
+			guard let element = current else { return nil }
+			if let text = stringAttribute(element, attribute: kAXSelectedTextAttribute as CFString), !text.isEmpty { return text }
+			if let range = copyAttribute(element, attribute: "AXSelectedTextMarkerRange" as CFString) {
+				var value: AnyObject?
+				if AXUIElementCopyParameterizedAttributeValue(element, "AXStringForTextMarkerRange" as CFString, range, &value) == .success,
+					let text = value as? String, !text.isEmpty
+				{
+					return text
+				}
+			}
+			current = copyAttribute(element, attribute: kAXParentAttribute as CFString).flatMap(asAXElement)
+		}
+		return nil
+	}
+
+	/// 选中行 → 一行人话:自己的标题/值/描述,没有就拼前几个子孙里的文字(表格行的文字在单元格里)。
+	/// 密码框一律跳过(行本身、以及行里的每个子孙):第三方 App 可能把明文挂在 AX value 上。
+	private func describeSelected(_ element: AXUIElement) -> String {
+		let isSecure = { (el: AXUIElement) in
+			self.isSecureTextElement(role: self.stringAttribute(el, attribute: kAXRoleAttribute as CFString) ?? "",
+				subrole: self.stringAttribute(el, attribute: kAXSubroleAttribute as CFString) ?? "")
+		}
+		if isSecure(element) { return "" }
+		for attribute in [kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute] {
+			if let text = stringAttribute(element, attribute: attribute as CFString), !text.isEmpty { return String(text.prefix(200)) }
+		}
+		let texts = collectDescendants(startingAt: element, maxDepth: 3).compactMap { child -> String? in
+			let role = stringAttribute(child, attribute: kAXRoleAttribute as CFString) ?? ""
+			guard role == "AXStaticText" || role == "AXTextField", !isSecure(child) else { return nil }
+			return stringAttribute(child, attribute: kAXValueAttribute as CFString).flatMap { $0.isEmpty ? nil : $0 }
+		}
+		return String(texts.prefix(4).joined(separator: " · ").prefix(200))
 	}
 
 	private func copyAttribute(_ element: AXUIElement, attribute: CFString) -> AnyObject? {

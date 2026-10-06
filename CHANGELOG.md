@@ -1,6 +1,13 @@
 # 更新日志
 
-## 未发布
+## 0.7.0 — 未发布
+
+- 新增「侧边拼接」（macOS，协议 14）：在 Forsion 命令面板里运行「把对话贴到应用旁边」，从屏上的窗口里挑一个，对话面板就贴在它旁边。拖动、移动、缩放目标窗口时面板跟着走；拖面板或拉它贴着目标的那条边，目标窗口也跟着动。目标最小化、隐藏、去了别的桌面或全屏时面板藏起，回来再贴上；目标关掉时面板一并收起。
+- 面板里是一段新对话，每条消息默认带上这个 App 的引用（可以去掉）。agent 据此把它当作默认的操作对象，用电脑操作的工具直接看、直接操作它。点进面板时，目标 App 里划选的文字（没有文字选区时是列表里选中的项）自动挂成引用；密码框一律不读。
+- helper 新增三条只读命令：`dockCandidates`（屏上可贴靠的窗口，前→后）、`dockProbe`（一个窗口此刻的位置与前台 App，只读 CGWindowList、不碰辅助功能，桌面端约 60Hz 轮询）、`selection`（焦点元素的划线文本或选中项）；`setWindowFrame` 的宽高改为可省（只挪不缩放）。
+- 已知限制：跨进程的窗口没法真正挂在一起，面板的层级靠「目标 App 到前台时把面板提上来」近似；Windows 暂不支持（那边的 helper 桌面端连不上）。
+
+Docked chat panel (macOS, protocol 14). Run "Dock a chat beside an app" from the Forsion command palette and pick a window on screen. The chat panel docks beside it and follows when you drag, move or resize that window. Dragging the panel, or the panel edge that touches the window, moves or resizes the window too. The panel hides while the window is minimized, hidden, on another desktop or in full screen, and docks again when it comes back. Closing the window closes the panel. The panel holds a new chat whose messages reference that app by default (you can remove the reference), so the agent treats it as the default target and can see and operate it with the Computer Use tools. When you click into the panel, the text you selected in that app, or the items selected in a list when there's no text selection, is attached as a quote. Password fields are never read. The helper adds three read-only commands: `dockCandidates` (windows on screen you can dock beside, front to back), `dockProbe` (one window's position and the frontmost app, read from CGWindowList without Accessibility, polled by Desktop at about 60Hz) and `selection` (selected text or selected items of the focused element). `setWindowFrame` now accepts a missing width and height, which moves the window without resizing it. Known limits: windows of different apps can't truly be attached, so the panel's stacking is approximated by raising it whenever the target app comes to the front. Windows isn't supported yet, because Desktop can't reach the helper there.
 
 - 目标窗口是 Forsion 自己（拉起引擎的那个桌面应用）时，`find_roots` / `observe_ui` / `act_ui` 的结果末尾附一行 `[forsion]` 提示，让模型改用界面命令（`list_ui_commands` → `run_ui_command` / `set_ui_setting`）。只提示不拦截：没有对应界面命令的地方仍可操作。技能说明同步加了这一条。
 - `npm run check:no-foreground` 增加这条提示的 9 项判据。
