@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">Computer Use — Pointer window</title>
+  <!-- Original Forsion plugin identity artwork, 2026-10-05. -->
+  <defs><linearGradient id="tile" x1="28" y1="12" x2="222" y2="252" gradientUnits="userSpaceOnUse"><stop stop-color="#34465f"/><stop offset="1" stop-color="#1e2c40"/></linearGradient></defs>
+  <rect x="4" y="4" width="248" height="248" rx="58" fill="url(#tile)"/>
+  <g style="--ink:#f0ecdf;--accent:#9ebbe2;--cut:#1e2c40" fill="none" stroke="var(--ink)" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M114 173H70Q53 173 53 156V77Q53 60 70 60H186Q203 60 203 77V127M101 174v28m-23 5h47" stroke-width="13"/>
+    <path d="M129 112L129 193L149 174L168 211L187 201L166 164L194 159Z" fill="var(--ink)" stroke="none"/>
+  </g>
+</svg>
