@@ -10,8 +10,10 @@ Forked from **[injaneity/pi-computer-use](https://github.com/injaneity/pi-comput
 
 `src/vendor/` is the upstream `src/` copied verbatim **except one mechanical, greppable rename**
 (see "Brand rename" below — the helper's identity/path constants must match the branded native
-app or nothing connects) **and one deliberate behavioural constant**: `HELPER_PROTOCOL_VERSION` in
-`platform/macos/helper.ts`, which we hold above upstream's (see "Helper protocol version" below).
+app or nothing connects), **one deliberate behavioural constant**: `HELPER_PROTOCOL_VERSION` in
+`platform/macos/helper.ts`, which we hold above upstream's (see "Helper protocol version" below),
+**and one small behavioural patch** to `actions.ts` / `bridge.ts` (see "Untargeted keyboard / scroll
+actions" below).
 Re-syncing must not blindly restore upstream's number — that silently disables every native feature
 we added. The entire *code* coupling to pi (`@earendil-works/pi-coding-agent`)
 is 5 files:
@@ -69,6 +71,33 @@ underscores) and are deliberately left unchanged, as are code comments mentionin
 `.d.mts` — v0.5.0 added `platform/macos/helper-path.mjs`). This mismatch was a
 real bug once (native branded, vendor still `pi-*`): the runtime launched an unregistered bundle id and
 connected to the wrong socket, so `doctor` reported ready while a real observe/act failed.
+
+### Untargeted keyboard / scroll actions (vendor TS patch, after 0.6.2)
+
+`src/vendor/actions.ts` and `src/vendor/bridge.ts` carry a small behavioural patch — **a re-sync wipes it;
+replay it** (`npm run check:actions`, part of `npm run check`, goes red if it is gone):
+
+- `ActionState.pointer` + the `pointer` fallback in `nativeTarget()`: a `scroll` with no `ref`/`x`/`y`
+  reuses where the previous `click`/`press`/`moveMouse`/`scroll` of the same batch landed.
+- `ActionState.frontmost`, `followsFocus()` / `needsFrontmostProbe()` / `targetIsFrontmost()` in
+  `actions.ts` and `targetHoldsFocus()` in `bridge.ts`, used by `dispatchUiTransaction()`: when the
+  target window holds the foreground **right now** (probed per call, never remembered across calls), a
+  `keypress`/`typeText` with no `ref`/`x`/`y` follows the focus without a click in the same batch.
+  Upstream only knows `currentFocus`, which starts at `false` every call, so "click in one act_ui call,
+  press a key in the next" failed. Focus-following keys go to the foreground **without re-activating
+  the target** (`preserveFocus`), so three limits keep them out of other apps — do not loosen them:
+  ① the match is strictly positive, with a per-platform signal: macOS compares `getFrontmost()` pid +
+  windowId (a window's own `isFocused` is `AXFocused` there, false even for the frontmost window);
+  Windows/Linux use the target's own `isFocused` (their `getFrontmost()` falls back to the first root
+  when none is focused). ② the claim ends at the first `click`/`press` of the batch, which may hand the
+  foreground to another app. ③ it never applies to a keyboard action that carries `x`/`y`, and never in
+  strict headless (that batch path is untouched).
+- `missingTarget()`: the error for those two cases tells the model how to fix the call.
+
+`src/tools.ts` mirrors it (scroll accepts `x`/`y`; the `ref` descriptions state the same-call rule).
+Real-machine green: `npm run check:untargeted` drives the real `bridge.ts` against Calculator (background
+keypress refused and nothing typed → coordinate click → keypress **in the next call** lands → bare
+scroll after `moveMouse`). It takes the foreground for a few seconds.
 
 ### PACKAGE_ROOT — no longer patched, but still guarded
 `platform/{macos,windows,linux}/helper.ts` locate `scripts/setup-helper.mjs` via

@@ -1,5 +1,14 @@
 # 更新日志
 
+## 未发布
+
+- 修复：操作无障碍树是空的、只能按坐标操作的 App（例如微信）时，`act_ui` 里不带 `ref` / `x` / `y` 的 `keypress` / `typeText` 现在可以沿用焦点 —— 条件是目标窗口此刻就在前台（比如上一次 `act_ui` 刚点过它）。以前只认同一次调用里的点击，上一次点过、这一次只按键必报 `requires either ref or both x and y`。目标窗口不在前台时仍然报错：跟随焦点的按键不会重新激活目标窗口，硬发会打进用户正在用的别的 App；报错里写明两种改法（同一次调用里先点一下，或给出 `x` / `y`）。「严格后台」设置下行为不变。
+- 修复：不带 `ref` / `x` / `y` 的 `scroll` 沿用同一次调用里上一个 `click` / `moveMouse` 落下的位置（以前必报错）；`scroll` 的参数表补上了 `x` / `y`。前面没有可沿用的位置时仍报错，报错里写明改法。
+- 技能说明和工具描述写清了「省略 `ref`」的限制。
+- 新增 `npm run check:actions`（纯逻辑，已进 `npm run check`）和真机仪器 `npm run check:untargeted`（用计算器走一遍；会把它短暂拿到前台）。
+
+Fixed two `act_ui` failures in apps whose accessibility tree is empty and can only be driven by coordinates, such as WeChat. A `keypress` or `typeText` with no `ref`, `x` or `y` now follows the focus when the target window is frontmost at that moment, for example right after an earlier `act_ui` call clicked in it. Before, only a click in the same call counted, so "click in one call, press a key in the next" always failed with `requires either ref or both x and y`. It still fails when the target window isn't frontmost, because focus-following keys don't re-activate the target and would land in whatever app you're using; the error now names both fixes (click first in the same call, or pass `x` and `y`). Nothing changes under the "strict background" setting. A `scroll` with no `ref`, `x` or `y` now scrolls where the previous `click` or `moveMouse` of the same call landed, and `scroll` accepts `x` and `y`; with nothing to reuse it still fails, with an error that says how to fix the call. The skill text and tool descriptions state these limits. New checks: `npm run check:actions` (pure logic, part of `npm run check`) and the real-machine `npm run check:untargeted`.
+
 ## 0.6.2 — 2026-10-06
 
 - 新增「侧边拼接」（macOS，协议 14）：在 Forsion 命令面板里运行「把对话贴到应用旁边」，从屏上的窗口里挑一个，对话面板就贴在它旁边。拖动、移动、缩放目标窗口时面板跟着走；拖面板或拉它贴着目标的那条边，目标窗口也跟着动。目标最小化、隐藏、去了别的桌面或全屏时面板藏起，回来再贴上；目标关掉时面板一并收起。

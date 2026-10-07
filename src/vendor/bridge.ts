@@ -6,7 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { canRetryInForeground, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, type ActionState, type PreparedAction } from "./actions.ts";
+import { canRetryInForeground, needsFrontmostProbe, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
 import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
 import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
@@ -1788,6 +1788,17 @@ async function dispatchUiAction(action: UiAction, target: ResolvedTarget, look: 
 	return trace;
 }
 
+/**
+ * Is the target window the one physical keys would reach right now? Each platform has one signal that
+ * errs towards "no": macOS reports a window's own `isFocused` (AXFocused) as false even when it is
+ * frontmost, so ask for the frontmost app and window; Windows/Linux `getFrontmost` falls back to the
+ * first root when none is focused, so there the window's own flag (the real foreground window) decides.
+ */
+async function targetHoldsFocus(target: ResolvedTarget, signal?: AbortSignal): Promise<boolean> {
+	if (currentPlatformBackend.name !== "macos") return target.isFocused;
+	return await getFrontmost(signal).then((front) => targetIsFrontmost(front, target), () => false);
+}
+
 async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget, look: LookResponse, headless: boolean, signal?: AbortSignal): Promise<ExecutionTrace> {
 	// Strict-headless batches have one immutable delivery class. When foreground
 	// fallback is permitted, decide independently per action so a completed
@@ -1807,7 +1818,11 @@ async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget
 		return execution;
 	}
 	const steps: ExecutionTrace[] = [];
-	const actionState: ActionState = { currentFocus: false };
+	// A keypress/typeText that names no target follows the focus. A click in this batch establishes it;
+	// a batch that starts with none (the click was in the previous act_ui call) may still follow it while
+	// the target window is frontmost. Probed live, never remembered: the user can switch apps between calls.
+	const frontmost = !headless && needsFrontmostProbe(actions) && await targetHoldsFocus(target, signal);
+	const actionState: ActionState = { currentFocus: false, frontmost };
 	for (const action of actions) {
 		const step = await dispatchUiAction(action, target, look, headless, actionState, signal);
 		steps.push(step);
