@@ -3,7 +3,11 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { nativeProtocolVersion, runtimeProtocolVersion } from './helper-protocol.mjs';
 if (!process.env.CU_CONTRACT_PLATFORM) {
+  // 两处各写一遍的 helper 协议号必须一致:不一致时插件会拒绝自己刚编出来的 helper(UPSTREAM.md「Helper protocol version」)。
+  assert.equal(nativeProtocolVersion(), runtimeProtocolVersion(), 'macOS helper protocol: native/macos/bridge.swift and src/vendor/platform/macos/helper.ts must declare the same number');
+  console.log(`macos helper protocol ${runtimeProtocolVersion()}: native source and plugin runtime agree`);
   for (const platform of ['darwin', 'win32', 'linux']) {
     const r = spawnSync(process.execPath, [fileURLToPath(import.meta.url)], {
       env: { ...process.env, CU_CONTRACT_PLATFORM: platform }, encoding: 'utf8', timeout: 15_000,

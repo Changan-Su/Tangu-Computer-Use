@@ -116,7 +116,10 @@ Accessibility/Screen-Recording (TCC) grants to them.
 
 **Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **14**, in two places that must
 always match: `native/macos/bridge.swift` (`private let protocolVersion`) and
-`src/vendor/platform/macos/helper.ts` (`HELPER_PROTOCOL_VERSION`). Bump it whenever the helper gains a
+`src/vendor/platform/macos/helper.ts` (`HELPER_PROTOCOL_VERSION`) — `npm run check:platform` fails when they
+differ. Checks never hard-code the number: they read it from those two files through
+`scripts/helper-protocol.mjs` (hard-coded 11 / 13 asserts kept `check:live` and `check:recorder` red from
+the next bump on, unnoticed). Bump it whenever the helper gains a
 command **or changes native behaviour** — `src/onboarding.ts` now notices a stale binary *on disk*, but a
 **already-running** daemon is only re-validated through the protocol number, so without a bump the old
 process keeps serving after the update lands. 0.4.0 is the cautionary case: it changed only overlay window

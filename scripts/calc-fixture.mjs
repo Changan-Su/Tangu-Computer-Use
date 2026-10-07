@@ -12,6 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { resolveMacosHelperAppPath } from '../src/vendor/platform/macos/helper-path.mjs'
+import { runtimeProtocolVersion } from './helper-protocol.mjs'
 
 const execFileP = promisify(execFile)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -30,6 +31,16 @@ export const HELPER_EXECUTABLE = path.join(HELPER_APP, 'Contents', 'MacOS', 'bri
  * (终端/node)身上,于是 diagnostics 报「没有辅助功能权限」—— 看起来像授权丢了,其实是启动方式错了。
  */
 export async function ensureDaemon(ask) {
+  const diag = await daemonDiagnostics(ask)
+  // 装着的 helper 得和这份源码是同一版协议,否则仪器测到的是旧 helper 的行为。期望值从源码读(见 helper-protocol.mjs)。
+  const expected = runtimeProtocolVersion()
+  if (diag.protocolVersion !== expected) {
+    throw new Error(`helper 协议应为 ${expected}(src/vendor/platform/macos/helper.ts),实测 ${diag.protocolVersion} —— 装着的 helper 和这份源码不是一版,先重装 helper`)
+  }
+  return diag
+}
+
+async function daemonDiagnostics(ask) {
   for (let attempt = 0; attempt < 25; attempt++) {
     try { return await ask({ cmd: 'diagnostics' }) } catch (e) {
       if (attempt === 0 && (e.code === 'ECONNREFUSED' || e.code === 'ENOENT')) {

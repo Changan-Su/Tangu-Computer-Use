@@ -51,7 +51,6 @@ const findNode = (node, pred) => {
 const median = (xs) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)]
 
 const diag = await ensureDaemon(ask)
-assert.equal(diag.protocolVersion, 11, `helper 协议应为 11,实测 ${diag.protocolVersion}`)
 assert.ok(diag.screenRecording, '需要「屏幕录制」权限,否则拿不到任何画面')
 
 try {
