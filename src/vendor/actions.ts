@@ -15,7 +15,17 @@ export type PreparedAction =
 	| { action: "wait"; params: { ms: number }; establishesFocus: false; usesCurrentFocus: false; needsForeground: false };
 
 export interface ActionState {
+	/** A click earlier in this batch put the keyboard focus in the target window. */
 	currentFocus: boolean;
+	/**
+	 * The target window held the foreground when the batch started (bridge `targetHoldsFocus`), so a
+	 * keypress / typeText that names no target may follow the focus without a click. Holds only until the
+	 * first click / press of the batch: that action can hand the foreground to another app, and from
+	 * there on `currentFocus` decides. Never set in strict headless.
+	 */
+	frontmost?: boolean;
+	/** Where the last click / press / moveMouse / scroll of this batch landed; a scroll that names no target reuses it. */
+	pointer?: ActionTarget;
 }
 
 export interface ActionEnvironment {
@@ -53,7 +63,52 @@ function path(value: UiAction["path"], env: ActionEnvironment): Array<{ x: numbe
 	});
 }
 
-function nativeTarget(action: UiAction, operation: PreparedAction["action"], env: ActionEnvironment): ActionTarget {
+function isKeyboard(operation: PreparedAction["action"]): boolean {
+	return operation === "typeText" || operation === "keypress";
+}
+
+function hasPoint(action: UiAction): boolean {
+	return Number.isFinite(toFiniteNumber(action.x, NaN)) && Number.isFinite(toFiniteNumber(action.y, NaN));
+}
+
+function isClick(operation: PreparedAction["action"]): boolean {
+	return operation === "click" || operation === "press";
+}
+
+/** A keypress / typeText that names neither ref nor x/y: it can only go to whatever holds the focus. */
+export function followsFocus(action: UiAction): boolean {
+	return isKeyboard(action.action) && !action.ref?.trim() && !hasPoint(action);
+}
+
+/** Whether `ActionState.frontmost` can matter to this batch: such an action comes before its first click / press. */
+export function needsFrontmostProbe(actions: UiAction[]): boolean {
+	const firstClick = actions.findIndex((action) => isClick(action.action));
+	return actions.slice(0, firstClick < 0 ? actions.length : firstClick).some(followsFocus);
+}
+
+/**
+ * Whether the platform's frontmost root is the act_ui target itself. Focus-following keys are delivered
+ * to the foreground without re-activating the target, so anything short of a positive match must count
+ * as "not ours" — otherwise they would be typed into whatever app the user switched to.
+ */
+export function targetIsFrontmost(front: { pid: number; windowId?: number }, target: { pid: number; windowId?: number }): boolean {
+	return front.pid === target.pid && Boolean(front.windowId) && front.windowId === target.windowId;
+}
+
+// Read by the model: say how to fix the call, not just what is missing.
+function missingTarget(operation: PreparedAction["action"], env: ActionEnvironment): Error {
+	if (isKeyboard(operation)) {
+		return new Error(env.headless
+			? `${operation} requires either ref or both x and y. Strict background mode never follows the focus.`
+			: `${operation} has no focus to follow: nothing earlier in this act_ui call clicked a coordinate or an editable control, and the target window is not known to be frontmost (it is in the background, or a press since the start of this call may have changed that). Either put such a click before it in the same act_ui call, or pass x and y (any point in the window; the keys go to whatever already has focus there).`);
+	}
+	if (operation === "scroll") {
+		return new Error("scroll has no position. Either pass ref or both x and y, or put a click or moveMouse earlier in the same act_ui call so it scrolls there.");
+	}
+	return new Error(`${operation} requires either ref or both x and y.`);
+}
+
+function nativeTarget(action: UiAction, operation: PreparedAction["action"], env: ActionEnvironment, pointer?: ActionTarget): ActionTarget {
 	if (action.ref?.trim()) {
 		const node = env.node(action.ref.trim());
 		const semanticClick = operation === "click" || operation === "press";
@@ -77,7 +132,8 @@ function nativeTarget(action: UiAction, operation: PreparedAction["action"], env
 		return { x, y };
 	}
 	if (operation === "drag" && action.path?.length) return path(action.path, env)[0];
-	throw new Error(`${operation} requires either ref or both x and y.`);
+	if (operation === "scroll" && pointer) return pointer;
+	throw missingTarget(operation, env);
 }
 
 function focusedTarget(env: ActionEnvironment): ActionTarget {
@@ -92,10 +148,13 @@ function containsEditable(node: OutlineNode): boolean {
 
 export function prepareAction(action: UiAction, state: ActionState, env: ActionEnvironment): PreparedAction {
 	const operation = action.action;
-	const usesCurrentFocus = !env.headless && state.currentFocus && !action.ref && (operation === "typeText" || operation === "keypress");
-	const target = usesCurrentFocus ? focusedTarget(env) : nativeTarget(action, operation, env);
-	const establishesFocus = !env.headless && Boolean(action.ref) && (operation === "click" || operation === "press") && containsEditable(env.node(action.ref!));
-	const needsForeground = !env.headless && (operation === "click" || operation === "press") && "x" in target;
+	const usesCurrentFocus = !env.headless && isKeyboard(operation) && !action.ref
+		&& (state.currentFocus || (state.frontmost === true && followsFocus(action)));
+	const target = usesCurrentFocus ? focusedTarget(env) : nativeTarget(action, operation, env, state.pointer);
+	if (isClick(operation) || operation === "moveMouse" || operation === "scroll") state.pointer = target;
+	if (isClick(operation)) state.frontmost = false;
+	const establishesFocus = !env.headless && Boolean(action.ref) && isClick(operation) && containsEditable(env.node(action.ref!));
+	const needsForeground = !env.headless && isClick(operation) && "x" in target;
 
 	switch (operation) {
 		case "press":

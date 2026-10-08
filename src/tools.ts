@@ -67,9 +67,9 @@ const uiAction = {
     obj({ action: { const: 'click' }, ref: S('Actionable outline ref'), button: mouseButton, clickCount }, ['action', 'ref']),
     obj({ action: { const: 'click' }, ...point, button: mouseButton, clickCount }, ['action', 'x', 'y']),
     obj({ action: { const: 'setText' }, ref: S('Editable outline ref'), text: { type: 'string' } }, ['action', 'ref', 'text']),
-    obj({ action: { const: 'typeText' }, ref: S('Omit after a click to type into the focus established by that click'), text: { type: 'string' } }, ['action', 'text']),
-    obj({ action: { const: 'keypress' }, ref: S('Omit to send keys to the focused control'), keys: { type: 'array', items: { type: 'string' }, minItems: 1 } }, ['action', 'keys']),
-    obj({ action: { const: 'scroll' }, ref: S('Outline ref to scroll'), scrollX: { type: 'number' }, scrollY: { type: 'number' } }, ['action']),
+    obj({ action: { const: 'typeText' }, ref: S('Omit to type into the current focus: needs a click earlier in this same call, or a target window that is already frontmost'), text: { type: 'string' } }, ['action', 'text']),
+    obj({ action: { const: 'keypress' }, ref: S('Omit to send keys to the current focus: needs a click earlier in this same call, or a target window that is already frontmost'), keys: { type: 'array', items: { type: 'string' }, minItems: 1 } }, ['action', 'keys']),
+    obj({ action: { const: 'scroll' }, ref: S('Outline ref to scroll. Without ref or x/y it scrolls where the previous click/moveMouse of this same call landed'), ...point, scrollX: { type: 'number' }, scrollY: { type: 'number' } }, ['action']),
     obj({ action: { const: 'drag' }, path: { type: 'array', items: obj(point, ['x', 'y']), minItems: 2 } }, ['action', 'path']),
     obj({ action: { const: 'moveMouse' }, ...point }, ['action', 'x', 'y']),
   ],
@@ -126,7 +126,7 @@ const SPECS: ToolSpec[] = [
   },
   {
     name: 'act_ui', exec: executeAct as PiExecute, sideEffect: 'system', approval: 'command', timeoutMs: 120_000,
-    description: 'Perform one or more precisely targeted checked actions and return the successor state. Pass dependent click/type steps together and use expect for observable completion instead of a separate observe_ui call. After clicking an editable region, omit ref from typeText/keypress so input follows the established focus. To fill a text field prefer a single setText action — it writes the value in the background without taking focus; only click the field first (which takes the foreground) if setText reports it did not take, as happens on some web/Electron inputs. When any action takes the foreground the result says so on a [foreground] line. For strict background-only runs, turn on the plugin\'s "strict background" setting.',
+    description: 'Perform one or more precisely targeted checked actions and return the successor state. Pass dependent click/type steps together and use expect for observable completion instead of a separate observe_ui call. After clicking an editable region in the same call, omit ref from typeText/keypress so input follows that focus; a later call can omit ref only while the target window is still frontmost, otherwise click again first. To fill a text field prefer a single setText action — it writes the value in the background without taking focus; only click the field first (which takes the foreground) if setText reports it did not take, as happens on some web/Electron inputs. When any action takes the foreground the result says so on a [foreground] line. For strict background-only runs, turn on the plugin\'s "strict background" setting.',
     parameters: obj({
       stateId,
       expect: obj(conditionProps),

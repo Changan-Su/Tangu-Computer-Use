@@ -59,7 +59,11 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
   taking focus. Only click the field first if `setText` reports it did not take (some web/Electron
   inputs).
 - After clicking an editable region, omit `ref` from `typeText`/`keypress` so input follows the focus
-  that click established.
+  that click established. The click must be **in the same `act_ui` call**: a later call can omit `ref`
+  only while the target window is still frontmost, otherwise it fails and you click again first. Strict
+  background mode never follows the focus; give `ref` or `x`/`y` there.
+- `scroll` takes `ref` or `x`/`y`. With neither, it scrolls where the previous `click`/`moveMouse` of
+  the same call landed; on its own it fails.
 - Background is attempted first; the foreground is taken only when an action truly needs it, and the
   result then carries a `[foreground]` line. **When you see that line, tell the user** — you moved
   their focus. Users who never want that can turn on the plugin's "strict background" setting.
