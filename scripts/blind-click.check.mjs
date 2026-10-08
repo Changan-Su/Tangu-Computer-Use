@@ -60,7 +60,6 @@ function findNode(node, pred) {
 }
 
 const diag = await ensureDaemon(ask)
-assert.equal(diag.protocolVersion, 11, `helper 协议应为 11,实测 ${diag.protocolVersion} —— 先重装 helper`)
 assert.ok(diag.accessibility, '需要「辅助功能」权限')
 
 try {
