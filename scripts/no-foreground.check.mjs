@@ -79,9 +79,9 @@ async function unitTests() {
   assert.match(failed, /\[expect\] NOT satisfied/, 'failed → note');
   assert.ok(failed.includes('"朋友圈"') && failed.includes('8000ms'), 'names the condition and the wait');
   assert.match(failed, /action itself was delivered/, 'says the action still went out');
-  assert.doesNotMatch(failed, /leave expect out/, 'a window with a real outline is not told to drop expect');
+  assert.doesNotMatch(failed, /leaving expect out/, 'a window with a real outline is not told to drop expect');
   for (const reason of ['unlabeled_ax_targets', 'sparse_ax_targets']) {
-    assert.match(expectNote(exec({ status: 'failed', text: 'x', timeoutMs: 8000 }, reason)), /leave expect out/, `${reason} → told to drop expect`);
+    assert.match(expectNote(exec({ status: 'failed', text: 'x', timeoutMs: 8000 }, reason)), /prefer leaving expect out/, `${reason} → advised to drop expect`);
   }
   assert.match(expectNote(exec({ status: 'failed', text: 'Loading', gone: true, timeoutMs: 500 })), /did not disappear from/, 'until=absent reads the other way');
   assert.match(expectNote(exec({ status: 'preexisting', text: 'Sakura' })), /already present before the action/, 'preexisting → proves nothing');
@@ -95,11 +95,12 @@ async function unitTests() {
   const hinted = goneHint(gone, { app: 'WeChat', bundleId: 'com.tencent.xinWeChat' });
   assert.ok(hinted.startsWith(gone), 'the original message is kept');
   assert.match(hinted, /another desktop \(Space\)/, 'names the other-desktop case');
+  assert.doesNotMatch(hinted, /minimized/, 'minimized windows are still listed, so they are not a cause');
   assert.ok(hinted.includes('ensure_app({ bundleId: "com.tencent.xinWeChat" })'), 'gives the exact call');
   assert.ok(goneHint(gone, { app: 'WeChat' }).includes('ensure_app({ app: "WeChat" })'), 'falls back to the app name');
   assert.match(goneHint(gone), /ensure_app brings/, 'no remembered target → still names the tool');
   assert.equal(goneHint('State is stale for desktop-pid:1: expected epoch 8, current epoch 9.', { app: 'x' }), 'State is stale for desktop-pid:1: expected epoch 8, current epoch 9.', 'other errors pass through');
-  console.log('✓ unit: goneHint 判据 6 项全过');
+  console.log('✓ unit: goneHint 判据 7 项全过');
 
   const none = (query) => ({ tool: 'find_roots', windows: [], query });
   assert.match(noRootsHint(none({ pid: 6769 }), 'darwin'), /\[hint\].*ensure_app/, 'find_roots by pid with no roots → hint');
@@ -114,11 +115,15 @@ async function unitTests() {
   const wheel = [{ action: 'click', x: 1, y: 2 }, { action: 'scroll', x: 500, y: 300, scrollY: 300 }];
   assert.match(scrollNote(wheel, { steps: [{ delivery: 'hid' }, { delivery: 'hid' }] }), /\[scroll\].*opposite sign/, 'coordinate scroll in the foreground → note');
   assert.match(scrollNote([{ action: 'moveMouse', x: 1, y: 2 }, { action: 'scroll', scrollY: 3 }], { deliveryPolicy: 'foreground' }), /\[scroll\]/, 'a scroll that reuses the pointer position counts');
-  assert.equal(scrollNote([{ action: 'scroll', ref: '@e2', scrollY: 3 }], { delivery: 'hid' }), '', 'ref scroll → empty');
+  // 按这一步实际怎么送达判,不按写没写 ref:走无障碍动作的不说,pictureOnly 的 ref 落成真实输入的要说。
+  assert.equal(scrollNote([{ action: 'scroll', ref: '@e2', scrollY: 3 }], { steps: [{ delivery: 'ax' }] }), '', 'ref scroll done through accessibility → empty');
+  assert.match(scrollNote([{ action: 'scroll', ref: '@e2', scrollY: 3 }], { steps: [{ delivery: 'hid' }] }), /\[scroll\]/, 'ref scroll that resolved to real input → note');
+  assert.equal(scrollNote([{ action: 'click', x: 1, y: 2 }, { action: 'scroll', ref: '@e2', scrollY: 3 }], { steps: [{ delivery: 'hid' }, { delivery: 'ax' }] }), '', 'another step took the foreground, the scroll did not → empty');
+  assert.equal(scrollNote(wheel, { steps: [{ delivery: 'hid' }] }), '', 'the batch stopped before the scroll ran → empty');
   assert.equal(scrollNote(wheel, { steps: [{ delivery: 'ax' }, { delivery: 'pid', deliveryPolicy: 'background' }] }), '', 'nothing took the foreground (strict background) → empty');
   assert.equal(scrollNote([{ action: 'click', x: 1, y: 2 }], { delivery: 'hid' }), '', 'no scroll → empty');
   assert.equal(scrollNote(undefined, { delivery: 'hid' }), '', 'no actions → empty');
-  console.log('✓ unit: scrollNote 判据 6 项全过');
+  console.log('✓ unit: scrollNote 判据 9 项全过');
 }
 
 async function frontmostBundleId() {

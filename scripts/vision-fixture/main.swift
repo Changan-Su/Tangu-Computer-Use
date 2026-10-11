@@ -40,7 +40,8 @@ final class Canvas: NSView {
 	override func mouseDragged(with event: NSEvent) { drags += 1; changed() }
 	override func scrollWheel(with event: NSEvent) {
 		offset = min(maxOffset, max(0, offset - event.scrollingDeltaY))
-		scrolls += 1
+		// 只数带位移的:桥接层垫的那个零位移事件不算一次滚动。
+		if event.scrollingDeltaY != 0 || event.scrollingDeltaX != 0 { scrolls += 1 }
 		changed()
 	}
 

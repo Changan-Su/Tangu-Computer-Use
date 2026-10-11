@@ -28,6 +28,10 @@ is 5 files:
 `@earendil-works/pi-coding-agent` → `src/pi-compat.ts`, so **the vendor import lines are not
 edited**. Config is injected by mutating the `activeConfig` object returned by
 `getComputerUseConfig()` (see `src/tools.ts` → `syncSettings`), so `config.ts` is unmodified too.
+`syncSettings` also writes each setting to the `PI_COMPUTER_USE_*` environment variable upstream reads: upstream's
+`ensureReady()` calls `loadComputerUseConfig()` on every tool call and replaces the config object, so a value
+written only into the object was gone before the executor ran (measured 10-11: strict background never took
+effect). Environment variables are re-read on each load and win over files. `scripts/actions.check.mjs` §6 pins it.
 
 ### Tangu adaptation layer (NOT vendored — hand-written)
 - `src/pi-compat.ts` — the pi shim (only the shapes vendor actually uses).

@@ -76,7 +76,8 @@ interface Verification { status?: string; text?: string; role?: string; value?: 
 /**
  * expect 的结果进正文。vendor 把没满足的后置条件只记进 details.execution(verification.status / error),
  * 正文照样是「Executed N checked UI action」—— 模型分不清「等到了」和「等满超时」。
- * 无障碍树几乎没有文字的窗口(微信)上文字条件永远满足不了:多说一句,别让每次点击都白等一个超时。
+ * 无障碍树几乎没有文字的窗口(微信)上文字条件基本满足不了:多说一句,别让每次点击都白等一个超时。
+ * 「几乎没有文字」取自 vendor 决定要不要附截图的那个启发式,不是证明,所以措辞是「很少能 / 建议」而不是「不可能」。
  */
 export function expectNote(details: unknown): string {
   const d = details as { execution?: { verification?: Verification }; imageReason?: string } | null | undefined;
@@ -89,7 +90,7 @@ export function expectNote(details: unknown): string {
   if (v.status !== 'failed') return '';
   const blind = d?.imageReason === 'unlabeled_ax_targets' || d?.imageReason === 'sparse_ax_targets';
   const tail = blind
-    ? ' This window exposes almost no accessibility text, so a text expect cannot succeed here and only costs the wait: leave expect out for this window and judge from the attached screenshot.'
+    ? ' This window exposes little or no accessibility text, so expect will rarely match here and costs the wait each time: prefer leaving expect out for this window and judging from the attached screenshot.'
     : ' Look at the new state before retrying.';
   return `\n[expect] NOT satisfied: ${what} did not ${v.gone ? 'disappear from' : 'appear in'} the accessibility tree within ${v.timeoutMs ?? '?'}ms. The action itself was delivered. expect reads accessibility text only, never the pixels.${tail}`;
 }
@@ -97,29 +98,30 @@ export function expectNote(details: unknown): string {
 /**
  * 按坐标的滚动是真实的滚轮输入,会过系统的滚动设置和鼠标工具。真机实测(装着 Mos):scrollY -300 滚了 +867 像素,
  * 方向反了、量放大近三倍。模型若认定「正值 = 往下」,在列表顶端发一个被反转的滚动就什么都不动,会当成滚动坏了。
- * 只在这次调用里真有「按坐标的 scroll 且走了前台」时说;按 ref 的滚动走无障碍动作,不受影响。
+ * 按「这一步实际怎么送达」判:execution.steps 与 actions 逐项对应(失败后面的没执行、没有对应项)。
+ * 走无障碍动作的 scroll 不说;按 ref 给、但 ref 是只有坐标的节点(pictureOnly)而走了真实输入的照样说。
  * ponytail:每次都说「可能反向」。根治是让 helper 把滚轮事件标成连续滚动(触控板那类),这些工具就不碰它 —— 要改原生、升协议号。
  */
 export function scrollNote(actions: unknown, execution: unknown): string {
-  const list = Array.isArray(actions) ? actions as Array<{ action?: string; ref?: string }> : [];
-  if (!list.some((a) => a?.action === 'scroll' && !a.ref?.trim())) return '';
+  const list = Array.isArray(actions) ? actions as Array<{ action?: string }> : [];
   const exec = execution as ExecStep | undefined;
-  const steps: ExecStep[] = exec && Array.isArray(exec.steps) && exec.steps.length ? exec.steps : exec ? [exec] : [];
-  if (!steps.some(tookForeground)) return '';
-  return '\n[scroll] A coordinate scroll is real wheel input, so the Mac\'s scroll settings and any mouse utility (smooth scrolling, reversed direction) apply to it: the distance is approximate and the direction can come out reversed. Go by the screenshot: if the view moved the wrong way, or did not move at all, send the opposite sign.';
+  const steps = exec && Array.isArray(exec.steps) && exec.steps.length ? exec.steps : undefined;
+  if (!list.some((a, i) => a?.action === 'scroll' && tookForeground(steps ? steps[i] : exec))) return '';
+  return '\n[scroll] This scroll went out as real wheel input, so the Mac\'s scroll settings and any mouse utility (smooth scrolling, reversed direction) apply to it: the distance is approximate and the direction can come out reversed. Go by the screenshot: if the view moved the wrong way, or did not move at all, send the opposite sign.';
 }
 
 const TARGET_GONE = 'The current controlled window is no longer available';
 
 /**
- * 「窗口不在了」的报错补一句原因和出路。helper 列不出不在当前桌面的窗口(别的桌面 / 最小化 / App 被隐藏),
+ * 「窗口不在了」的报错补一句原因和出路。helper 列不出不在当前桌面的窗口(在别的桌面,或被收起来不显示;
+ * 最小化的窗口列得出来、带 minimized 标记,不属于这一类),
  * vendor 一律报成窗口没了。反馈 55b984eb:用户切回 Forsion 所在的桌面,微信的窗口就「消失」了,
  * 模型连试两次 find_roots 才想到 ensure_app。不是这条报错就原样返回。
  */
 export function goneHint(message: string, target?: { app?: string; bundleId?: string }): string {
   if (!message.includes(TARGET_GONE)) return message;
   const call = target?.bundleId ? `ensure_app({ bundleId: ${JSON.stringify(target.bundleId)} })` : target?.app ? `ensure_app({ app: ${JSON.stringify(target.app)} })` : 'ensure_app';
-  return `${message} This is also what a window that left the current desktop looks like: on another desktop (Space), minimized, or its app hidden — such windows cannot be listed, observed or clicked. If the app is still running, ${call} brings its window back; then observe_ui again before acting.`;
+  return `${message} This is also what a window that left the current desktop looks like: it is on another desktop (Space) or hidden — such windows cannot be listed, observed or clicked. If the app is still running, ${call} brings its window back; then observe_ui again before acting.`;
 }
 
 /** find_roots 按 App 找却一个 root 都没有:同一个原因,同一条出路(只在 macOS 说,ensure_app 只有那边有)。 */
@@ -127,5 +129,5 @@ export function noRootsHint(details: unknown, platform: string = process.platfor
   const d = details as { tool?: string; windows?: unknown[]; query?: { app?: string; bundleId?: string; pid?: number } } | null | undefined;
   if (platform !== 'darwin' || d?.tool !== 'find_roots' || !Array.isArray(d.windows) || d.windows.length > 0) return '';
   if (!d.query?.app && !d.query?.bundleId && !d.query?.pid) return '';
-  return '\n[hint] A running app has no roots here while all its windows are on another desktop (Space), minimized or hidden. ensure_app (by bundleId or app name) starts the app or brings its window back to the current desktop.';
+  return '\n[hint] A running app has no roots here while all its windows are on another desktop (Space) or hidden. ensure_app (by bundleId or app name) starts the app or brings its window back to the current desktop.';
 }

@@ -107,8 +107,7 @@ await build({
   stdin: {
     contents: [
       "export { executeFind, executeObserve, executeAct, ensureComputerUseSetup } from './src/vendor/bridge.ts'",
-      "export { runEnsureApp } from './src/tools.ts'",
-      "export { imageNote, expectNote, goneHint, noRootsHint, foregroundNote, scrollNote } from './src/foregroundNote.ts'",
+      "export { runEnsureApp, render, explainGone, syncSettings } from './src/tools.ts'",
     ].join('\n'),
     resolveDir: root, loader: 'ts',
   },
@@ -123,8 +122,17 @@ try { cu = await import(pathToFileURL(outfile).href) } finally { fs.rmSync(outfi
 const pctx = { cwd: root, hasUI: false, ui: { notify: () => {}, select: async () => undefined }, sessionManager: { getBranch: () => [] } }
 const text = (result) => result.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n')
 const hasImage = (result) => result.content.some((b) => b.type === 'image')
-const act = (details, actions, expect) => cu.executeAct('', { stateId: details.capture.stateId, actions, ...(expect ? { expect } : {}) }, undefined, undefined, pctx)
-const failure = async (promise) => { try { await promise } catch (error) { return error.message } assert.fail('expected the call to fail') }
+// 断言对着模型真正读到的那段文字(适配层 render 的返回值)。只验各条 note 函数的话,render 里漏接哪一条都还是绿的。
+// ⚠️不走工具的 execute:那条路会先做 helper 的自动更新检查,开发检出里的 helper 和装着的签名不同,会把装着的换掉。
+const images = []
+const tcx = { signal: undefined, collectImage: (image) => images.push(image) }
+const shown = (result, args) => { const had = images.length; result.said = cu.render(result, tcx, args); result.attached = images.length > had; return result }
+const act = async (details, actions, expect) => {
+  const args = { stateId: details.capture.stateId, actions, ...(expect ? { expect } : {}) }
+  return shown(await cu.executeAct('', args, undefined, undefined, pctx), args)
+}
+const failure = (promise) => promise.then(() => assert.fail('expected the call to fail'), (error) => error)
+const line = (said, tag) => said.split('\n').find((l) => l.startsWith(tag)) ?? ''
 const frontmost = () => ask({ cmd: 'getFrontmost' })
 const toFront = (bundleId) => execFileP('open', ['-b', bundleId]).catch(() => {})
 
@@ -144,16 +152,16 @@ try {
     if (!rootRef) await sleep(300)
   }
   assert.ok(rootRef, 'find_roots 没给出替身 App 的 @r')
-  const observe = () => cu.executeObserve('', { root: rootRef }, undefined, undefined, pctx)
+  const observe = async () => shown(await cu.executeObserve('', { root: rootRef }, undefined, undefined, pctx))
 
   // ── ① 坐标空间 ──
   let seen = await observe()
   let details = seen.details
-  assert.ok(hasImage(seen), `① 无障碍树是空的窗口,observe_ui 应自动附截图。outline:\n${details.renderedOutline}\nimageReason=${details.imageReason}`)
+  assert.ok(hasImage(seen) && seen.attached, `① 无障碍树是空的窗口,observe_ui 应自动附截图。outline:\n${details.renderedOutline}\nimageReason=${details.imageReason}`)
   assert.ok(!/row \d/.test(details.renderedOutline), '① 替身 App 的文字是画出来的,不该出现在 outline 里(否则它就不是「只能看图」的 App)')
   const { width: W, height: H } = details.capture
-  const note = cu.imageNote(details, true)
-  assert.ok(note.includes(`${W}x${H} px`) && W > 0 && H > 0, `① [image] 行应报截图尺寸,实得:${note}`)
+  const note = line(seen.said, '[image]')
+  assert.ok(note.includes(`${W}x${H} px`) && W > 0 && H > 0, `① [image] 行应报截图尺寸,实得:${seen.said}`)
   // 窗口里的点 → 截图像素:截图是整个窗口(含标题栏)按比例缩小。
   const scale = W / boot.window.w
   const titleBar = boot.window.h - boot.content.h
@@ -171,13 +179,13 @@ try {
   await sleep(1000)
   assert.equal(firstStep(details)?.delivery, 'hid', `③a 按坐标的 scroll 应是真实输入(hid),实得 ${firstStep(details)?.delivery}`)
   // ⚠️命门:看的是 App 自己数到的滚轮事件。没有这一条,「不报错」可以靠事件落到别的窗口换来。
-  assert.ok(state().scrolls > 0, '③a 对这个窗口的第一次滚动一个事件都没到替身 App')
+  assert.ok(state().scrolls > 0, '③a 对这个窗口的第一次滚动,带位移的滚轮事件一个都没到替身 App')
   assert.equal((await frontmost()).pid, boot.pid, '③a 真实输入之后替身 App 应在前台')
-  assert.ok(cu.foregroundNote(details.execution).includes('[foreground]'), '③a 抢了前台要说')
-  assert.match(cu.scrollNote([{ action: 'scroll', ...list, scrollY: 120 }], details.execution), /\[scroll\].*opposite sign/, '③a 真实滚轮输入的方向 / 距离不保证,要告诉模型')
+  assert.ok(line(cold.said, '[foreground]'), `③a 抢了前台要说,实得:${cold.said}`)
+  assert.match(line(cold.said, '[scroll]'), /opposite sign/, '③a 真实滚轮输入的方向 / 距离不保证,要告诉模型')
   console.log(`  ③a 对这个窗口的第一次滚动(目标原在后台):替身 App 收到 ${state().scrolls} 个滚轮事件`)
 
-  const outside = await failure(act(details, [{ action: 'click', x: W + 5, y: 10 }]))
+  const outside = (await failure(act(details, [{ action: 'click', x: W + 5, y: 10 }]))).message
   assert.ok(outside.includes(`look image bounds (${W}x${H})`), `① 越界校验用的尺寸应与 [image] 行一致,实得:${outside}`)
   details = (await observe()).details // 失败的那次 act_ui 让原状态过期
   details = (await act(details, [{ action: 'click', ...rail(2) }])).details
@@ -191,9 +199,9 @@ try {
   await until('② 点击本身照样送达', (s) => s.page === 1)
   assert.equal(details.execution?.verification?.status, 'failed', '② 画出来的字不在无障碍树里,expect 应判未满足')
   assert.ok(!text(checked).includes('NOT satisfied'), '② vendor 的正文里本来没有这句(有了就该删适配层那行,别说两遍)')
-  const unmet = cu.expectNote(details)
-  assert.match(unmet, /\[expect\] NOT satisfied: text "Page 2"/, `② [expect] 行应说明哪个条件没满足,实得:${unmet}`)
-  assert.match(unmet, /leave expect out/, '② 这种窗口上应劝模型别再用 expect')
+  const unmet = line(checked.said, '[expect]')
+  assert.match(unmet, /\[expect\] NOT satisfied: text "Page 2"/, `② [expect] 行应说明哪个条件没满足,实得:${checked.said}`)
+  assert.match(unmet, /prefer leaving expect out/, '② 这种窗口上应劝模型别再用 expect')
   console.log(`  ② expect 等了 ${Date.now() - t0}ms 没等到,正文补上:${unmet.trim().slice(0, 88)}…`)
 
   // ── ③b 按坐标的 scroll / drag 真的生效 ──(点色块已把列表归到顶端)
@@ -226,14 +234,25 @@ try {
   await sleep(500)
   process.kill(boot.pid, 'SIGUSR1')
   await until('④ 替身 App 把窗口收起来', (s) => !s.visible)
-  const gone = await failure(act(details, [{ action: 'click', ...rail(0) }]))
-  const hinted = cu.goneHint(gone, { bundleId: BUNDLE_ID })
-  assert.notEqual(hinted, gone, `④ act_ui 的报错应被认出来并补上出路,实得:${gone}`)
-  assert.ok(hinted.includes(`ensure_app({ bundleId: "${BUNDLE_ID}" })`), '④ 出路是一条能照抄的 ensure_app')
-  const empty = await cu.executeFind('', { pid: boot.pid }, undefined, undefined, pctx)
-  assert.match(cu.noRootsHint(empty.details), /ensure_app/, `④ find_roots 按 pid 找不到时也要指向 ensure_app,实得:${text(empty)}`)
+  const goneError = await failure(act(details, [{ action: 'click', ...rail(0) }]))
+  const gone = goneError.message
+  cu.explainGone(goneError, { stateId: details.capture.stateId })
+  assert.notEqual(goneError.message, gone, `④ act_ui 的报错应被认出来并补上出路,实得:${gone}`)
+  assert.ok(goneError.message.includes(`ensure_app({ bundleId: "${BUNDLE_ID}" })`), `④ 出路是一条能照抄的 ensure_app,实得:${goneError.message}`)
+  // 目标按 state 记:换一个没见过的 state,不该把别的 App 的 bundleId 填进去。
+  const stranger = new Error(gone)
+  cu.explainGone(stranger, { stateId: 'never-seen' })
+  assert.ok(stranger.message.includes('ensure_app') && !stranger.message.includes(BUNDLE_ID), '④ 不认识的 state 只说工具名,不猜是哪个 App')
+  const empty = shown(await cu.executeFind('', { pid: boot.pid }, undefined, undefined, pctx))
+  assert.match(line(empty.said, '[hint]'), /ensure_app/, `④ find_roots 按 pid 找不到时也要指向 ensure_app,实得:${empty.said}`)
   assert.equal(state().page, 1, '④ 报错的那一次不得有点击落下')
-  const tcx = { signal: undefined }
+  // 开着「严格后台」:不激活,说明原因,窗口和前台都不动。
+  // 走真的设置入口:只改内存里的配置对象会被 vendor 下一次重新加载冲掉(这个开关以前因此从未生效)。
+  const strict = (headless) => cu.syncSettings({ getScopeSettings: () => ({ headless }) })
+  strict(true)
+  const refused = await cu.runEnsureApp({ app: APP }, tcx, pctx).finally(() => strict(false))
+  assert.match(refused, /strict background setting forbids/, `④ 严格后台下 ensure_app 不该激活,实得:${refused}`)
+  assert.ok(!state().visible && (await frontmost()).pid !== boot.pid, '④ 严格后台下窗口不该回来、前台不该变')
   // 按路径给(临时目录里的 App 没在 LaunchServices 登记,open -b 找不到它);ensure_app 按名字那一段认出它已经在跑。
   const back = await cu.runEnsureApp({ app: APP }, tcx, pctx)
   assert.match(back, /@r\d/, `④ ensure_app 应把窗口带回来,实得:${back}`)

@@ -12,6 +12,8 @@
  *      判松了就会把字打进用户刚切过去的那个 App。
  *   5) 按坐标的 scroll / drag 与坐标点击一样是真实输入(needsForeground);按 ref 的 scroll、严格后台不变。
  *
+ *   6) 插件设置(严格后台等)注入之后,vendor 再加载一次配置也得还在 —— 它每次工具调用都重新加载。
+ *
  * 用法: node scripts/actions.check.mjs
  */
 import assert from 'node:assert/strict';
@@ -33,6 +35,34 @@ try {
   rmSync(temp, { recursive: true, force: true });
 }
 const { prepareAction, followsFocus, needsFrontmostProbe, targetIsFrontmost } = actions;
+
+// 6) 设置要活过 vendor 的重新加载。syncSettings 以前只改内存里的配置对象,而每次工具调用的 ensureReady 都会
+// loadComputerUseConfig(整个对象换新)—— 设置页里的「严格后台」因此从未生效,[foreground] 那行还在劝用户去开它。
+{
+  const dist = path.join(root, 'tangu-plugins/computer-use/dist');
+  const outfile = path.join(dist, `.settings-check-${process.pid}.mjs`); // 得落在 dist 里,原因见 untargeted-input.check.mjs
+  let settings;
+  try {
+    await build({
+      stdin: { contents: "export { syncSettings } from './src/tools.ts'\nexport { getComputerUseConfig, loadComputerUseConfig } from './src/vendor/config.ts'", resolveDir: root, loader: 'ts' },
+      bundle: true, platform: 'node', format: 'esm', target: 'node20', outfile, logLevel: 'silent', external: ['node:*'],
+      alias: { '@earendil-works/pi-coding-agent': path.join(root, 'src/pi-compat.ts') },
+      banner: { js: "import { createRequire as __createRequire } from 'node:module';\nconst require = __createRequire(import.meta.url);" },
+    });
+    settings = await import(pathToFileURL(outfile).href);
+  } finally {
+    rmSync(outfile, { force: true });
+  }
+  const store = (values) => ({ getScopeSettings: () => values });
+  settings.syncSettings(store({ headless: true, cursor_overlay: false, browser_use: false, managed_browser: 'helium' }));
+  settings.loadComputerUseConfig(os.tmpdir()); // 每次工具调用都会发生的那一下
+  assert.deepEqual({ ...settings.getComputerUseConfig() }, { browser_use: false, headless: true, cursor_overlay: false, managed_browser: 'helium' }, '设置在 vendor 重新加载配置之后必须还在');
+  settings.syncSettings(store({ headless: false }));
+  settings.loadComputerUseConfig(os.tmpdir());
+  assert.equal(settings.getComputerUseConfig().headless, false, '关掉严格后台也要跟得上');
+  assert.equal(settings.getComputerUseConfig().cursor_overlay, false, '这次没给的项保持上一次的值');
+  console.log('✓ 插件设置(严格后台等)活过 vendor 的配置重新加载');
+}
 
 const node = (over = {}) => ({ ref: '@e1', wireRef: 'w1', role: 'AXButton', actions: ['AXPress'], canPress: true, children: [], rect: { x: 100, y: 200, w: 40, h: 20 }, ...over });
 const nodes = { '@e1': node(), '@e2': node({ ref: '@e2', wireRef: 'w2', role: 'AXScrollArea', actions: [], canPress: false }) };
