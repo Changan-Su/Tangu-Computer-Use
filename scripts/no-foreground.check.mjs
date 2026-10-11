@@ -113,7 +113,7 @@ async function unitTests() {
 
   // 按坐标的滚动走了前台 = 真实滚轮输入:方向 / 距离不保证,要说;按 ref 的、没走前台的不说。
   const wheel = [{ action: 'click', x: 1, y: 2 }, { action: 'scroll', x: 500, y: 300, scrollY: 300 }];
-  assert.match(scrollNote(wheel, { steps: [{ delivery: 'hid' }, { delivery: 'hid' }] }), /\[scroll\].*opposite sign/, 'coordinate scroll in the foreground → note');
+  assert.match(scrollNote(wheel, { steps: [{ delivery: 'hid' }, { delivery: 'hid' }] }), /\[scroll\].*positive scrollY scrolls down.*off the screenshot/, 'coordinate scroll in the foreground → note');
   assert.match(scrollNote([{ action: 'moveMouse', x: 1, y: 2 }, { action: 'scroll', scrollY: 3 }], { deliveryPolicy: 'foreground' }), /\[scroll\]/, 'a scroll that reuses the pointer position counts');
   // 按这一步实际怎么送达判,不按写没写 ref:走无障碍动作的不说,pictureOnly 的 ref 落成真实输入的要说。
   assert.equal(scrollNote([{ action: 'scroll', ref: '@e2', scrollY: 3 }], { steps: [{ delivery: 'ax' }] }), '', 'ref scroll done through accessibility → empty');

@@ -71,11 +71,13 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
   only while the target window is still frontmost, otherwise it fails and you click again first. Strict
   background mode never follows the focus; give `ref` or `x`/`y` there.
 - `scroll` takes `ref` or `x`/`y`. With neither, it scrolls where the previous `click`/`moveMouse` of
-  the same call landed; on its own it fails. Positive `scrollY` is meant to scroll down. A `scroll`
-  or `drag` given by coordinates (or by a `pictureOnly` ref) is real pointer input and takes the foreground, like a coordinate
-  click on something that is not a control. Because it is real wheel input, the Mac's scroll settings
-  and mouse utilities apply: the distance is approximate and the direction can come out reversed. Go
-  by the screenshot, and send the opposite sign if the view moved the wrong way or not at all.
+  the same call landed; on its own it fails. Positive `scrollY` scrolls down. For a coordinate scroll
+  on macOS the distance is in the screenshot's pixels, the same scale as `x`/`y`: to bring something
+  600 px further down the screenshot into view, scroll 600. A `scroll` or `drag` given by coordinates
+  (or by a `pictureOnly` ref) is real pointer input and takes the foreground, like a coordinate click
+  on something that is not a control. Because it is real wheel input, mouse
+  utilities on the Mac apply to it and the distance is approximate: read where the view ended up off
+  the screenshot the result attaches before scrolling again.
 - Background is attempted first; the foreground is taken only when an action truly needs it, and the
   result then carries a `[foreground]` line. **When you see that line, tell the user** — you moved
   their focus. Users who never want that can turn on the plugin's "strict background" setting.

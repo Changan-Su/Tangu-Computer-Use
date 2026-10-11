@@ -74,7 +74,7 @@ const uiAction = {
     obj({ action: { const: 'setText' }, ref: S('Editable outline ref'), text: { type: 'string' } }, ['action', 'ref', 'text']),
     obj({ action: { const: 'typeText' }, ref: S('Omit to type into the current focus: needs a click earlier in this same call, or a target window that is already frontmost'), text: { type: 'string' } }, ['action', 'text']),
     obj({ action: { const: 'keypress' }, ref: S('Omit to send keys to the current focus: needs a click earlier in this same call, or a target window that is already frontmost'), keys: { type: 'array', items: { type: 'string' }, minItems: 1 } }, ['action', 'keys']),
-    obj({ action: { const: 'scroll' }, ref: S('Outline ref to scroll. Without ref or x/y it scrolls where the previous click/moveMouse of this same call landed'), ...point, scrollX: { type: 'number' }, scrollY: { type: 'number' } }, ['action']),
+    obj({ action: { const: 'scroll' }, ref: S('Outline ref to scroll. Without ref or x/y it scrolls where the previous click/moveMouse of this same call landed'), ...point, scrollX: N('Horizontal distance. For a coordinate scroll on macOS: pixels of the latest screenshot, the same scale as x / y'), scrollY: N('Vertical distance, positive scrolls down. For a coordinate scroll on macOS: pixels of the latest screenshot, the same scale as x / y') }, ['action']),
     obj({ action: { const: 'drag' }, path: { type: 'array', items: obj(point, ['x', 'y']), minItems: 2 } }, ['action', 'path']),
     obj({ action: { const: 'moveMouse' }, ...point }, ['action', 'x', 'y']),
   ],
@@ -253,7 +253,8 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
   try {
     await open(true);
   } catch (e: any) {
-    return `Could not launch ${name}: ${e?.stderr?.toString().trim() || e?.message || e}. Check the app/bundleId is installed.`;
+    // 已经在跑的 App 按这个名字打不开(从没登记过的位置启动的)不要紧:接着找它的窗口就是了。
+    if (!wasRunning) return `Could not launch ${name}: ${e?.stderr?.toString().trim() || e?.message || e}. Check the app/bundleId is installed.`;
   }
   const started = Date.now();
   let activated = false;

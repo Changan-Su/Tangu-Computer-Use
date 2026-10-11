@@ -155,6 +155,10 @@ try {
   const observe = async () => shown(await cu.executeObserve('', { root: rootRef }, undefined, undefined, pctx))
 
   // ── ① 坐标空间 ──
+  // 点名要图(mode: 'visual')时给的是另一张更大的图,坐标就按那一张算:[image] 行报的必须是它自己的尺寸。
+  // 真模型实测(gpt-6-luna,10-11):照着这行,对 1520x1144 和 899x677 两种图点出来的坐标都落在色块正中。
+  const big = shown(await cu.executeObserve('', { root: rootRef, mode: 'visual' }, undefined, undefined, pctx))
+  assert.ok(big.attached && line(big.said, '[image]').includes(`${big.details.capture.width}x${big.details.capture.height} px`), `① 点名要图时 [image] 行报的应是那张图自己的尺寸,实得:${big.said}`)
   let seen = await observe()
   let details = seen.details
   assert.ok(hasImage(seen) && seen.attached, `① 无障碍树是空的窗口,observe_ui 应自动附截图。outline:\n${details.renderedOutline}\nimageReason=${details.imageReason}`)
@@ -182,7 +186,7 @@ try {
   assert.ok(state().scrolls > 0, '③a 对这个窗口的第一次滚动,带位移的滚轮事件一个都没到替身 App')
   assert.equal((await frontmost()).pid, boot.pid, '③a 真实输入之后替身 App 应在前台')
   assert.ok(line(cold.said, '[foreground]'), `③a 抢了前台要说,实得:${cold.said}`)
-  assert.match(line(cold.said, '[scroll]'), /opposite sign/, '③a 真实滚轮输入的方向 / 距离不保证,要告诉模型')
+  assert.match(line(cold.said, '[scroll]'), /off the screenshot/, '③a 真实滚轮输入的距离不保证,要提醒模型看图')
   console.log(`  ③a 对这个窗口的第一次滚动(目标原在后台):替身 App 收到 ${state().scrolls} 个滚轮事件`)
 
   const outside = (await failure(act(details, [{ action: 'click', x: W + 5, y: 10 }]))).message
@@ -190,7 +194,7 @@ try {
   details = (await observe()).details // 失败的那次 act_ui 让原状态过期
   details = (await act(details, [{ action: 'click', ...rail(2) }])).details
   await until('① 点第 3 个色块后页码变成 3', (s) => s.page === 2)
-  console.log(`  ① 截图 ${W}x${H}(窗口 ${boot.window.w}x${boot.window.h} 点),按截图像素点第 3 个色块 → 第 3 页`)
+  console.log(`  ① 截图 ${W}x${H}(点名要图时 ${big.details.capture.width}x${big.details.capture.height};窗口 ${boot.window.w}x${boot.window.h} 点),按截图像素点第 3 个色块 → 第 3 页`)
 
   // ── ② expect 没满足要进正文 ──
   const t0 = Date.now()
@@ -211,23 +215,33 @@ try {
   await sleep(500)
   console.log(`  ③b 旧路(投给进程):替身 App 收到 ${state().scrolls - before0.scrolls} 个滚轮事件,滚动位置 ${before0.offset} → ${state().offset}`)
   details = (await observe()).details
-  // 方向不写死:真实滚轮输入要过系统设置和鼠标工具(Mos 之类会反向并放大)。一正一负各发一次,
-  // 从顶端出发必有一次被顶住、另一次滚动;两次方向必须相反。
+  // 正值 = 往下,量大致对得上。真实滚轮输入要过鼠标工具:Mos 的反向和放大由 src/wheel.ts 抵掉(这台机器上不抵的话
+  // +300 一动不动、-300 滚 867)。别的改滚轮的工具它不认识,这里会红 —— 那是真的发现,不是检查坏了。
   const top = state().offset
   details = (await act(details, [{ action: 'scroll', ...list, scrollY: 300 }])).details
-  await sleep(900)
-  const afterPlus = state().offset
-  details = (await act(details, [{ action: 'scroll', ...list, scrollY: -300 }])).details
-  await sleep(900)
-  const afterMinus = state().offset
-  assert.ok(afterPlus !== top || afterMinus !== afterPlus, `③b 一正一负两次按坐标 scroll,列表都没动(${top} → ${afterPlus} → ${afterMinus})`)
-  assert.ok(!(afterPlus > top && afterMinus > afterPlus), '③b 正负两个方向不该往同一边滚')
-  const reversed = afterPlus === top && afterMinus > afterPlus
+  await sleep(1500)
+  const down = state().offset - top
+  details = (await act(details, [{ action: 'scroll', ...list, scrollY: -150 }])).details
+  await sleep(1500)
+  const up = state().offset - top - down
+  // 滚动量和 x / y 一个单位:截图里的像素。App 那边记的是屏幕上的点,所以期望值要按截图的缩放折算。
+  const want = (px, width) => px * boot.window.w / width
+  const near = (got, expected) => Math.sign(got) === Math.sign(expected) && Math.abs(got) > Math.abs(expected) * 0.65 && Math.abs(got) < Math.abs(expected) * 1.35
+  assert.ok(near(down, want(300, W)), `③b scrollY +300(截图像素)应往下滚约 ${Math.round(want(300, W))} 点,实得 ${down}(方向反了或量差太多 = 有改滚轮的工具而 src/wheel.ts 没抵掉)`)
+  assert.ok(near(up, want(-150, W)), `③b scrollY -150 应往回滚约 ${Math.round(-want(150, W))} 点,实得 ${up}`)
+  // 换一张缩放不同的截图(点名要的大图),同样的「截图像素」要折成不同的点数 —— 真模型对着 2 倍的大图要 1800,以前滚了两倍远。
+  const wide = shown(await cu.executeObserve('', { root: rootRef, mode: 'visual' }, undefined, undefined, pctx))
+  const k = wide.details.capture.width / boot.window.w
+  const here = state().offset
+  details = (await act(wide.details, [{ action: 'scroll', x: Math.round(list.x / scale * k), y: Math.round(list.y / scale * k), scrollY: 600 }])).details
+  await sleep(1500)
+  const far = state().offset - here
+  assert.ok(near(far, want(600, wide.details.capture.width)), `③b 对着 ${wide.details.capture.width} 宽的大图 scrollY +600 应滚约 ${Math.round(want(600, wide.details.capture.width))} 点,实得 ${far}(滚动量没按截图的缩放折算)`)
   const dragsBefore = state().drags
   details = (await act(details, [{ action: 'drag', path: [list, { x: list.x, y: list.y + 80 }] }])).details
   await until('③b drag 真的拖到了', (s) => s.drags > dragsBefore)
   assert.equal(firstStep(details)?.delivery, 'hid', '③b drag 应是真实输入(hid)')
-  console.log(`  ③b 新路(真实输入):scrollY +300 → ${afterPlus - top},-300 → ${afterMinus - afterPlus}${reversed ? '(这台机器上方向被系统设置或鼠标工具反转了,量也变了 —— [scroll] 那行说的就是这个)' : ''};drag 收到 ${state().drags - dragsBefore} 次拖动事件`)
+  console.log(`  ③b 新路(真实输入):对着 ${W} 宽的截图 scrollY +300 → 往下 ${down} 点(应约 ${Math.round(want(300, W))}),-150 → ${up};对着 ${wide.details.capture.width} 宽的大图 +600 → ${far} 点(应约 ${Math.round(want(600, wide.details.capture.width))});drag 收到 ${state().drags - dragsBefore} 次拖动事件`)
 
   // ── ④ 窗口不在当前桌面 ──
   if (before.bundleId) await toFront(before.bundleId) // 用户切回了原来的 App

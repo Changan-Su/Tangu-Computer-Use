@@ -13,6 +13,7 @@
  *   5) 按坐标的 scroll / drag 与坐标点击一样是真实输入(needsForeground);按 ref 的 scroll、严格后台不变。
  *
  *   6) 插件设置(严格后台等)注入之后,vendor 再加载一次配置也得还在 —— 它每次工具调用都重新加载。
+ *   7) Mos 对滚轮的改写(反向、按 speed 放大)怎么抵:读它的设置 → 发出去的量。
  *
  * 用法: node scripts/actions.check.mjs
  */
@@ -62,6 +63,32 @@ const { prepareAction, followsFocus, needsFrontmostProbe, targetIsFrontmost } = 
   assert.equal(settings.getComputerUseConfig().headless, false, '关掉严格后台也要跟得上');
   assert.equal(settings.getComputerUseConfig().cursor_overlay, false, '这次没给的项保持上一次的值');
   console.log('✓ 插件设置(严格后台等)活过 vendor 的配置重新加载');
+}
+
+// 7) src/wheel.ts:Mos 的设置 → 发给 helper 的滚动量。实测的那组设置(reverse=1 / smooth=1 / speed=3)下 -100 滚 +267。
+{
+  const outfile = path.join(os.tmpdir(), `cu-wheel-check-${process.pid}.mjs`);
+  let wheel;
+  try {
+    await build({ entryPoints: [path.join(root, 'src/wheel.ts')], bundle: true, platform: 'node', format: 'esm', target: 'node20', outfile, logLevel: 'silent' });
+    wheel = await import(pathToFileURL(outfile).href);
+  } finally {
+    rmSync(outfile, { force: true });
+  }
+  const { wheelFixFromMos, applyWheelFix } = wheel;
+  const prefs = (o) => `{\n${Object.entries(o).map(([k, v]) => `    ${k} = ${v};`).join('\n')}\n}`;
+  const measured = wheelFixFromMos(prefs({ duration: '"3.9"', precision: 1, reverse: 1, smooth: 1, speed: 3, step: 35 }));
+  assert.deepEqual(measured, { sign: -1, gain: 3 }, '反向 + 平滑、speed 3');
+  assert.equal(applyWheelFix(300, measured), -100, '要往下 300 → 发 -100(Mos 翻回来再乘 3)');
+  assert.equal(applyWheelFix(-150, measured), 50);
+  assert.equal(applyWheelFix(1, measured), -1, '非零的量不会被除成零');
+  assert.equal(applyWheelFix(0, measured), 0, '零还是零(垫的那一下不受影响)');
+  assert.deepEqual(wheelFixFromMos(prefs({ reverse: 1, smooth: 0, speed: 3 })), { sign: -1, gain: 1 }, '只开反向:只翻方向');
+  assert.deepEqual(wheelFixFromMos(prefs({ reverse: 0, smooth: 1, speed: '"2.5"' })), { sign: 1, gain: 2.5 }, '只开平滑:只缩量;带引号的小数也认');
+  assert.deepEqual(wheelFixFromMos(prefs({ reverse: 0, smooth: 0, speed: 3 })), { sign: 1, gain: 1 }, '都没开:不动');
+  assert.deepEqual(wheelFixFromMos(''), { sign: 1, gain: 1 }, '读不出设置:不动');
+  assert.equal(applyWheelFix(300, { sign: 1, gain: 1 }), 300);
+  console.log('✓ Mos 对滚轮的改写:按它的设置抵掉方向和放大');
 }
 
 const node = (over = {}) => ({ ref: '@e1', wireRef: 'w1', role: 'AXButton', actions: ['AXPress'], canPress: true, children: [], rect: { x: 100, y: 200, w: 40, h: 20 }, ...over });

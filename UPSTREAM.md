@@ -106,15 +106,29 @@ replay it** (`npm run check:actions`, part of `npm run check`, goes red if it is
   alone. Do not move this to `canRetryInForeground`: escalating on `unknown` would post the scroll twice
   wherever the background one did land. Measured on a self-drawn AppKit view (`npm run check:vision`
   prints it every run): a pid-posted wheel event reaches the view 0 times, frontmost or not.
-- `primeWheel()` in `bridge.ts`, called from `helperAct()` before a foreground coordinate scroll (macOS):
-  one zero-distance wheel event to the same point. With a smooth-scrolling mouse utility running (Mos),
-  the first wheel event aimed at a window that was not the previous scroll target never reaches the app
-  (0 events, 6 runs out of 6, even seconds after the app came forward); the next one does. The primer
-  absorbs that and scrolls nothing; without such a utility it is a no-op costing one helper round trip.
-  The same utilities reverse and rescale the real scroll (measured: `scrollY` -300 moved +867 px), which
-  cannot be undone from here — `scrollNote()` in `src/foregroundNote.ts` tells the model instead. The real
-  fix is native: mark the helper's wheel events as continuous (trackpad-like) so these utilities pass
-  them through. That needs a protocol bump and a helper we can test with input permission.
+- `scrollInPoints()` in `bridge.ts`, applied in `dispatchUiAction()` (macOS, coordinate scroll): the distance
+  is given in the screenshot's pixels, like `x` / `y`, and converted to the screen points the helper scrolls
+  in (`framePoints.w / look.image.width`). Upstream passes it through raw, so the same number means twice
+  the distance on a 2x explicit capture and half on a large window's look image. Measured with a real
+  model: 1800 against a 1520 px capture of a 760 pt window went twice as far as meant. Windows and Linux
+  are untouched (their wheel units are not pixels).
+- `wheelAction()` in `bridge.ts`, called from `helperAct()` before a foreground coordinate scroll (macOS).
+  It imports `applyWheelFix` / `wheelFix` from `src/wheel.ts` (the one import that reaches out of vendor):
+  - It first sends one zero-distance wheel event to the same point. With a smooth-scrolling mouse utility
+    running (Mos), the first wheel event aimed at a window that was not the previous scroll target never
+    reaches the app (0 events, 6 runs out of 6, even seconds after the app came forward); the next one
+    does. The primer absorbs that and scrolls nothing; without such a utility it is a no-op costing one
+    helper round trip.
+  - It then undoes what Mos does to the real one. Mos treats the helper's wheel event as a mouse wheel:
+    with "reverse" on it flips the direction, with "smooth" on it multiplies the distance by `speed`
+    (measured with reverse=1 / smooth=1 / speed=3: `scrollY` -35 / -105 / -300 / -700 moved +84 / +287 /
+    +867 / +2067 px, i.e. about 3·|d| − 33, direction reversed). `src/wheel.ts` reads Mos's settings
+    (`defaults read com.caldis.Mos`, only while Mos is running) and sends `-d / speed` instead. Only Mos is
+    known, only its global settings are read (not its per-app exceptions), and reverse-without-smooth is
+    untested. `scrollNote()` in `src/foregroundNote.ts` still tells the model to go by the screenshot.
+  - The real fix is native: post wheel events that carry scroll phases (trackpad-like), which these
+    utilities pass through untouched. That needs a protocol bump and a helper we can test with input
+    permission; when it lands, delete `src/wheel.ts`.
 
 `src/tools.ts` mirrors it (scroll accepts `x`/`y`; the `ref` descriptions state the same-call rule).
 Real-machine green: `npm run check:untargeted` drives the real `bridge.ts` against Calculator (background
@@ -129,6 +143,13 @@ facts vendor only writes into `details` (`imageNote` = screenshot size and coord
 unmet / pre-existing postcondition, `scrollNote` = wheel direction and distance are not guaranteed) and
 extends two vendor messages (`goneHint`, `noRootsHint` = a window
 that is not on the current desktop). If upstream starts printing any of these itself, drop ours.
+
+Two image sizes reach the model for the same window: 900 px on the long side for the automatic look image,
+1600 for an explicit `mode: "visual"` one, each with its own coordinate space. Do not unify or cap them on the
+theory that the model's provider rescales large images: measured 2026-10-11 with gpt-6-luna against the stand-in
+app (`harness-runs/2026-10-11/`), clicks read off the 1520x1144 capture landed on the centre of the target
+(64,382 / 64,384 for a centre at 64,384), same as off 1020x767 and 899x677. The `[image]` line stating the
+size is what makes that work. A short-side cap of 768 was tried and removed.
 
 ### PACKAGE_ROOT — no longer patched, but still guarded
 `platform/{macos,windows,linux}/helper.ts` locate `scripts/setup-helper.mjs` via

@@ -68,7 +68,7 @@ export function imageNote(details: unknown, attached: boolean): string {
   const capture = (details as { capture?: { width?: unknown; height?: unknown } } | null | undefined)?.capture;
   const w = Number(capture?.width), h = Number(capture?.height);
   if (!attached || !(w > 0) || !(h > 0)) return '';
-  return `\n[image] The attached screenshot is ${w}x${h} px and shows only the target window, scaled down. x / y for act_ui (click, moveMouse, scroll, drag) are pixels in this screenshot, origin top-left: x 0-${w - 1}, y 0-${h - 1}. Read positions straight off it; do not convert to screen points or to the window frame size.`;
+  return `\n[image] The attached screenshot is ${w}x${h} px and shows only the target window. x / y for act_ui (click, moveMouse, scroll, drag) are pixels in this screenshot, origin top-left: x 0-${w - 1}, y 0-${h - 1}; the scrollX / scrollY distance of a coordinate scroll is in the same pixels. Read positions and distances straight off it; do not convert to screen points or to the window frame size.`;
 }
 
 interface Verification { status?: string; text?: string; role?: string; value?: string; gone?: boolean; timeoutMs?: number }
@@ -96,18 +96,18 @@ export function expectNote(details: unknown): string {
 }
 
 /**
- * 按坐标的滚动是真实的滚轮输入,会过系统的滚动设置和鼠标工具。真机实测(装着 Mos):scrollY -300 滚了 +867 像素,
- * 方向反了、量放大近三倍。模型若认定「正值 = 往下」,在列表顶端发一个被反转的滚动就什么都不动,会当成滚动坏了。
+ * 走真实输入的滚动(按坐标的,或 ref 落成坐标的)会过鼠标工具:量不保证,个别工具还会把方向翻过来。
+ * 装着 Mos 的机器上方向和倍数由 src/wheel.ts 抵掉了(不抵的话 scrollY -300 滚 +867 像素),所以这里只陈述约定、
+ * 提醒看图,不再劝模型「不对就换符号」—— 方向本来是对的时候,那句话反而让模型自己把符号翻了(真模型实测一次)。
  * 按「这一步实际怎么送达」判:execution.steps 与 actions 逐项对应(失败后面的没执行、没有对应项)。
  * 走无障碍动作的 scroll 不说;按 ref 给、但 ref 是只有坐标的节点(pictureOnly)而走了真实输入的照样说。
- * ponytail:每次都说「可能反向」。根治是让 helper 把滚轮事件标成连续滚动(触控板那类),这些工具就不碰它 —— 要改原生、升协议号。
  */
 export function scrollNote(actions: unknown, execution: unknown): string {
   const list = Array.isArray(actions) ? actions as Array<{ action?: string }> : [];
   const exec = execution as ExecStep | undefined;
   const steps = exec && Array.isArray(exec.steps) && exec.steps.length ? exec.steps : undefined;
   if (!list.some((a, i) => a?.action === 'scroll' && tookForeground(steps ? steps[i] : exec))) return '';
-  return '\n[scroll] This scroll went out as real wheel input, so the Mac\'s scroll settings and any mouse utility (smooth scrolling, reversed direction) apply to it: the distance is approximate and the direction can come out reversed. Go by the screenshot: if the view moved the wrong way, or did not move at all, send the opposite sign.';
+  return '\n[scroll] This scroll went out as real wheel input: positive scrollY scrolls down. The distance is approximate, and a mouse utility on this Mac may change the distance or the direction, so read where the view ended up off the screenshot before scrolling again.';
 }
 
 const TARGET_GONE = 'The current controlled window is no longer available';
