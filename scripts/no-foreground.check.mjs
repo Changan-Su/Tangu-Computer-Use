@@ -64,14 +64,16 @@ async function unitTests() {
   // 下面四条来自 Forsion 反馈 55b984eb(微信:无障碍树是空的,只能看截图按坐标操作)。
   // 截图的坐标空间:只在这次结果附了截图时说;尺寸取 details.capture。
   const capture = { capture: { width: 900, height: 564 } };
-  const image = imageNote(capture, true);
+  const image = imageNote(capture, true, 'darwin');
   assert.match(image, /\[image\].*900x564/, 'attached screenshot → its size');
   assert.match(image, /x 0-899, y 0-563/, 'valid range is stated');
   assert.match(image, /pixels in this screenshot/, 'coordinate space is stated');
+  assert.match(image, /scrollX \/ scrollY distance.*same pixels/, 'macOS: scroll distance uses the same pixels');
+  assert.doesNotMatch(imageNote(capture, true, 'win32'), /scrollX/, 'elsewhere the distance is not converted, so it is not claimed');
   assert.equal(imageNote(capture, false), '', 'no screenshot attached this time → empty');
   assert.equal(imageNote({ capture: { width: 0, height: 0 } }, true), '', 'outline-only look → empty');
   assert.equal(imageNote(undefined, true), '', 'no details → empty');
-  console.log('✓ unit: imageNote 判据 6 项全过');
+  console.log('✓ unit: imageNote 判据 8 项全过');
 
   // expect 的结果:没满足要说、本来就满足要说、满足了不说。
   const exec = (verification, imageReason) => ({ execution: { verification }, imageReason });
@@ -113,17 +115,18 @@ async function unitTests() {
 
   // 按坐标的滚动走了前台 = 真实滚轮输入:方向 / 距离不保证,要说;按 ref 的、没走前台的不说。
   const wheel = [{ action: 'click', x: 1, y: 2 }, { action: 'scroll', x: 500, y: 300, scrollY: 300 }];
-  assert.match(scrollNote(wheel, { steps: [{ delivery: 'hid' }, { delivery: 'hid' }] }), /\[scroll\].*positive scrollY scrolls down.*off the screenshot/, 'coordinate scroll in the foreground → note');
-  assert.match(scrollNote([{ action: 'moveMouse', x: 1, y: 2 }, { action: 'scroll', scrollY: 3 }], { deliveryPolicy: 'foreground' }), /\[scroll\]/, 'a scroll that reuses the pointer position counts');
+  assert.match(scrollNote(wheel, { steps: [{ delivery: 'hid' }, { delivery: 'hid' }] }, 'darwin'), /\[scroll\].*positive scrollY scrolls down.*off the screenshot/, 'coordinate scroll in the foreground → note');
+  assert.match(scrollNote([{ action: 'moveMouse', x: 1, y: 2 }, { action: 'scroll', scrollY: 3 }], { deliveryPolicy: 'foreground' }, 'darwin'), /\[scroll\]/, 'a scroll that reuses the pointer position counts');
   // 按这一步实际怎么送达判,不按写没写 ref:走无障碍动作的不说,pictureOnly 的 ref 落成真实输入的要说。
-  assert.equal(scrollNote([{ action: 'scroll', ref: '@e2', scrollY: 3 }], { steps: [{ delivery: 'ax' }] }), '', 'ref scroll done through accessibility → empty');
-  assert.match(scrollNote([{ action: 'scroll', ref: '@e2', scrollY: 3 }], { steps: [{ delivery: 'hid' }] }), /\[scroll\]/, 'ref scroll that resolved to real input → note');
-  assert.equal(scrollNote([{ action: 'click', x: 1, y: 2 }, { action: 'scroll', ref: '@e2', scrollY: 3 }], { steps: [{ delivery: 'hid' }, { delivery: 'ax' }] }), '', 'another step took the foreground, the scroll did not → empty');
-  assert.equal(scrollNote(wheel, { steps: [{ delivery: 'hid' }] }), '', 'the batch stopped before the scroll ran → empty');
-  assert.equal(scrollNote(wheel, { steps: [{ delivery: 'ax' }, { delivery: 'pid', deliveryPolicy: 'background' }] }), '', 'nothing took the foreground (strict background) → empty');
-  assert.equal(scrollNote([{ action: 'click', x: 1, y: 2 }], { delivery: 'hid' }), '', 'no scroll → empty');
-  assert.equal(scrollNote(undefined, { delivery: 'hid' }), '', 'no actions → empty');
-  console.log('✓ unit: scrollNote 判据 9 项全过');
+  assert.equal(scrollNote([{ action: 'scroll', ref: '@e2', scrollY: 3 }], { steps: [{ delivery: 'ax' }] }, 'darwin'), '', 'ref scroll done through accessibility → empty');
+  assert.match(scrollNote([{ action: 'scroll', ref: '@e2', scrollY: 3 }], { steps: [{ delivery: 'hid' }] }, 'darwin'), /\[scroll\]/, 'ref scroll that resolved to real input → note');
+  assert.equal(scrollNote([{ action: 'click', x: 1, y: 2 }, { action: 'scroll', ref: '@e2', scrollY: 3 }], { steps: [{ delivery: 'hid' }, { delivery: 'ax' }] }, 'darwin'), '', 'another step took the foreground, the scroll did not → empty');
+  assert.equal(scrollNote(wheel, { steps: [{ delivery: 'hid' }] }, 'darwin'), '', 'the batch stopped before the scroll ran → empty');
+  assert.equal(scrollNote(wheel, { steps: [{ delivery: 'ax' }, { delivery: 'pid', deliveryPolicy: 'background' }] }, 'darwin'), '', 'nothing took the foreground (strict background) → empty');
+  assert.equal(scrollNote([{ action: 'click', x: 1, y: 2 }], { delivery: 'hid' }, 'darwin'), '', 'no scroll → empty');
+  assert.equal(scrollNote(undefined, { delivery: 'hid' }, 'darwin'), '', 'no actions → empty');
+  assert.equal(scrollNote(wheel, { steps: [{ delivery: 'hid' }, { delivery: 'hid' }] }, 'win32'), '', 'not macOS → empty');
+  console.log('✓ unit: scrollNote 判据 10 项全过');
 }
 
 async function frontmostBundleId() {

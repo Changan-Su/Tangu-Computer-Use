@@ -61,7 +61,12 @@ const { prepareAction, followsFocus, needsFrontmostProbe, targetIsFrontmost } = 
   settings.syncSettings(store({ headless: false }));
   settings.loadComputerUseConfig(os.tmpdir());
   assert.equal(settings.getComputerUseConfig().headless, false, '关掉严格后台也要跟得上');
-  assert.equal(settings.getComputerUseConfig().cursor_overlay, false, '这次没给的项保持上一次的值');
+  assert.equal(process.env.PI_COMPUTER_USE_CURSOR_OVERLAY, undefined, '这次没给的项:上次写的环境变量撤掉');
+  assert.equal(settings.getComputerUseConfig().cursor_overlay, true, '撤掉之后回到缺省值');
+  process.env.PI_COMPUTER_USE_BROWSER_USE = 'false'; // 不是 syncSettings 写的(用户自己设的)
+  settings.syncSettings(store({}));
+  assert.equal(process.env.PI_COMPUTER_USE_BROWSER_USE, 'false', '不是我们写的环境变量不碰');
+  delete process.env.PI_COMPUTER_USE_BROWSER_USE;
   console.log('✓ 插件设置(严格后台等)活过 vendor 的配置重新加载');
 }
 
@@ -75,19 +80,29 @@ const { prepareAction, followsFocus, needsFrontmostProbe, targetIsFrontmost } = 
   } finally {
     rmSync(outfile, { force: true });
   }
-  const { wheelFixFromMos, applyWheelFix } = wheel;
+  const { parseMos, wheelFixFor, applyWheelFix } = wheel;
   const prefs = (o) => `{\n${Object.entries(o).map(([k, v]) => `    ${k} = ${v};`).join('\n')}\n}`;
-  const measured = wheelFixFromMos(prefs({ duration: '"3.9"', precision: 1, reverse: 1, smooth: 1, speed: 3, step: 35 }));
+  const fixFor = (globals, apps = [], exe) => wheelFixFor(parseMos(prefs(globals), JSON.stringify(apps)), exe);
+  const measured = fixFor({ duration: '"3.9"', precision: 1, reverse: 1, smooth: 1, speed: 3, step: 35, whitelist: 0 });
   assert.deepEqual(measured, { sign: -1, gain: 3 }, '反向 + 平滑、speed 3');
   assert.equal(applyWheelFix(300, measured), -100, '要往下 300 → 发 -100(Mos 翻回来再乘 3)');
   assert.equal(applyWheelFix(-150, measured), 50);
   assert.equal(applyWheelFix(1, measured), -1, '非零的量不会被除成零');
   assert.equal(applyWheelFix(0, measured), 0, '零还是零(垫的那一下不受影响)');
-  assert.deepEqual(wheelFixFromMos(prefs({ reverse: 1, smooth: 0, speed: 3 })), { sign: -1, gain: 1 }, '只开反向:只翻方向');
-  assert.deepEqual(wheelFixFromMos(prefs({ reverse: 0, smooth: 1, speed: '"2.5"' })), { sign: 1, gain: 2.5 }, '只开平滑:只缩量;带引号的小数也认');
-  assert.deepEqual(wheelFixFromMos(prefs({ reverse: 0, smooth: 0, speed: 3 })), { sign: 1, gain: 1 }, '都没开:不动');
-  assert.deepEqual(wheelFixFromMos(''), { sign: 1, gain: 1 }, '读不出设置:不动');
+  assert.deepEqual(fixFor({ reverse: 1, smooth: 0, speed: 3 }), { sign: -1, gain: 1 }, '只开反向:只翻方向');
+  assert.deepEqual(fixFor({ reverse: 0, smooth: 1, speed: '"2.5"' }), { sign: 1, gain: 2.5 }, '只开平滑:只缩量;带引号的小数也认');
+  assert.deepEqual(fixFor({ reverse: 0, smooth: 0, speed: 3 }), { sign: 1, gain: 1 }, '都没开:不动');
+  assert.deepEqual(wheelFixFor(parseMos('', 'not json')), { sign: 1, gain: 1 }, '读不出设置:不动');
   assert.equal(applyWheelFix(300, { sign: 1, gain: 1 }), 300);
+  // 分应用:照 Mos 自己的规则。清单里勾了「继承」的用全局;没勾的用它自己的;白名单开着时清单外的 App 它不碰。
+  const on = { reverse: 1, smooth: 1, speed: 3, whitelist: 0 };
+  const app = (over) => ({ path: '/Applications/A.app/Contents/MacOS/A', inherit: true, scrollBasic: { smooth: false, reverse: false }, scrollAdvanced: { speed: 5 }, ...over });
+  assert.deepEqual(fixFor(on, [app()], '/Applications/A.app/Contents/MacOS/A'), { sign: -1, gain: 3 }, '清单里勾了继承 → 全局设置');
+  assert.deepEqual(fixFor(on, [app({ inherit: false })], '/Applications/A.app/Contents/MacOS/A'), { sign: 1, gain: 1 }, '没勾继承、自己两样都关 → 不动(Mos 不碰它,我们也别抵)');
+  assert.deepEqual(fixFor(on, [app({ inherit: false, scrollBasic: { smooth: true, reverse: false } })], '/Applications/A.app/Contents/MacOS/A'), { sign: 1, gain: 5 }, '没勾继承 → 用它自己的 speed');
+  assert.deepEqual(fixFor(on, [app({ inherit: false })], '/Applications/B.app/Contents/MacOS/B'), { sign: -1, gain: 3 }, '别的 App 不受这条例外影响');
+  assert.deepEqual(fixFor({ ...on, whitelist: 1 }, [app()], '/Applications/B.app/Contents/MacOS/B'), { sign: 1, gain: 1 }, '白名单开着、不在清单里 → Mos 不碰,不抵');
+  assert.deepEqual(fixFor({ ...on, whitelist: 1 }, [app()], '/Applications/A.app/Contents/MacOS/A'), { sign: -1, gain: 3 }, '白名单开着、在清单里 → 照常');
   console.log('✓ Mos 对滚轮的改写:按它的设置抵掉方向和放大');
 }
 

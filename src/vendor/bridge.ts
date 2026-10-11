@@ -1171,7 +1171,7 @@ async function wheelAction(target: ResolvedTarget, action: NativePreparedAction,
 	if (currentPlatformBackend.name !== "macos" || action.action !== "scroll" || !("x" in action.target)) return action;
 	const primer: NativePreparedAction = { ...action, params: { scrollX: 0, scrollY: 0 } };
 	await currentPlatformBackend.act(helperActRequest(target, primer, "foreground"), { signal, timeoutMs: COMMAND_TIMEOUT_MS }).catch(() => undefined);
-	const fix = await wheelFix();
+	const fix = await wheelFix(target.pid);
 	const params = action.params as { scrollX: number; scrollY: number };
 	return { ...action, params: { scrollX: applyWheelFix(params.scrollX, fix), scrollY: applyWheelFix(params.scrollY, fix) } };
 }
@@ -1842,7 +1842,7 @@ async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget
 	// background prefix is never replayed as part of a foreground batch.
 	if (headless && currentPlatformBackend.actBatch) {
 		const actionState: ActionState = { currentFocus: false };
-		const requests = actions.map((action) => helperActRequest(target, prepareUiAction(action, actionState, look, true) as NativePreparedAction, "ax_only"));
+		const requests = actions.map((action) => helperActRequest(target, scrollInPoints(prepareUiAction(action, actionState, look, true) as NativePreparedAction, target, look), "ax_only"));
 		const textLength = actions.reduce((sum, action) => sum + (action.text?.length ?? 0), 0);
 		const result = await currentPlatformBackend.actBatch(requests, { signal, timeoutMs: Math.max(COMMAND_TIMEOUT_MS, textLength * 25 + 6_000) });
 		if (!result.steps || result.steps.length === 0) throw new Error("Native action transaction returned no checked steps.");

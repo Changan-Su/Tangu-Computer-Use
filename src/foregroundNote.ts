@@ -64,11 +64,13 @@ export function selfWindowNote(details: unknown, hostPid: number = process.ppid)
  * 参数说明里都没写 —— 模型先后猜了 2438 / 1000 / 2000 / 1050 / 1800 宽,把第一次点对的坐标换算成了错的。
  * 读的是 details.capture.width / height(= look 图的像素尺寸,越界校验用的就是它);形状变了就静默返回空串。
  */
-export function imageNote(details: unknown, attached: boolean): string {
+export function imageNote(details: unknown, attached: boolean, platform: string = process.platform): string {
   const capture = (details as { capture?: { width?: unknown; height?: unknown } } | null | undefined)?.capture;
   const w = Number(capture?.width), h = Number(capture?.height);
   if (!attached || !(w > 0) || !(h > 0)) return '';
-  return `\n[image] The attached screenshot is ${w}x${h} px and shows only the target window. x / y for act_ui (click, moveMouse, scroll, drag) are pixels in this screenshot, origin top-left: x 0-${w - 1}, y 0-${h - 1}; the scrollX / scrollY distance of a coordinate scroll is in the same pixels. Read positions and distances straight off it; do not convert to screen points or to the window frame size.`;
+  // 滚动距离只在 macOS 上折算成截图像素(别的平台的滚轮单位不是像素,vendor 原样传),所以那半句只在 macOS 说。
+  const distance = platform === 'darwin' ? '; the scrollX / scrollY distance of a coordinate scroll is in the same pixels' : '';
+  return `\n[image] The attached screenshot is ${w}x${h} px and shows only the target window. x / y for act_ui (click, moveMouse, scroll, drag) are pixels in this screenshot, origin top-left: x 0-${w - 1}, y 0-${h - 1}${distance}. Read positions straight off it; do not convert to screen points or to the window frame size.`;
 }
 
 interface Verification { status?: string; text?: string; role?: string; value?: string; gone?: boolean; timeoutMs?: number }
@@ -102,7 +104,8 @@ export function expectNote(details: unknown): string {
  * 按「这一步实际怎么送达」判:execution.steps 与 actions 逐项对应(失败后面的没执行、没有对应项)。
  * 走无障碍动作的 scroll 不说;按 ref 给、但 ref 是只有坐标的节点(pictureOnly)而走了真实输入的照样说。
  */
-export function scrollNote(actions: unknown, execution: unknown): string {
+export function scrollNote(actions: unknown, execution: unknown, platform: string = process.platform): string {
+  if (platform !== 'darwin') return ''; // 说的是 macOS 上真实滚轮输入的事
   const list = Array.isArray(actions) ? actions as Array<{ action?: string }> : [];
   const exec = execution as ExecStep | undefined;
   const steps = exec && Array.isArray(exec.steps) && exec.steps.length ? exec.steps : undefined;

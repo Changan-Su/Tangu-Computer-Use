@@ -180,12 +180,16 @@ const SPECS: ToolSpec[] = [
 export function syncSettings(store: PluginStore): void {
   const s = store.getScopeSettings(PLUGIN_ID, 'global');
   const cfg = getComputerUseConfig() as unknown as Record<string, unknown>;
-  const set = (key: string, value: boolean | string) => { cfg[key] = value; process.env[`PI_COMPUTER_USE_${key.toUpperCase()}`] = String(value); };
-  if (typeof s.browser_use === 'boolean') set('browser_use', s.browser_use);
-  if (typeof s.headless === 'boolean') set('headless', s.headless);
-  if (typeof s.cursor_overlay === 'boolean') set('cursor_overlay', s.cursor_overlay);
-  if (s.managed_browser === 'chrome' || s.managed_browser === 'helium') set('managed_browser', s.managed_browser);
+  const env = (key: string) => `PI_COMPUTER_USE_${key.toUpperCase()}`;
+  const set = (key: string, value: boolean | string) => { cfg[key] = value; process.env[env(key)] = String(value); owned.add(key); };
+  // 这次没给的项:把我们上次写的环境变量撤掉(不撤的话旧值会一直压着);不是我们写的不碰。
+  const unset = (key: string) => { if (owned.delete(key)) delete process.env[env(key)]; };
+  if (typeof s.browser_use === 'boolean') set('browser_use', s.browser_use); else unset('browser_use');
+  if (typeof s.headless === 'boolean') set('headless', s.headless); else unset('headless');
+  if (typeof s.cursor_overlay === 'boolean') set('cursor_overlay', s.cursor_overlay); else unset('cursor_overlay');
+  if (s.managed_browser === 'chrome' || s.managed_browser === 'helium') set('managed_browser', s.managed_browser); else unset('managed_browser');
 }
+const owned = new Set<string>();
 
 /** 构造 vendor 需要的 ExtensionContext。工具执行 hasUI=false(权限缺→vendor 抛指导文本);sessionManager 给空 stub。 */
 export function makePiCtx(tcx: ToolContext, hasUI: boolean): ExtensionContext {
@@ -250,14 +254,19 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
   const wasRunning = (await apps()).some(mine);
   // -g:启动但不置前台。execFile 传 argv(非 shell),bundleId/app 作单参无注入。
   const open = (background: boolean) => execFileP('open', [...(background ? ['-g'] : []), ...(bundleId ? ['-b', bundleId] : ['-a', app])], { timeout: 8_000 });
-  try {
-    await open(true);
-  } catch (e: any) {
-    // 已经在跑的 App 按这个名字打不开(从没登记过的位置启动的)不要紧:接着找它的窗口就是了。
-    if (!wasRunning) return `Could not launch ${name}: ${e?.stderr?.toString().trim() || e?.message || e}. Check the app/bundleId is installed.`;
+  const strict = getComputerUseConfig().headless === true;
+  // 严格后台下不去「重新打开」一个已经在跑的 App:微信这类收到这个事件会自己跳到前台。只找它现有的窗口。
+  if (!(strict && wasRunning)) {
+    try {
+      await open(true);
+    } catch (e: any) {
+      // 已经在跑的 App 按这个名字打不开(从没登记过的位置启动的)不要紧:接着找它的窗口就是了。
+      if (!wasRunning) return `Could not launch ${name}: ${e?.stderr?.toString().trim() || e?.message || e}. Check the app/bundleId is installed.`;
+    }
   }
   const started = Date.now();
   let activated = false;
+  let triedActivating = false;
   let last = '';
   while (Date.now() - started < 12_000) {
     if (tcx.signal?.aborted) return 'ensure_app aborted.';
@@ -277,13 +286,13 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
       }
       // ponytail:只对「本来就在跑」的 App 升级到激活;冷启动的窗口晚几秒才出来是常事,不该因此抢前台。
       // 「本来就在跑」按名字 / bundleId 认,名字对不上(本地化名、别名)就不升级,退回原来的「等满 12 秒」。
-      if (wasRunning && !activated && Date.now() - started > 1_500) {
-        if (getComputerUseConfig().headless) {
+      if (wasRunning && !triedActivating && Date.now() - started > (strict ? 0 : 1_500)) {
+        if (strict) {
           return `${name} is running but has no window on the current desktop (it is on another desktop, or hidden). Bringing it back means taking the foreground, which the strict background setting forbids. Ask the user to switch to ${name} themselves, or to turn strict background off.`;
         }
         if (tcx.signal?.aborted) return 'ensure_app aborted.';
-        activated = true;
-        await open(false).catch(() => {});
+        triedActivating = true;
+        activated = await open(false).then(() => true, () => false);
       }
     }
     await sleep(400);

@@ -109,7 +109,8 @@ replay it** (`npm run check:actions`, part of `npm run check`, goes red if it is
 - `scrollInPoints()` in `bridge.ts`, applied in `dispatchUiAction()` (macOS, coordinate scroll): the distance
   is given in the screenshot's pixels, like `x` / `y`, and converted to the screen points the helper scrolls
   in (`framePoints.w / look.image.width`). Upstream passes it through raw, so the same number means twice
-  the distance on a 2x explicit capture and half on a large window's look image. Measured with a real
+  the distance on a 2x explicit capture and half on a large window's look image. The strict-background batch
+  path in `dispatchUiTransaction()` goes through the same conversion. Measured with a real
   model: 1800 against a 1520 px capture of a 760 pt window went twice as far as meant. Windows and Linux
   are untouched (their wheel units are not pixels).
 - `wheelAction()` in `bridge.ts`, called from `helperAct()` before a foreground coordinate scroll (macOS).
@@ -122,10 +123,12 @@ replay it** (`npm run check:actions`, part of `npm run check`, goes red if it is
   - It then undoes what Mos does to the real one. Mos treats the helper's wheel event as a mouse wheel:
     with "reverse" on it flips the direction, with "smooth" on it multiplies the distance by `speed`
     (measured with reverse=1 / smooth=1 / speed=3: `scrollY` -35 / -105 / -300 / -700 moved +84 / +287 /
-    +867 / +2067 px, i.e. about 3·|d| − 33, direction reversed). `src/wheel.ts` reads Mos's settings
-    (`defaults read com.caldis.Mos`, only while Mos is running) and sends `-d / speed` instead. Only Mos is
-    known, only its global settings are read (not its per-app exceptions), and reverse-without-smooth is
-    untested. `scrollNote()` in `src/foregroundNote.ts` still tells the model to go by the screenshot.
+    +867 / +2067 px, i.e. about 3·|d| − 33, direction reversed). `src/wheel.ts` reads Mos's settings on
+    every scroll while Mos is running (global settings, plus its per-app list resolved the way Mos does:
+    an entry that inherits uses the global ones, one that does not uses its own, and in allowlist mode an
+    app outside the list is left alone) and sends `-d / speed` instead. Only Mos is known, and
+    reverse-without-smooth is untested. `scrollNote()` in `src/foregroundNote.ts` still tells the model
+    to read the result off the screenshot.
   - The real fix is native: post wheel events that carry scroll phases (trackpad-like), which these
     utilities pass through untouched. That needs a protocol bump and a helper we can test with input
     permission; when it lands, delete `src/wheel.ts`.
