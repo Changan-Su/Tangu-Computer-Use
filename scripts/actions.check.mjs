@@ -10,6 +10,7 @@
  *   3) 不带 ref / x / y 的 scroll:沿用本批里上一次 click / moveMouse 落下的位置;单独出现就报错并写明改法。
  *   4) 「目标窗口在前台」的判据:pid 与窗口都对上才算。跟随焦点的按键不会重新激活目标,
  *      判松了就会把字打进用户刚切过去的那个 App。
+ *   5) 按坐标的 scroll / drag 与坐标点击一样是真实输入(needsForeground);按 ref 的 scroll、严格后台不变。
  *
  * 用法: node scripts/actions.check.mjs
  */
@@ -149,6 +150,23 @@ console.log('✓ keypress / typeText:跟随焦点、无从判断时的报错文�
 assert.equal(message(() => prepareAction({ action: 'click' }, fresh(), env())), 'click requires either ref or both x and y.');
 assert.equal(message(() => prepareAction({ action: 'moveMouse' }, fresh({ clicked: true, frontmost: true }), env())), 'moveMouse requires either ref or both x and y.');
 console.log('✓ scroll:沿用本批 click / moveMouse 的位置、单独出现时的报错文案');
+
+// ── 5) 按坐标的 scroll / drag 是真实输入(走前台),按 ref 的仍走后台 ──
+// 反馈 55b984eb:微信里按坐标滚动投给进程(pid)没人理,outcome 又是 unknown,所以也没有任何重试。
+{
+  const foreground = (action, e = env(), state = fresh()) => prepareAction(action, state, e).needsForeground;
+  const dragPath = [{ x: 400, y: 150 }, { x: 400, y: 500 }];
+  assert.equal(foreground({ action: 'scroll', x: 300, y: 200, scrollY: 600 }), true, 'a coordinate scroll is real input');
+  assert.equal(foreground({ action: 'drag', path: dragPath }), true, 'a drag is real input');
+  const state = fresh();
+  prepareAction({ action: 'moveMouse', x: 5, y: 5 }, state, env());
+  assert.equal(prepareAction({ action: 'scroll', scrollY: 3 }, state, env()).needsForeground, true, 'a scroll that reuses the pointer position is a coordinate scroll too');
+  assert.equal(foreground({ action: 'scroll', ref: '@e2', scrollY: 3 }), false, 'a ref scroll keeps the background accessibility path');
+  assert.equal(foreground({ action: 'moveMouse', x: 5, y: 5 }), false, 'moveMouse alone does not take the foreground');
+  assert.equal(foreground({ action: 'scroll', x: 300, y: 200, scrollY: 600 }, env({ headless: true })), false, 'strict background never takes the foreground');
+  assert.equal(foreground({ action: 'drag', path: dragPath }, env({ headless: true })), false, 'strict background never takes the foreground (drag)');
+}
+console.log('✓ 按坐标的 scroll / drag 走前台,按 ref 的 scroll 与严格后台不变');
 
 // ── 4) 判据 ──
 assert.equal(followsFocus({ action: 'keypress', keys: ['UP'] }), true);

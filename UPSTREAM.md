@@ -94,10 +94,37 @@ replay it** (`npm run check:actions`, part of `npm run check`, goes red if it is
   strict headless (that batch path is untouched).
 - `missingTarget()`: the error for those two cases tells the model how to fix the call.
 
+- `needsForeground` in `prepareAction()` also covers a **coordinate `scroll` and `drag`** (upstream: clicks
+  only). A scroll or drag posted to the pid is ignored by apps that draw their own UI and expose no
+  accessibility tree (WeChat), its outcome is `unknown` rather than `didnt`, so `canRetryInForeground`
+  never retried it: the model scrolled four times and nothing moved (Forsion feedback 55b984eb). A `ref`
+  scroll keeps the background accessibility path, and strict headless is untouched. `moveMouse` is left
+  alone. Do not move this to `canRetryInForeground`: escalating on `unknown` would post the scroll twice
+  wherever the background one did land. Measured on a self-drawn AppKit view (`npm run check:vision`
+  prints it every run): a pid-posted wheel event reaches the view 0 times, frontmost or not.
+- `primeWheel()` in `bridge.ts`, called from `helperAct()` before a foreground coordinate scroll (macOS):
+  one zero-distance wheel event to the same point. With a smooth-scrolling mouse utility running (Mos),
+  the first wheel event aimed at a window that was not the previous scroll target never reaches the app
+  (0 events, 6 runs out of 6, even seconds after the app came forward); the next one does. The primer
+  absorbs that and scrolls nothing; without such a utility it is a no-op costing one helper round trip.
+  The same utilities reverse and rescale the real scroll (measured: `scrollY` -300 moved +867 px), which
+  cannot be undone from here — `scrollNote()` in `src/foregroundNote.ts` tells the model instead. The real
+  fix is native: mark the helper's wheel events as continuous (trackpad-like) so these utilities pass
+  them through. That needs a protocol bump and a helper we can test with input permission.
+
 `src/tools.ts` mirrors it (scroll accepts `x`/`y`; the `ref` descriptions state the same-call rule).
 Real-machine green: `npm run check:untargeted` drives the real `bridge.ts` against Calculator (background
 keypress refused and nothing typed → coordinate click → keypress **in the next call** lands → bare
-scroll after `moveMouse`). It takes the foreground for a few seconds.
+scroll after `moveMouse`). It takes the foreground for a few seconds. `npm run check:vision` does the same
+against a self-drawn app with an empty accessibility tree (`scripts/vision-fixture`, a stand-in for WeChat):
+coordinates read off the screenshot, a coordinate scroll and drag that really land, an unmet `expect`, and a
+window that leaves the current desktop.
+
+Everything else that feedback needed lives in the adapter, not in vendor: `src/foregroundNote.ts` renders
+facts vendor only writes into `details` (`imageNote` = screenshot size and coordinate space, `expectNote` =
+unmet / pre-existing postcondition, `scrollNote` = wheel direction and distance are not guaranteed) and
+extends two vendor messages (`goneHint`, `noRootsHint` = a window
+that is not on the current desktop). If upstream starts printing any of these itself, drop ours.
 
 ### PACKAGE_ROOT — no longer patched, but still guarded
 `platform/{macos,windows,linux}/helper.ts` locate `scripts/setup-helper.mjs` via

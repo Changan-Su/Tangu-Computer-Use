@@ -1156,6 +1156,19 @@ function executionTraceFromAct(result: HelperActResult, policy = currentDelivery
 	});
 }
 
+/**
+ * Send a zero-distance wheel event to the same point before a real coordinate scroll. Measured with a
+ * smooth-scrolling mouse utility running (Mos): the first wheel event aimed at a window that was not the
+ * previous scroll target never reaches the app (0 events, 6 runs out of 6, even seconds after the app
+ * came forward), while the next one does; a zero-distance event absorbs that and scrolls nothing.
+ * Without such a utility it is a no-op that costs one helper round trip. macOS only.
+ */
+async function primeWheel(target: ResolvedTarget, action: NativePreparedAction, signal?: AbortSignal): Promise<void> {
+	if (currentPlatformBackend.name !== "macos" || action.action !== "scroll" || !("x" in action.target)) return;
+	const primer: NativePreparedAction = { ...action, params: { scrollX: 0, scrollY: 0 } };
+	await currentPlatformBackend.act(helperActRequest(target, primer, "foreground"), { signal, timeoutMs: COMMAND_TIMEOUT_MS }).catch(() => undefined);
+}
+
 async function helperAct(
 	target: ResolvedTarget,
 	action: NativePreparedAction,
@@ -1171,6 +1184,7 @@ async function helperAct(
 	const textTimeout = "text" in action.params ? action.params.text.length * 25 + 4_000 : COMMAND_TIMEOUT_MS;
 	const timeoutMs = Math.max(COMMAND_TIMEOUT_MS, textTimeout);
 	if ((action.usesCurrentFocus || action.needsForeground) && !headless) {
+		await primeWheel(target, action, signal);
 		const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, action, "foreground"), { signal, timeoutMs }));
 		const trace = executionTraceFromAct(foreground, "foreground");
 		trace.backgroundFirst = false;

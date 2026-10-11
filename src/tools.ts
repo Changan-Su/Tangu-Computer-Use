@@ -18,9 +18,10 @@ import {
   executeEvaluateBrowser, ensureComputerUseSetup,
 } from './vendor/bridge.ts';
 import { getComputerUseConfig } from './vendor/config.ts';
+import { currentPlatformBackend } from './vendor/platform/index.ts';
 import { isSupportedPlatform } from './helperState.ts';
 import { autoInstallFailed, ensureHelperCurrent, guideMissingPermissions } from './onboarding.ts';
-import { foregroundNote, selfWindowNote } from './foregroundNote.ts';
+import { expectNote, foregroundNote, goneHint, imageNote, noRootsHint, scrollNote, selfWindowNote } from './foregroundNote.ts';
 
 const execFileP = promisify(execFile);
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -58,7 +59,11 @@ const conditionProps = {
 };
 
 const clickCount = N('1-3', { minimum: 1, maximum: 3 });
-const point = { x: { type: 'number' }, y: { type: 'number' } };
+// 坐标一律是「最近一张截图里的像素」。反馈 55b984eb:这里以前没有任何说明,模型把它当成屏幕坐标去换算。
+const point = {
+  x: N('Pixels from the left edge of the latest screenshot of this state (its size is on the [image] line of the result that attached it), not screen or window-frame coordinates'),
+  y: N('Pixels from the top edge of that same screenshot'),
+};
 
 // act_ui 的 actions:上游 uiAction union(8 变体)→ anyOf
 const uiAction = {
@@ -126,7 +131,7 @@ const SPECS: ToolSpec[] = [
   },
   {
     name: 'act_ui', exec: executeAct as PiExecute, sideEffect: 'system', approval: 'command', timeoutMs: 120_000,
-    description: 'Perform one or more precisely targeted checked actions and return the successor state. Pass dependent click/type steps together and use expect for observable completion instead of a separate observe_ui call. After clicking an editable region in the same call, omit ref from typeText/keypress so input follows that focus; a later call can omit ref only while the target window is still frontmost, otherwise click again first. To fill a text field prefer a single setText action — it writes the value in the background without taking focus; only click the field first (which takes the foreground) if setText reports it did not take, as happens on some web/Electron inputs. When any action takes the foreground the result says so on a [foreground] line. For strict background-only runs, turn on the plugin\'s "strict background" setting.',
+    description: 'Perform one or more precisely targeted checked actions and return the successor state. Pass dependent click/type steps together and use expect for observable completion instead of a separate observe_ui call. expect reads accessibility text only: on a window whose outline has almost no text (the result says the screenshot is attached because nodes are unlabeled) leave expect out and judge from the screenshot. Coordinates (x / y, drag path) are pixels in the latest attached screenshot, whose size the result states on an [image] line. After clicking an editable region in the same call, omit ref from typeText/keypress so input follows that focus; a later call can omit ref only while the target window is still frontmost, otherwise click again first. To fill a text field prefer a single setText action — it writes the value in the background without taking focus; only click the field first (which takes the foreground) if setText reports it did not take, as happens on some web/Electron inputs. When any action takes the foreground the result says so on a [foreground] line. For strict background-only runs, turn on the plugin\'s "strict background" setting.',
     parameters: obj({
       stateId,
       expect: obj(conditionProps),
@@ -135,7 +140,7 @@ const SPECS: ToolSpec[] = [
   },
   {
     name: 'ensure_app', run: runEnsureApp, sideEffect: 'system', darwinOnly: true, timeoutMs: 25_000,
-    description: 'Make sure a desktop app is running and observable WITHOUT bringing it to the foreground, then return its UI roots. Use this before observe_ui when the target app may not be running yet (observe_ui only sees already-running apps). Background-launches by bundleId (preferred) or app name and waits until a window is observable. macOS only.',
+    description: 'Make sure a desktop app is running and observable, then return its UI roots. Use this before observe_ui when the target app may not be running yet (observe_ui only sees already-running apps), and to bring back a window that find_roots / act_ui can no longer see because it is on another desktop (Space), minimized or hidden. Opens by bundleId (preferred) or app name in the background first; the app is brought to the foreground only when it is already running and none of its windows is on the current desktop. The result says whether the app ended up in the foreground. macOS only.',
     parameters: obj({
       app: S('App name, e.g. "TextEdit"'),
       bundleId: S('Bundle id, e.g. "com.apple.TextEdit" (preferred — unambiguous)'),
@@ -189,45 +194,73 @@ export function makePiCtx(tcx: ToolContext, hasUI: boolean): ExtensionContext {
   };
 }
 
-/** AgentToolResult → 返回给模型的 string;image block(截图)经 collectImage 回灌;末尾附前台透明化提示与「这是 Forsion 自己的窗口」提示。 */
-function render(result: AgentToolResult, tcx: ToolContext): string {
+/** 最近一次观察 / 操作的目标 App;「窗口不在了」的报错靠它给出一条能照抄的 ensure_app 调用。 */
+let lastTarget: { app?: string; bundleId?: string } | undefined;
+
+/** AgentToolResult → 返回给模型的 string;image block(截图)经 collectImage 回灌;末尾附几行 vendor 只写进 details 的事实:
+ *  截图的坐标空间、expect 有没有满足、是否抢了前台、「这是 Forsion 自己的窗口」、按 App 找却没有 root 时的出路。 */
+function render(result: AgentToolResult, tcx: ToolContext, args?: Record<string, any>): string {
   const parts: string[] = [];
+  let attached = false;
   for (const block of result.content) {
     if (block.type === 'text') parts.push(block.text);
     else if (block.type === 'image' && tcx.collectImage) {
       tcx.collectImage({ url: `data:${block.mimeType || 'image/jpeg'};base64,${block.data}`, name: 'screen.jpg' });
+      attached = true;
     }
   }
   const body = parts.join('\n') || '(no output)';
-  const details = (result as { details?: { execution?: unknown } }).details;
-  return body + foregroundNote(details?.execution) + selfWindowNote(details);
+  const details = (result as { details?: { execution?: unknown; target?: { app?: string; bundleId?: string } } }).details;
+  if (details?.target?.app || details?.target?.bundleId) lastTarget = { app: details.target.app, bundleId: details.target.bundleId };
+  return body + imageNote(details, attached) + expectNote(details) + scrollNote(args?.actions, details?.execution) + foregroundNote(details?.execution) + selfWindowNote(details) + noRootsHint(details);
 }
 
-/** ensure_app:后台启动目标 app(open -g,不抢前台)+ 轮询 find_roots 直到有可观察窗口,回其 roots。 */
-async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, pctx: ExtensionContext): Promise<string> {
+/** ensure_app:后台启动目标 app(open -g)+ 轮询 find_roots 直到有可观察窗口,回其 roots。
+ *  已经在跑却列不出窗口(窗口在别的桌面 / 最小化 / 被隐藏)时后台那一下不管用,只能激活它 —— 屏幕会切到它那个桌面。
+ *  结果里如实说它最后在不在前台:微信这类 App 收到重新打开事件会自己跳到前台,「后台启动」对它不成立(反馈 55b984eb)。
+ *  导出只为真机仪器 scripts/vision-only.check.mjs 能直接调它(走 execute 会顺带触发 helper 的自动更新检查)。 */
+export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, pctx: ExtensionContext): Promise<string> {
   if (process.platform !== 'darwin') {
     return 'ensure_app (background launch) is macOS-only. On other platforms, launch the app yourself, then use observe_ui.';
   }
   const bundleId = typeof args.bundleId === 'string' ? args.bundleId.trim() : '';
   const app = typeof args.app === 'string' ? args.app.trim() : '';
   if (!bundleId && !app) return 'ensure_app requires "app" or "bundleId".';
+  const name = bundleId || app;
+  // app 可以是名字,也可以是「WeChat.app」或一条路径(open -a 都认),比对时只取名字那一段。
+  const appName = app.replace(/\/+$/, '').split('/').pop()!.replace(/\.app$/i, '');
+  const mine = (a: { appName: string; bundleId?: string }) => bundleId ? a.bundleId === bundleId : a.appName.toLowerCase() === appName.toLowerCase();
+  const apps = () => currentPlatformBackend.listApps(tcx.signal).catch(() => []);
+  const wasRunning = (await apps()).some(mine);
   // -g:启动但不置前台。execFile 传 argv(非 shell),bundleId/app 作单参无注入。
-  const openArgs = ['-g', ...(bundleId ? ['-b', bundleId] : ['-a', app])];
+  const open = (background: boolean) => execFileP('open', [...(background ? ['-g'] : []), ...(bundleId ? ['-b', bundleId] : ['-a', app])], { timeout: 8_000 });
   try {
-    await execFileP('open', openArgs, { timeout: 8_000 });
+    await open(true);
   } catch (e: any) {
-    return `Could not launch ${bundleId || app}: ${e?.stderr?.toString().trim() || e?.message || e}. Check the app/bundleId is installed.`;
+    return `Could not launch ${name}: ${e?.stderr?.toString().trim() || e?.message || e}. Check the app/bundleId is installed.`;
   }
-  const deadline = Date.now() + 12_000;
+  const started = Date.now();
+  let activated = false;
   let last = '';
-  while (Date.now() < deadline) {
+  while (Date.now() - started < 12_000) {
     if (tcx.signal?.aborted) return 'ensure_app aborted.';
-    const found = await spec_executeFind(pctx, tcx, app, bundleId);
+    const found = await spec_executeFind(pctx, tcx, appName, bundleId);
     last = found;
-    if (/@r\d/.test(found)) return `Launched ${bundleId || app} in the background (no foreground focus).\n${found}`;
+    if (/@r\d/.test(found)) {
+      const front = (await apps()).some((a) => mine(a) && a.isFrontmost);
+      const how = !front ? `Opened ${name} in the background; it did not take the foreground.`
+        : activated ? `${name} was running with no window on the current desktop (another desktop, minimized or hidden), so it was brought to the foreground; the screen may have switched to its desktop.`
+        : `Opened ${name}; it is now the foreground app (some apps come forward on their own even when opened in the background).`;
+      return `${how}\n${found}`;
+    }
+    // ponytail:只对「本来就在跑」的 App 升级到激活;冷启动的窗口晚几秒才出来是常事,不该因此抢前台。
+    if (wasRunning && !activated && Date.now() - started > 1_500) {
+      activated = true;
+      await open(false).catch(() => {});
+    }
     await sleep(400);
   }
-  return `Launched ${bundleId || app} in the background, but no window is observable yet. Give it a moment and call observe_ui.\n${last}`;
+  return `Opened ${name}, but no window is observable yet. Give it a moment and call observe_ui.\n${last}`;
 }
 
 /** 内部:调 vendor executeFind 并渲染(供 ensure_app 轮询)。
@@ -238,7 +271,8 @@ async function spec_executeFind(pctx: ExtensionContext, tcx: ToolContext, app: s
   try {
     const params = bundleId ? { bundleId } : { text: app };
     const r = await executeFind('', params, tcx.signal, undefined, pctx);
-    return render(r, tcx);
+    // 不走 render:那边会在「没有 root」时附一句「去调 ensure_app」,而这里就是 ensure_app 自己。
+    return r.content.map((block) => block.type === 'text' ? block.text : '').join('\n') + selfWindowNote(r.details);
   } catch {
     return '';
   }
@@ -281,8 +315,14 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
       // 装/升级过就在结果里说一句 —— 用户装了什么、agent 替他做了什么,不该是暗箱。
       const prefix = installNote ? `${installNote}\n` : '';
       if (spec.run) return prefix + await spec.run(args, tcx, pctx);
-      const result = await spec.exec!('', args, tcx.signal, undefined, pctx);
-      return prefix + render(result, tcx);
+      let result: AgentToolResult;
+      try {
+        result = await spec.exec!('', args, tcx.signal, undefined, pctx);
+      } catch (e: any) {
+        if (e instanceof Error && process.platform === 'darwin') e.message = goneHint(e.message, lastTarget);
+        throw e;
+      }
+      return prefix + render(result, tcx, args);
     },
   });
 
