@@ -323,7 +323,8 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
     && store.isPluginEnabledSync(PLUGIN_ID)
     && isSupportedPlatform()
     && (!spec.darwinOnly || process.platform === 'darwin')
-    && (!spec.browserOnly || getComputerUseConfig().browser_use !== false);
+    // 直接读设置,不读 vendor 的配置对象:后者要等这个进程里调过一次工具才同步,在那之前「浏览器工具」关了也照样列出来。
+    && (!spec.browserOnly || store.getScopeSettings(PLUGIN_ID, 'global').browser_use !== false);
 
   const toTool = (spec: ToolSpec): ToolDef => ({
     name: spec.name,
