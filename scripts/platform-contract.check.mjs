@@ -20,8 +20,16 @@ if (!process.env.CU_CONTRACT_PLATFORM) {
   Object.defineProperty(process, 'platform', { value: platform });
   let meta;
   const plugin = (await import('../tangu-plugins/computer-use/dist/index.js')).default;
-  plugin.activate({ registerPlugin: (m) => { meta = m; }, registerCommand() {}, log() {}, sdk: { pluginStore: { isPluginEnabledSync: () => true } } });
-  const visible = meta.toolProvider.tools().filter((t) => t.isEnabledFor({ capabilities: { hostExec: true } }));
+  const stored = {}; // 设置页里存的值
+  plugin.activate({ registerPlugin: (m) => { meta = m; }, registerCommand() {}, log() {}, sdk: { pluginStore: { isPluginEnabledSync: () => true, getScopeSettings: () => stored } } });
+  const listed = () => meta.toolProvider.tools().filter((t) => t.isEnabledFor({ capabilities: { hostExec: true } }));
+  const visible = listed();
+  // 「浏览器工具」关掉之后,这个进程里一次工具都还没调过也得立刻不列出来(以前要等调过一次才同步,而且同步了也会被冲掉)。
+  assert(visible.some((t) => t.name === 'navigate_browser'), `${platform}: browser tools are listed by default`);
+  stored.browser_use = false;
+  assert(!listed().some((t) => /_browser$/.test(t.name)), `${platform}: browser tools must disappear once the setting is off`);
+  assert(listed().some((t) => t.name === 'act_ui'), `${platform}: the setting only hides the browser tools`);
+  delete stored.browser_use;
   for (const name of ['find_roots', 'observe_ui', 'search_ui', 'expand_ui', 'inspect_ui', 'act_ui']) assert(visible.some((t) => t.name === name), `${platform}: missing ${name}`);
   assert.equal(visible.some((t) => t.name === 'ensure_app'), platform === 'darwin');
   const prompt = meta.promptSection({ execMode: 'host' });

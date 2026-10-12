@@ -9,8 +9,8 @@ export type PreparedAction =
 	| { action: "setText"; target: ActionTarget; params: { text: string }; establishesFocus: false; usesCurrentFocus: false; needsForeground: false }
 	| { action: "typeText"; target: ActionTarget; params: { text: string }; establishesFocus: false; usesCurrentFocus: boolean; needsForeground: false }
 	| { action: "keypress"; target: ActionTarget; params: { keys: string[] }; establishesFocus: false; usesCurrentFocus: boolean; needsForeground: false }
-	| { action: "scroll"; target: ActionTarget; params: { scrollX: number; scrollY: number }; establishesFocus: false; usesCurrentFocus: false; needsForeground: false }
-	| { action: "drag"; target: ActionTarget; params: { path: Array<{ x: number; y: number }> }; establishesFocus: false; usesCurrentFocus: false; needsForeground: false }
+	| { action: "scroll"; target: ActionTarget; params: { scrollX: number; scrollY: number }; establishesFocus: false; usesCurrentFocus: false; needsForeground: boolean }
+	| { action: "drag"; target: ActionTarget; params: { path: Array<{ x: number; y: number }> }; establishesFocus: false; usesCurrentFocus: false; needsForeground: boolean }
 	| { action: "moveMouse"; target: ActionTarget; params: Record<string, never>; establishesFocus: false; usesCurrentFocus: false; needsForeground: false }
 	| { action: "wait"; params: { ms: number }; establishesFocus: false; usesCurrentFocus: false; needsForeground: false };
 
@@ -154,7 +154,10 @@ export function prepareAction(action: UiAction, state: ActionState, env: ActionE
 	if (isClick(operation) || operation === "moveMouse" || operation === "scroll") state.pointer = target;
 	if (isClick(operation)) state.frontmost = false;
 	const establishesFocus = !env.headless && Boolean(action.ref) && isClick(operation) && containsEditable(env.node(action.ref!));
-	const needsForeground = !env.headless && isClick(operation) && "x" in target;
+	// Coordinate-targeted pointer input is real input. A scroll or drag posted to the pid is silently
+	// ignored by apps that draw their own UI (WeChat: no accessibility tree, so coordinates are the only
+	// way in), and its outcome is "unknown", so nothing ever retried it in the foreground.
+	const needsForeground = !env.headless && "x" in target && (isClick(operation) || operation === "scroll" || operation === "drag");
 
 	switch (operation) {
 		case "press":
@@ -162,8 +165,8 @@ export function prepareAction(action: UiAction, state: ActionState, env: ActionE
 		case "setText": return { action: operation, target, params: { text: action.text ?? "" }, establishesFocus: false, usesCurrentFocus: false, needsForeground: false };
 		case "typeText": return { action: operation, target, params: { text: action.text ?? "" }, establishesFocus: false, usesCurrentFocus, needsForeground: false };
 		case "keypress": return { action: operation, target, params: { keys: keys(action.keys) }, establishesFocus: false, usesCurrentFocus, needsForeground: false };
-		case "scroll": return { action: operation, target, params: { scrollX: scrollDelta(action.scrollX), scrollY: scrollDelta(action.scrollY) }, establishesFocus: false, usesCurrentFocus: false, needsForeground: false };
-		case "drag": return { action: operation, target, params: { path: path(action.path, env) }, establishesFocus: false, usesCurrentFocus: false, needsForeground: false };
+		case "scroll": return { action: operation, target, params: { scrollX: scrollDelta(action.scrollX), scrollY: scrollDelta(action.scrollY) }, establishesFocus: false, usesCurrentFocus: false, needsForeground };
+		case "drag": return { action: operation, target, params: { path: path(action.path, env) }, establishesFocus: false, usesCurrentFocus: false, needsForeground };
 		case "moveMouse": return { action: operation, target, params: {}, establishesFocus: false, usesCurrentFocus: false, needsForeground: false };
 	}
 }

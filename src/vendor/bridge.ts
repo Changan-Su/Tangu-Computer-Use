@@ -9,6 +9,7 @@ import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from 
 import { canRetryInForeground, needsFrontmostProbe, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
 import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
+import { applyWheelFix, wheelFix } from "../wheel.ts"; // Forsion patch, see UPSTREAM.md
 import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
 import { foldToBudget, graftScopedOutline, nodeByRef, outlineNodeLabel, outlineNodePath, rankedTextMatch, restoreOutline, searchOutline, searchOutlineRanked, serializeOutline, serializeOutlineNodeShallow, serializeOutlineSearchMatch, type LookResponse, type Outline, type OutlineChange, type OutlineNode, type OutlineSearchMatch, type SerializedOutline, type SerializedOutlineNode, type SerializedOutlineSearchMatch } from "./outline.ts";
 import { applyOutputEnvelope, boundToolError, clearStoredOutputs, readStoredOutput, UI_TEXT_PAGE_CHARS } from "./output.ts";
@@ -1156,6 +1157,25 @@ function executionTraceFromAct(result: HelperActResult, policy = currentDelivery
 	});
 }
 
+/**
+ * A coordinate scroll about to go out as real wheel input (macOS). Two things first:
+ * 1. Send a zero-distance wheel event to the same point. Measured with a smooth-scrolling mouse utility
+ *    running (Mos): the first wheel event aimed at a window that was not the previous scroll target never
+ *    reaches the app (0 events, 6 runs out of 6, even seconds after the app came forward), while the next
+ *    one does; a zero-distance event absorbs that and scrolls nothing. Without such a utility it is a
+ *    no-op that costs one helper round trip.
+ * 2. Undo what that utility will do to the real one (reversed direction, multiplied distance); see
+ *    `src/wheel.ts`. Returns the action to send.
+ */
+async function wheelAction(target: ResolvedTarget, action: NativePreparedAction, signal?: AbortSignal): Promise<NativePreparedAction> {
+	if (currentPlatformBackend.name !== "macos" || action.action !== "scroll" || !("x" in action.target)) return action;
+	const primer: NativePreparedAction = { ...action, params: { scrollX: 0, scrollY: 0 } };
+	await currentPlatformBackend.act(helperActRequest(target, primer, "foreground"), { signal, timeoutMs: COMMAND_TIMEOUT_MS }).catch(() => undefined);
+	const fix = await wheelFix(target.pid);
+	const params = action.params as { scrollX: number; scrollY: number };
+	return { ...action, params: { scrollX: applyWheelFix(params.scrollX, fix), scrollY: applyWheelFix(params.scrollY, fix) } };
+}
+
 async function helperAct(
 	target: ResolvedTarget,
 	action: NativePreparedAction,
@@ -1171,7 +1191,8 @@ async function helperAct(
 	const textTimeout = "text" in action.params ? action.params.text.length * 25 + 4_000 : COMMAND_TIMEOUT_MS;
 	const timeoutMs = Math.max(COMMAND_TIMEOUT_MS, textTimeout);
 	if ((action.usesCurrentFocus || action.needsForeground) && !headless) {
-		const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, action, "foreground"), { signal, timeoutMs }));
+		const sent = await wheelAction(target, action, signal);
+		const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, sent, "foreground"), { signal, timeoutMs }));
 		const trace = executionTraceFromAct(foreground, "foreground");
 		trace.backgroundFirst = false;
 		return trace;
@@ -1775,8 +1796,24 @@ function prepareUiAction(action: UiAction, state: ActionState, look: LookRespons
 	});
 }
 
+/**
+ * Forsion patch (see UPSTREAM.md): a coordinate scroll's distance is given in the same pixels as x / y, the
+ * screenshot's. The macOS helper scrolls in screen points, and the screenshot is the window at another scale
+ * (2x for an explicit visual capture of a small window, under 1x for a large window), so convert here.
+ * Measured with a real model: it asked for 1800 px against a 1520 px-wide capture of a 760 pt window and the
+ * list went twice as far as it meant.
+ */
+function scrollInPoints(action: NativePreparedAction, target: ResolvedTarget, look: LookResponse): NativePreparedAction {
+	const imageWidth = look.image?.width ?? 0;
+	if (currentPlatformBackend.name !== "macos" || action.action !== "scroll" || !("x" in action.target) || !(imageWidth > 0) || !(target.framePoints.w > 0)) return action;
+	const perPixel = target.framePoints.w / imageWidth;
+	const convert = (n: number) => n === 0 ? 0 : Math.round(n * perPixel) || Math.sign(n);
+	return { ...action, params: { scrollX: convert(action.params.scrollX), scrollY: convert(action.params.scrollY) } };
+}
+
 async function dispatchUiAction(action: UiAction, target: ResolvedTarget, look: LookResponse, headless: boolean, state: ActionState, signal?: AbortSignal): Promise<ExecutionTrace> {
-	const prepared = prepareUiAction(action, state, look, headless);
+	const requested = prepareUiAction(action, state, look, headless);
+	const prepared = requested.action === "wait" ? requested : scrollInPoints(requested, target, look);
 	if (prepared.action === "wait") {
 		await sleep(prepared.params.ms, signal);
 		return executionTrace("wait", "stealth", { outcome: "worked" });
@@ -1805,7 +1842,7 @@ async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget
 	// background prefix is never replayed as part of a foreground batch.
 	if (headless && currentPlatformBackend.actBatch) {
 		const actionState: ActionState = { currentFocus: false };
-		const requests = actions.map((action) => helperActRequest(target, prepareUiAction(action, actionState, look, true) as NativePreparedAction, "ax_only"));
+		const requests = actions.map((action) => helperActRequest(target, scrollInPoints(prepareUiAction(action, actionState, look, true) as NativePreparedAction, target, look), "ax_only"));
 		const textLength = actions.reduce((sum, action) => sum + (action.text?.length ?? 0), 0);
 		const result = await currentPlatformBackend.actBatch(requests, { signal, timeoutMs: Math.max(COMMAND_TIMEOUT_MS, textLength * 25 + 6_000) });
 		if (!result.steps || result.steps.length === 0) throw new Error("Native action transaction returned no checked steps.");

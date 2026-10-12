@@ -28,6 +28,10 @@ is 5 files:
 `@earendil-works/pi-coding-agent` → `src/pi-compat.ts`, so **the vendor import lines are not
 edited**. Config is injected by mutating the `activeConfig` object returned by
 `getComputerUseConfig()` (see `src/tools.ts` → `syncSettings`), so `config.ts` is unmodified too.
+`syncSettings` also writes each setting to the `PI_COMPUTER_USE_*` environment variable upstream reads: upstream's
+`ensureReady()` calls `loadComputerUseConfig()` on every tool call and replaces the config object, so a value
+written only into the object was gone before the executor ran (measured 10-11: strict background never took
+effect). Environment variables are re-read on each load and win over files. `scripts/actions.check.mjs` §6 pins it.
 
 ### Tangu adaptation layer (NOT vendored — hand-written)
 - `src/pi-compat.ts` — the pi shim (only the shapes vendor actually uses).
@@ -94,10 +98,61 @@ replay it** (`npm run check:actions`, part of `npm run check`, goes red if it is
   strict headless (that batch path is untouched).
 - `missingTarget()`: the error for those two cases tells the model how to fix the call.
 
+- `needsForeground` in `prepareAction()` also covers a **coordinate `scroll` and `drag`** (upstream: clicks
+  only). A scroll or drag posted to the pid is ignored by apps that draw their own UI and expose no
+  accessibility tree (WeChat), its outcome is `unknown` rather than `didnt`, so `canRetryInForeground`
+  never retried it: the model scrolled four times and nothing moved (Forsion feedback 55b984eb). A `ref`
+  scroll keeps the background accessibility path, and strict headless is untouched. `moveMouse` is left
+  alone. Do not move this to `canRetryInForeground`: escalating on `unknown` would post the scroll twice
+  wherever the background one did land. Measured on a self-drawn AppKit view (`npm run check:vision`
+  prints it every run): a pid-posted wheel event reaches the view 0 times, frontmost or not.
+- `scrollInPoints()` in `bridge.ts`, applied in `dispatchUiAction()` (macOS, coordinate scroll): the distance
+  is given in the screenshot's pixels, like `x` / `y`, and converted to the screen points the helper scrolls
+  in (`framePoints.w / look.image.width`). Upstream passes it through raw, so the same number means twice
+  the distance on a 2x explicit capture and half on a large window's look image. The strict-background batch
+  path in `dispatchUiTransaction()` goes through the same conversion. Measured with a real
+  model: 1800 against a 1520 px capture of a 760 pt window went twice as far as meant. Windows and Linux
+  are untouched (their wheel units are not pixels).
+- `wheelAction()` in `bridge.ts`, called from `helperAct()` before a foreground coordinate scroll (macOS).
+  It imports `applyWheelFix` / `wheelFix` from `src/wheel.ts` (the one import that reaches out of vendor):
+  - It first sends one zero-distance wheel event to the same point. With a smooth-scrolling mouse utility
+    running (Mos), the first wheel event aimed at a window that was not the previous scroll target never
+    reaches the app (0 events, 6 runs out of 6, even seconds after the app came forward); the next one
+    does. The primer absorbs that and scrolls nothing; without such a utility it is a no-op costing one
+    helper round trip.
+  - It then undoes what Mos does to the real one. Mos treats the helper's wheel event as a mouse wheel:
+    with "reverse" on it flips the direction, with "smooth" on it multiplies the distance by `speed`
+    (measured with reverse=1 / smooth=1 / speed=3: `scrollY` -35 / -105 / -300 / -700 moved +84 / +287 /
+    +867 / +2067 px, i.e. about 3·|d| − 33, direction reversed). `src/wheel.ts` reads Mos's settings on
+    every scroll while Mos is running (global settings, plus its per-app list resolved the way Mos does:
+    an entry that inherits uses the global ones, one that does not uses its own, and in allowlist mode an
+    app outside the list is left alone) and sends `-d / speed` instead. Only Mos is known, and
+    reverse-without-smooth is untested. `scrollNote()` in `src/foregroundNote.ts` still tells the model
+    to read the result off the screenshot.
+  - The real fix is native: post wheel events that carry scroll phases (trackpad-like), which these
+    utilities pass through untouched. That needs a protocol bump and a helper we can test with input
+    permission; when it lands, delete `src/wheel.ts`.
+
 `src/tools.ts` mirrors it (scroll accepts `x`/`y`; the `ref` descriptions state the same-call rule).
 Real-machine green: `npm run check:untargeted` drives the real `bridge.ts` against Calculator (background
 keypress refused and nothing typed → coordinate click → keypress **in the next call** lands → bare
-scroll after `moveMouse`). It takes the foreground for a few seconds.
+scroll after `moveMouse`). It takes the foreground for a few seconds. `npm run check:vision` does the same
+against a self-drawn app with an empty accessibility tree (`scripts/vision-fixture`, a stand-in for WeChat):
+coordinates read off the screenshot, a coordinate scroll and drag that really land, an unmet `expect`, and a
+window that leaves the current desktop.
+
+Everything else that feedback needed lives in the adapter, not in vendor: `src/foregroundNote.ts` renders
+facts vendor only writes into `details` (`imageNote` = screenshot size and coordinate space, `expectNote` =
+unmet / pre-existing postcondition, `scrollNote` = wheel direction and distance are not guaranteed) and
+extends two vendor messages (`goneHint`, `noRootsHint` = a window
+that is not on the current desktop). If upstream starts printing any of these itself, drop ours.
+
+Two image sizes reach the model for the same window: 900 px on the long side for the automatic look image,
+1600 for an explicit `mode: "visual"` one, each with its own coordinate space. Do not unify or cap them on the
+theory that the model's provider rescales large images: measured 2026-10-11 with gpt-6-luna against the stand-in
+app (`harness-runs/2026-10-11/`), clicks read off the 1520x1144 capture landed on the centre of the target
+(64,382 / 64,384 for a centre at 64,384), same as off 1020x767 and 899x677. The `[image]` line stating the
+size is what makes that work. A short-side cap of 768 was tried and removed.
 
 ### PACKAGE_ROOT — no longer patched, but still guarded
 `platform/{macos,windows,linux}/helper.ts` locate `scripts/setup-helper.mjs` via

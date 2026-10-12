@@ -10,6 +10,10 @@
  *   3) 不带 ref / x / y 的 scroll:沿用本批里上一次 click / moveMouse 落下的位置;单独出现就报错并写明改法。
  *   4) 「目标窗口在前台」的判据:pid 与窗口都对上才算。跟随焦点的按键不会重新激活目标,
  *      判松了就会把字打进用户刚切过去的那个 App。
+ *   5) 按坐标的 scroll / drag 与坐标点击一样是真实输入(needsForeground);按 ref 的 scroll、严格后台不变。
+ *
+ *   6) 插件设置(严格后台等)注入之后,vendor 再加载一次配置也得还在 —— 它每次工具调用都重新加载。
+ *   7) Mos 对滚轮的改写(反向、按 speed 放大)怎么抵:读它的设置 → 发出去的量。
  *
  * 用法: node scripts/actions.check.mjs
  */
@@ -32,6 +36,75 @@ try {
   rmSync(temp, { recursive: true, force: true });
 }
 const { prepareAction, followsFocus, needsFrontmostProbe, targetIsFrontmost } = actions;
+
+// 6) 设置要活过 vendor 的重新加载。syncSettings 以前只改内存里的配置对象,而每次工具调用的 ensureReady 都会
+// loadComputerUseConfig(整个对象换新)—— 设置页里的「严格后台」因此从未生效,[foreground] 那行还在劝用户去开它。
+{
+  const dist = path.join(root, 'tangu-plugins/computer-use/dist');
+  const outfile = path.join(dist, `.settings-check-${process.pid}.mjs`); // 得落在 dist 里,原因见 untargeted-input.check.mjs
+  let settings;
+  try {
+    await build({
+      stdin: { contents: "export { syncSettings } from './src/tools.ts'\nexport { getComputerUseConfig, loadComputerUseConfig } from './src/vendor/config.ts'", resolveDir: root, loader: 'ts' },
+      bundle: true, platform: 'node', format: 'esm', target: 'node20', outfile, logLevel: 'silent', external: ['node:*'],
+      alias: { '@earendil-works/pi-coding-agent': path.join(root, 'src/pi-compat.ts') },
+      banner: { js: "import { createRequire as __createRequire } from 'node:module';\nconst require = __createRequire(import.meta.url);" },
+    });
+    settings = await import(pathToFileURL(outfile).href);
+  } finally {
+    rmSync(outfile, { force: true });
+  }
+  const store = (values) => ({ getScopeSettings: () => values });
+  settings.syncSettings(store({ headless: true, cursor_overlay: false, browser_use: false, managed_browser: 'helium' }));
+  settings.loadComputerUseConfig(os.tmpdir()); // 每次工具调用都会发生的那一下
+  assert.deepEqual({ ...settings.getComputerUseConfig() }, { browser_use: false, headless: true, cursor_overlay: false, managed_browser: 'helium' }, '设置在 vendor 重新加载配置之后必须还在');
+  settings.syncSettings(store({ headless: false }));
+  settings.loadComputerUseConfig(os.tmpdir());
+  assert.equal(settings.getComputerUseConfig().headless, false, '关掉严格后台也要跟得上');
+  assert.equal(process.env.PI_COMPUTER_USE_CURSOR_OVERLAY, undefined, '这次没给的项:上次写的环境变量撤掉');
+  assert.equal(settings.getComputerUseConfig().cursor_overlay, true, '撤掉之后回到缺省值');
+  process.env.PI_COMPUTER_USE_BROWSER_USE = 'false'; // 不是 syncSettings 写的(用户自己设的)
+  settings.syncSettings(store({}));
+  assert.equal(process.env.PI_COMPUTER_USE_BROWSER_USE, 'false', '不是我们写的环境变量不碰');
+  delete process.env.PI_COMPUTER_USE_BROWSER_USE;
+  console.log('✓ 插件设置(严格后台等)活过 vendor 的配置重新加载');
+}
+
+// 7) src/wheel.ts:Mos 的设置 → 发给 helper 的滚动量。实测的那组设置(reverse=1 / smooth=1 / speed=3)下 -100 滚 +267。
+{
+  const outfile = path.join(os.tmpdir(), `cu-wheel-check-${process.pid}.mjs`);
+  let wheel;
+  try {
+    await build({ entryPoints: [path.join(root, 'src/wheel.ts')], bundle: true, platform: 'node', format: 'esm', target: 'node20', outfile, logLevel: 'silent' });
+    wheel = await import(pathToFileURL(outfile).href);
+  } finally {
+    rmSync(outfile, { force: true });
+  }
+  const { parseMos, wheelFixFor, applyWheelFix } = wheel;
+  const prefs = (o) => `{\n${Object.entries(o).map(([k, v]) => `    ${k} = ${v};`).join('\n')}\n}`;
+  const fixFor = (globals, apps = [], exe) => wheelFixFor(parseMos(prefs(globals), JSON.stringify(apps)), exe);
+  const measured = fixFor({ duration: '"3.9"', precision: 1, reverse: 1, smooth: 1, speed: 3, step: 35, whitelist: 0 });
+  assert.deepEqual(measured, { sign: -1, gain: 3 }, '反向 + 平滑、speed 3');
+  assert.equal(applyWheelFix(300, measured), -100, '要往下 300 → 发 -100(Mos 翻回来再乘 3)');
+  assert.equal(applyWheelFix(-150, measured), 50);
+  assert.equal(applyWheelFix(1, measured), -1, '非零的量不会被除成零');
+  assert.equal(applyWheelFix(0, measured), 0, '零还是零(垫的那一下不受影响)');
+  assert.deepEqual(fixFor({ reverse: 1, smooth: 0, speed: 3 }), { sign: -1, gain: 1 }, '只开反向:只翻方向');
+  assert.deepEqual(fixFor({ reverse: 0, smooth: 1, speed: '"2.5"' }), { sign: 1, gain: 2.5 }, '只开平滑:只缩量;带引号的小数也认');
+  assert.deepEqual(fixFor({ reverse: 0, smooth: 0, speed: 3 }), { sign: 1, gain: 1 }, '都没开:不动');
+  assert.deepEqual(wheelFixFor(parseMos('', 'not json')), { sign: 1, gain: 1 }, '读不出设置:不动');
+  assert.equal(applyWheelFix(300, { sign: 1, gain: 1 }), 300);
+  // 分应用:照 Mos 自己的规则。清单里勾了「继承」的用全局;没勾的用它自己的;白名单开着时清单外的 App 它不碰。
+  const on = { reverse: 1, smooth: 1, speed: 3, whitelist: 0 };
+  const app = (over) => ({ path: '/Applications/A.app/Contents/MacOS/A', inherit: true, scrollBasic: { smooth: false, reverse: false }, scrollAdvanced: { speed: 5 }, ...over });
+  assert.deepEqual(fixFor(on, [app()], '/Applications/A.app/Contents/MacOS/A'), { sign: -1, gain: 3 }, '清单里勾了继承 → 全局设置');
+  assert.deepEqual(fixFor(on, [app({ inherit: false })], '/Applications/A.app/Contents/MacOS/A'), { sign: 1, gain: 1 }, '没勾继承、自己两样都关 → 不动(Mos 不碰它,我们也别抵)');
+  assert.deepEqual(fixFor(on, [app({ inherit: false, scrollBasic: { smooth: true, reverse: false } })], '/Applications/A.app/Contents/MacOS/A'), { sign: 1, gain: 5 }, '没勾继承 → 用它自己的 speed');
+  assert.deepEqual(fixFor(on, [app({ inherit: false })], '/Applications/B.app/Contents/MacOS/B'), { sign: -1, gain: 3 }, '别的 App 不受这条例外影响');
+  assert.deepEqual(fixFor({ ...on, whitelist: 1 }, [app()], '/Applications/B.app/Contents/MacOS/B'), { sign: 1, gain: 1 }, '白名单开着、不在清单里 → Mos 不碰,不抵');
+  assert.deepEqual(fixFor({ ...on, whitelist: 1 }, [app()], '/Applications/A.app/Contents/MacOS/A'), { sign: -1, gain: 3 }, '白名单开着、在清单里 → 照常');
+  console.log('✓ Mos 对滚轮的改写:按它的设置抵掉方向和放大');
+}
 
 const node = (over = {}) => ({ ref: '@e1', wireRef: 'w1', role: 'AXButton', actions: ['AXPress'], canPress: true, children: [], rect: { x: 100, y: 200, w: 40, h: 20 }, ...over });
 const nodes = { '@e1': node(), '@e2': node({ ref: '@e2', wireRef: 'w2', role: 'AXScrollArea', actions: [], canPress: false }) };
@@ -149,6 +222,23 @@ console.log('✓ keypress / typeText:跟随焦点、无从判断时的报错文�
 assert.equal(message(() => prepareAction({ action: 'click' }, fresh(), env())), 'click requires either ref or both x and y.');
 assert.equal(message(() => prepareAction({ action: 'moveMouse' }, fresh({ clicked: true, frontmost: true }), env())), 'moveMouse requires either ref or both x and y.');
 console.log('✓ scroll:沿用本批 click / moveMouse 的位置、单独出现时的报错文案');
+
+// ── 5) 按坐标的 scroll / drag 是真实输入(走前台),按 ref 的仍走后台 ──
+// 反馈 55b984eb:微信里按坐标滚动投给进程(pid)没人理,outcome 又是 unknown,所以也没有任何重试。
+{
+  const foreground = (action, e = env(), state = fresh()) => prepareAction(action, state, e).needsForeground;
+  const dragPath = [{ x: 400, y: 150 }, { x: 400, y: 500 }];
+  assert.equal(foreground({ action: 'scroll', x: 300, y: 200, scrollY: 600 }), true, 'a coordinate scroll is real input');
+  assert.equal(foreground({ action: 'drag', path: dragPath }), true, 'a drag is real input');
+  const state = fresh();
+  prepareAction({ action: 'moveMouse', x: 5, y: 5 }, state, env());
+  assert.equal(prepareAction({ action: 'scroll', scrollY: 3 }, state, env()).needsForeground, true, 'a scroll that reuses the pointer position is a coordinate scroll too');
+  assert.equal(foreground({ action: 'scroll', ref: '@e2', scrollY: 3 }), false, 'a ref scroll keeps the background accessibility path');
+  assert.equal(foreground({ action: 'moveMouse', x: 5, y: 5 }), false, 'moveMouse alone does not take the foreground');
+  assert.equal(foreground({ action: 'scroll', x: 300, y: 200, scrollY: 600 }, env({ headless: true })), false, 'strict background never takes the foreground');
+  assert.equal(foreground({ action: 'drag', path: dragPath }, env({ headless: true })), false, 'strict background never takes the foreground (drag)');
+}
+console.log('✓ 按坐标的 scroll / drag 走前台,按 ref 的 scroll 与严格后台不变');
 
 // ── 4) 判据 ──
 assert.equal(followsFocus({ action: 'keypress', keys: ['UP'] }), true);

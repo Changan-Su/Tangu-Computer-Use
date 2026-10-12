@@ -127,7 +127,13 @@ npm run check:live     # real machine, needs an authorized helper:
                        #   check:blindclick  background click lands without taking the foreground
                        #   check:liveview    the live view really streams, at the window's aspect
                        #   check:overlay     both overlays are ON SCREEN and ABOVE the target window
-                       # (briefly opens Calculator; not runnable in CI, so not part of `check`)
+                       #   check:untargeted  keys / scroll that name no target follow the focus
+                       #   check:vision      an app with no accessibility tree: coordinates read off the
+                       #                     screenshot, real scroll / drag, unmet expect, window off-desktop
+                       # (briefly opens Calculator and a small self-drawn window; not runnable in CI,
+                       #  so not part of `check`)
+python3 scripts/run-timeline.py <session-id>   # rebuild a run step by step (model reasoning, tool calls,
+                       # timings) from the engine's local state.db; a feedback export has none of that
 npm run build:native   # build the macOS Swift helper (arm64 + x86_64)
 npm run build:windows  # Windows Rust helper (must run on Windows)
 npm run build:linux    # Linux Rust helper (must run on Linux)
