@@ -14,13 +14,13 @@ import { promisify } from 'node:util';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const execFileP = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
 
 async function unitTests() {
-  const { foregroundNote, selfWindowNote, imageNote, expectNote, goneHint, noRootsHint, scrollNote } = await import(path.join(here, '..', 'tangu-plugins', 'computer-use', 'dist', 'foregroundNote.js'));
+  const { foregroundNote, selfWindowNote, imageNote, expectNote, goneHint, noRootsHint, scrollNote } = await import(pathToFileURL(path.join(here, '..', 'tangu-plugins', 'computer-use', 'dist', 'foregroundNote.js')).href);
   const has = (s) => s.includes('[foreground]');
 
   // 无信号 → 空串

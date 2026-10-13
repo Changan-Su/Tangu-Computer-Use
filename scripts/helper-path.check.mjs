@@ -12,7 +12,7 @@ const userHelperAppPath = path.join(homeDir, 'Applications', 'tangu-computer-use
 
 assert.equal(
   resolveMacosHelperAppPath({ env: { PI_COMPUTER_USE_HELPER_APP_PATH: '/tmp/custom-helper.app' }, homeDir }),
-  '/tmp/custom-helper.app',
+  path.resolve('/tmp/custom-helper.app'),
   '显式路径优先',
 );
 assert.equal(
@@ -61,7 +61,7 @@ function bundleRootFrom(startFile) {
 assert.equal(bundleRootFrom(artifact), repoRoot, '从产物往上必须能找到 bundle 根(manifest.json + scripts/setup-helper.mjs)');
 
 const arch = process.arch === 'x64' ? 'x64' : 'arm64';
-assert.ok(
+if (process.platform === 'darwin') assert.ok(
   existsSync(path.join(repoRoot, 'prebuilt', 'macos', arch, 'bridge'))
     || existsSync(path.join(repoRoot, 'prebuilt', 'macos', 'universal', 'tangu-computer-use.app')),
   `bundle 里必须随包带 native helper(prebuilt/macos/${arch}/bridge 或 universal 的已签名 .app)—— 否则自装要联网,离线/内网必失败`,
