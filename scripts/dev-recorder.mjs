@@ -11,6 +11,7 @@
 //   node scripts/dev-recorder.mjs stop
 //   node scripts/dev-recorder.mjs diag           -> 订阅者数 + 无痕扫描计数(recorderPrivateScan*,只有计数):
 //                                                   浏览器窗口的遍历走了几次、几次没看完、各因什么停手
+// 全局手势订阅(hotkeySubscribe)用同一个 dev helper:起来之后跑 `node scripts/probe-hotkey.mjs`。
 // Desktop 接这个 helper:PI_CU_SOCKET_PATH=<下面的 socket> 起 dev 实例。
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -67,7 +68,8 @@ if (cmd === 'build') {
 </dict></plist>\n`);
 	const ids = execFileSync('security', ['find-identity', '-v', '-p', 'codesigning'], { encoding: 'utf8' });
 	const identity = ids.match(/"(Apple Development:[^"]+)"/)?.[1] ?? '-';
-	execFileSync('codesign', ['--force', '--sign', identity, app], { stdio: 'inherit', timeout: 30_000 });
+	// 不设超时:用开发证书签名可能弹钥匙串授权框、等人点;中途杀掉 codesign 会留下一个签名坏掉的 bundle。
+	execFileSync('codesign', ['--force', '--sign', identity, app], { stdio: 'inherit' });
 	console.log(`built ${app} (signed: ${identity === '-' ? 'ad-hoc — grant is lost on every rebuild' : identity})`);
 } else if (cmd === 'start') {
 	mkdirSync(path.dirname(socketPath), { recursive: true });
@@ -80,7 +82,7 @@ if (cmd === 'build') {
 } else if (cmd === 'diag') {
 	const res = await request({ cmd: 'diagnostics' });
 	if (!res.ok) { console.log(JSON.stringify(res)); process.exit(1); }
-	const keys = ['protocolVersion', 'accessibility', 'recorderSubscribers', 'recorderPrivateScans', 'recorderPrivateScanIncomplete', 'recorderPrivateScanStops'];
+	const keys = ['protocolVersion', 'accessibility', 'recorderSubscribers', 'hotkeySubscribers', 'recorderPrivateScans', 'recorderPrivateScanIncomplete', 'recorderPrivateScanStops'];
 	console.log(JSON.stringify(Object.fromEntries(keys.map((key) => [key, res.result[key]])), null, 1));
 } else if (cmd === 'stop') {
 	console.log(await request({ cmd: 'shutdown' }).catch((e) => `not running (${e.code})`));

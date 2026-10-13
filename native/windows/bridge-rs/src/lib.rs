@@ -6,6 +6,9 @@
 pub mod agent_marker;
 pub mod capture;
 pub mod error;
+#[cfg(windows)]
+pub mod hotkey;
+pub mod hotkey_logic;
 pub mod input;
 pub mod protocol;
 #[cfg(windows)]

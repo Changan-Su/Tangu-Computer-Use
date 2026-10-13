@@ -67,6 +67,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::agent_marker;
+use crate::{hotkey, hotkey_logic};
 use crate::recorder_logic::{self as logic, limit, Context, DeliveryState, Kind, PendingAction, Policy, PrivateVerdict, TextMode};
 
 const IDLE_EXIT: Duration = Duration::from_secs(60);
@@ -93,7 +94,7 @@ const UIA_TIMEOUT_MS: u32 = 1000;
 const WM_APP_RETARGET: u32 = WM_APP + 1;
 const UIA_E_ELEMENTNOTAVAILABLE: i32 = 0x8004_0201_u32 as i32;
 
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -112,7 +113,7 @@ pub struct Outbox {
 }
 
 impl Outbox {
-    fn send(&self, object: &Value) {
+    pub(crate) fn send(&self, object: &Value) {
         let Ok(mut line) = serde_json::to_string(object) else { return };
         line.push('\n');
         let dropped = self.dropped.load(Ordering::Acquire);
@@ -213,7 +214,8 @@ fn idle_watchdog() {
     loop {
         thread::sleep(Duration::from_secs(5));
         let idle = (now_ms() as u64).saturating_sub(LAST_ACTIVITY_MS.load(Ordering::Acquire));
-        if SUBSCRIBERS.load(Ordering::Acquire) == 0 && idle >= IDLE_EXIT.as_millis() as u64 {
+        // 全局手势订阅者(hotkey.rs)也算:有人订着就不能退。
+        if SUBSCRIBERS.load(Ordering::Acquire) == 0 && hotkey::subscriber_count() == 0 && idle >= IDLE_EXIT.as_millis() as u64 {
             std::process::exit(0);
         }
     }
@@ -292,7 +294,7 @@ fn create_pipe(name: &HSTRING, first: bool, security: &PipeSecurity) -> Result<H
     Ok(handle)
 }
 
-/// 一条连接:读第一行命令。recordSubscribe → 注册订阅者并一直读到对端关闭;diagnostics → 回一行就关。
+/// 一条连接:读第一行命令。recordSubscribe / hotkeySubscribe → 注册订阅者并一直读到对端关闭;diagnostics → 回一行就关。
 fn serve_client(raw: isize) {
     touch_activity();
     // SAFETY: raw 是 ConnectNamedPipe 成功后的管道句柄,所有权交给 File(drop 时 CloseHandle)。
@@ -306,8 +308,21 @@ fn serve_client(raw: isize) {
     let request: Value = serde_json::from_str(first.trim()).unwrap_or(Value::Null);
     let id = request.get("id").and_then(Value::as_str).unwrap_or("unknown").to_owned();
     let mut writer = file;
-    match request.get("cmd").and_then(Value::as_str) {
-        Some("recordSubscribe") => {}
+    // 全局手势订阅(hotkey.rs)与电脑历史订阅走同一条连接模型:回包排第一、之后只推事件、对端关闭即退订。
+    let wants_hotkey = match request.get("cmd").and_then(Value::as_str) {
+        Some("recordSubscribe") => false,
+        Some("hotkeySubscribe") => {
+            let gesture = request.get("gesture").and_then(Value::as_str);
+            if !hotkey_logic::gesture_known(gesture) {
+                let reply = json!({ "id": id, "ok": false, "error": {
+                    "code": "unknown_gesture",
+                    "message": format!("Unknown gesture '{}'. Supported: {}", gesture.unwrap_or(""), hotkey_logic::GESTURE_MOD_PAIR),
+                }});
+                let _ = writeln!(writer, "{reply}");
+                return;
+            }
+            true
+        }
         Some("diagnostics") => {
             let reply = json!({ "id": id, "ok": true, "result": {
                 "protocolVersion": logic::RECORDER_PROTOCOL,
@@ -318,6 +333,7 @@ fn serve_client(raw: isize) {
                 "phaseMs": phase_slot().lock().map(|p| if p.1 > 0 { now_ms() - p.1 } else { 0 }).unwrap_or(-1),
                 "backlog": POSTED.load(Ordering::Acquire).saturating_sub(HANDLED.load(Ordering::Acquire)),
                 "hooks": HOOKS.load(Ordering::Acquire),
+                "hotkeySubscribers": hotkey::subscriber_count(),
             }});
             let _ = writeln!(writer, "{reply}");
             return;
@@ -330,14 +346,28 @@ fn serve_client(raw: isize) {
             let _ = writeln!(writer, "{reply}");
             return;
         }
-    }
+    };
 
     let (tx, rx) = mpsc::sync_channel::<String>(SUBSCRIBER_QUEUE);
     let outbox = Arc::new(Outbox { tx, dropped: AtomicUsize::new(0) });
     // 回包排在这条连接写队列的第一位,之后才是事件。
-    outbox.send(&json!({ "id": id, "ok": true, "result": {
-        "subscribed": true, "protocolVersion": logic::RECORDER_PROTOCOL, "axTrusted": true,
-    }}));
+    let hotkey_sub = if wants_hotkey {
+        let ack = json!({ "id": id, "ok": true, "result": { "subscribed": true } });
+        match hotkey::subscribe(hotkey_logic::exclude_pids(request.get("excludePids")), Arc::clone(&outbox), &ack) {
+            Ok(sub) => Some(sub),
+            Err(message) => {
+                // 键盘钩子装不上:回错误包,这条连接到此为止。
+                let reply = json!({ "id": id, "ok": false, "error": { "code": "hook_failed", "message": message } });
+                let _ = writeln!(writer, "{reply}");
+                return;
+            }
+        }
+    } else {
+        outbox.send(&json!({ "id": id, "ok": true, "result": {
+            "subscribed": true, "protocolVersion": logic::RECORDER_PROTOCOL, "axTrusted": true,
+        }}));
+        None
+    };
     let writer_raw = writer.as_raw_handle() as isize;
     let writer_thread = thread::spawn(move || {
         for line in rx {
@@ -349,8 +379,10 @@ fn serve_client(raw: isize) {
         }
     });
     let sub_id = NEXT_SUB_ID.fetch_add(1, Ordering::AcqRel);
-    SUBSCRIBERS.fetch_add(1, Ordering::AcqRel);
-    post(Msg::Subscribe { id: sub_id, policy: Policy::from_json(request.get("policy")), outbox: Arc::clone(&outbox) });
+    if hotkey_sub.is_none() {
+        SUBSCRIBERS.fetch_add(1, Ordering::AcqRel);
+        post(Msg::Subscribe { id: sub_id, policy: Policy::from_json(request.get("policy")), outbox: Arc::clone(&outbox) });
+    }
     // 订阅之后对端发什么都不认,只判断它关没关。**不能**阻塞在 ReadFile 上等 EOF:同步打开的管道上,同一个文件对象
     // (try_clone 复制出的句柄共享它)的 I/O 是串行的,挂着的读会把写线程的回包和事件全部卡住(CI 实测:回包永远到不了)。
     // 所以按 PeekNamedPipe 轮询:出错 = 对端关了 / 我们断开了;有数据才读(不会阻塞),读了就丢。
@@ -371,9 +403,17 @@ fn serve_client(raw: isize) {
             break;
         }
     }
-    post(Msg::Unsubscribe(sub_id));
-    drop(outbox);
-    SUBSCRIBERS.fetch_sub(1, Ordering::AcqRel);
+    match hotkey_sub {
+        Some(sub) => {
+            hotkey::unsubscribe(sub);
+            drop(outbox);
+        }
+        None => {
+            post(Msg::Unsubscribe(sub_id));
+            drop(outbox);
+            SUBSCRIBERS.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
     touch_activity();
     let _ = writer_thread.join();
 }
@@ -1494,7 +1534,7 @@ fn read_field(element: &IUIAutomationElement, mode: TextMode) -> FieldRead {
 
 // ── 窗口 / 进程小工具 ──
 
-fn window_text(hwnd: isize) -> String {
+pub(crate) fn window_text(hwnd: isize) -> String {
     let mut buffer = [0u16; 512];
     let len = unsafe { GetWindowTextW(HWND(hwnd as *mut _), &mut buffer) };
     String::from_utf16_lossy(&buffer[..len.max(0) as usize])
@@ -1506,7 +1546,7 @@ fn class_name(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buffer[..len.max(0) as usize])
 }
 
-fn window_pid(hwnd: HWND) -> u32 {
+pub(crate) fn window_pid(hwnd: HWND) -> u32 {
     let mut pid = 0u32;
     unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
     pid
@@ -1514,7 +1554,7 @@ fn window_pid(hwnd: HWND) -> u32 {
 
 /// 前台窗口 → (App 进程 pid, exe 文件名, 前台窗口类名)。UWP App 的前台窗口属于 ApplicationFrameHost,
 /// 真正的 App 是它里面的 Windows.UI.Core.CoreWindow 子窗口的进程。
-fn window_app(hwnd: isize) -> Option<(u32, String, String)> {
+pub(crate) fn window_app(hwnd: isize) -> Option<(u32, String, String)> {
     if hwnd == 0 {
         return None;
     }
@@ -1540,7 +1580,7 @@ fn window_app(hwnd: isize) -> Option<(u32, String, String)> {
     Some((pid, exe, class))
 }
 
-fn process_path(pid: u32) -> Option<String> {
+pub(crate) fn process_path(pid: u32) -> Option<String> {
     unsafe {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buffer = [0u16; 1024];
@@ -1558,7 +1598,7 @@ fn process_exe(pid: u32) -> Option<String> {
 }
 
 /// 版本资源里的 FileDescription(「Google Chrome」「记事本」);取不到 → None。
-fn file_description(path: &str) -> Option<String> {
+pub(crate) fn file_description(path: &str) -> Option<String> {
     if path.is_empty() {
         return None;
     }

@@ -369,7 +369,7 @@ final class InputSuppressionGuard {
 }
 
 final class Bridge {
-	private let protocolVersion = 14
+	private let protocolVersion = 15
 	private let refStore = AXRefStore()
 	private let inputSuppressionGuard = InputSuppressionGuard()
 	private let physicalInputLock = NSRecursiveLock()
@@ -470,8 +470,8 @@ final class Bridge {
 		let clientInput = FileHandle(fileDescriptor: client, closeOnDealloc: true)
 		var buffer = Data()
 		let newline = Data([0x0A])
-		// Tangu:这条连接一旦成了电脑历史订阅(recordSubscribe),之后只由 ActivityRecorder 写事件、这里只等 EOF ——
-		// 再处理别的请求,回包会和事件行在不同线程上交错写坏。
+		// Tangu:这条连接一旦成了订阅(电脑历史 recordSubscribe / 全局手势 hotkeySubscribe),之后只由订阅方的写队列写事件、
+		// 这里只等 EOF —— 再处理别的请求,回包会和事件行在不同线程上交错写坏。
 		var subscribed = false
 		while true {
 			let data = clientInput.availableData
@@ -482,15 +482,18 @@ final class Bridge {
 				let lineData = buffer.subdata(in: 0..<range.lowerBound)
 				buffer.removeSubrange(0..<range.upperBound)
 				guard let line = String(data: lineData, encoding: .utf8), !line.isEmpty else { continue }
-				if let subscribedNow = subscribeRecorder(line, client: client) {
+				if let subscribedNow = subscribeRecorder(line, client: client) ?? subscribeHotkey(line, client: client) {
 					if subscribedNow { subscribed = true; buffer.removeAll(); break }
 					continue
 				}
 				handleLine(line, to: client)
 			}
 		}
-		// 先退订并排空它的写队列,再关 fd —— 否则排队中的写会落到被复用的 fd 上。
-		if subscribed { ActivityRecorder.shared.unsubscribe(fd: client) }
+		// 先退订并排空它的写队列,再关 fd —— 否则排队中的写会落到被复用的 fd 上。两边对没订阅过的 fd 都是空操作。
+		if subscribed {
+			ActivityRecorder.shared.unsubscribe(fd: client)
+			HotkeyMonitor.shared.unsubscribe(fd: client)
+		}
 		clientInput.closeFile()
 	}
 
@@ -504,6 +507,24 @@ final class Bridge {
 		else { return nil }
 		let id = (object["id"] as? String) ?? "invalid"
 		guard let failure = ActivityRecorder.shared.subscribe(fd: client, id: id, policy: object["policy"], protocolVersion: protocolVersion, browserBundleIds: browserBundleIds) else {
+			return true
+		}
+		send(["id": id, "ok": false, "error": ["message": failure.message, "code": failure.code]], to: client)
+		recordCompletedRequest(id)
+		return false
+	}
+
+	/// Tangu:hotkeySubscribe(协议 15,见 hotkey_monitor.swift)。返回值与 subscribeRecorder 同义。
+	private func subscribeHotkey(_ line: String, client: Int32) -> Bool? {
+		guard line.contains("hotkeySubscribe"),
+			let data = line.data(using: .utf8),
+			let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+			object["cmd"] as? String == "hotkeySubscribe"
+		else { return nil }
+		let id = (object["id"] as? String) ?? "invalid"
+		// 订阅方自己的进程(Forsion 桌面端):它在前台时手势由它自己的窗口处理,这里再推一遍就重复了。
+		let excludePids = Set(((object["excludePids"] as? [Any]) ?? []).compactMap { ($0 as? NSNumber)?.int32Value })
+		guard let failure = HotkeyMonitor.shared.subscribe(fd: client, id: id, gesture: object["gesture"] as? String, excludePids: excludePids) else {
 			return true
 		}
 		send(["id": id, "ok": false, "error": ["message": failure.message, "code": failure.code]], to: client)
@@ -800,6 +821,9 @@ final class Bridge {
 		case "recordSubscribe":
 			// 只在 serve socket 的专用连接上有意义(processClient 截走了那条路);stdin 模式没有能长开的连接。
 			throw BridgeFailure(message: "recordSubscribe needs a dedicated connection to the serve socket", code: "unsupported")
+		case "hotkeySubscribe":
+			// 同上:全局监听挂在 NSApp 主线程的 run loop 上,stdin 模式没有。
+			throw BridgeFailure(message: "hotkeySubscribe needs a dedicated connection to the serve socket", code: "unsupported")
 		default:
 			throw BridgeFailure(message: "Unknown command '\(cmd)'", code: "unknown_command")
 		}
@@ -909,6 +933,7 @@ final class Bridge {
 			"screenRecording": permissions["screenRecording"] ?? false,
 			"recentCompletedRequestIds": completedRequestIds(),
 			"recorderSubscribers": ActivityRecorder.shared.subscriberCount,
+			"hotkeySubscribers": HotkeyMonitor.shared.subscriberCount,
 		]
 		// Tangu:电脑历史的无痕扫描计数(只有计数)—— 浏览器窗口的有上限遍历走了几次、几次没看完、各因什么停手。
 		// 真机上据此判断「扫描不完整时仍按普通窗口记」要不要改(见 activity_recorder.swift RecorderScanStats)。
