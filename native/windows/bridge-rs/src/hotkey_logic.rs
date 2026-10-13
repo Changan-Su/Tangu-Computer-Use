@@ -37,11 +37,17 @@ impl ModPair {
     /// 下一次变化时自愈;同一状态重复送进来(按键重复)不会再触发。返回 true = 手势成立。
     pub fn modifiers(&mut self, left: bool, right: bool, others: bool) -> bool {
         let was_exactly_one = self.left != self.right;
+        // 换了边(上一次只按着左、这一次只按着右):中间那次抬起没看到,但两个键必然同时松开过 —— 按新的一轮算。
+        // 不这样的话,漏掉一次抬起会让下一次干净的手势白按。
+        let swapped = was_exactly_one && left != right && left != self.left;
         self.left = left;
         self.right = right;
         if !left && !right {
             self.spent = false;
             return false;
+        }
+        if swapped {
+            self.spent = false;
         }
         if others {
             self.spent = true;

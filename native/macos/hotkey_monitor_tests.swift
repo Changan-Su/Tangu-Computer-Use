@@ -67,6 +67,10 @@ import Foundation
 		check(fires([.mods(true, true), .mods(true, false), .mods(true, true)]) == [], "a round that started with a missed event stays spent")
 		check(fires([.mods(true, true), .mods(false, false), .mods(true, false), .mods(true, true)]) == [3], "a missed event heals once both are released")
 		check(fires([.mods(true, false), .mods(false, true)]) == [], "swapping keys without overlap does not fire")
+		// 触发之后松开左键,右键的抬起没收到;下一次只按着左键 = 换了边,中间两个必然都松开过。
+		check(fires([.mods(true, false), .mods(true, true), .mods(false, true), .mods(true, false), .mods(true, true)]) == [1, 4], "a missed final key-up does not cost the next gesture")
+		check(fires([.mods(true, false), .key, .mods(false, true), .mods(true, true)]) == [3], "switching sides starts a fresh round")
+		check(fires([.mods(true, false), .mods(false, true, others: true), .mods(true, true, others: true)]) == [], "switching sides with another modifier held is still cancelled")
 	}
 
 	// MARK: flagsChanged → 左右 ⌘
@@ -127,8 +131,9 @@ import Foundation
 			[kCGWindowOwnerPID as String: 7, kCGWindowLayer as String: 0],
 		]
 		let found = hotkeyWindowCandidates(pid: 7, entries: entries)
-		check(found.map(\.windowId) == [4, 5], "candidates keep front-to-back order and skip other apps, other layers, transparent and malformed entries")
-		check(found[0].title == "" && found[1].title == "Document", "a missing window name becomes an empty title")
+		check(found.map(\.windowId) == [1, 4, 5] && found.map(\.layer) == [25, 0, 0], "candidates keep front-to-back order and their layer, and skip other apps, transparent and malformed entries")
+		check(found[1].title == "" && found[2].title == "Document", "a missing window name becomes an empty title")
+		check(hotkeyTopWindow(found)?.windowId == 4, "the top window is an ordinary one, not a higher layer")
 		check(hotkeyWindowCandidates(pid: 11, entries: entries).isEmpty, "an app without windows has no candidates")
 
 		let sheet = HotkeyWindowCandidate(windowId: 4, bounds: CGRect(x: 320, y: 220, width: 420, height: 260), title: "")
@@ -140,8 +145,13 @@ import Foundation
 
 		let focusedDocument = HotkeyFocusedWindow(frame: CGRect(x: 101, y: 80, width: 900, height: 699), title: "Report.pages")
 		check(hotkeyResolveWindow([sheet, document], focused: focusedDocument) == (5, "Report.pages"), "the focused window is matched by frame even when a sheet is on top")
-		check(hotkeyResolveWindow([sheet, document], focused: HotkeyFocusedWindow(frame: CGRect(x: 0, y: 0, width: 10, height: 10), title: "Elsewhere")) == (4, "Elsewhere"), "an unmatched focused window falls back to the top window")
-		check(hotkeyResolveWindow([sheet, document], focused: HotkeyFocusedWindow(frame: nil, title: "No frame")) == (4, "No frame"), "a focused window without a frame falls back to the top window")
+		check(hotkeyResolveWindow([sheet, document], focused: HotkeyFocusedWindow(frame: CGRect(x: 0, y: 0, width: 10, height: 10), title: "Elsewhere")) == (4, ""), "a focused window that matches nothing captured keeps the top window and does not lend it a title")
+		check(hotkeyResolveWindow([sheet, document], focused: HotkeyFocusedWindow(frame: CGRect(x: 130, y: 110, width: 900, height: 700), title: "Cascaded")) == (4, ""), "a window offset like a cascaded neighbour is not a match")
+		check(hotkeyResolveWindow([sheet, document], focused: HotkeyFocusedWindow(frame: nil, title: "No frame")) == (4, ""), "a focused window without a frame cannot be told apart among several windows")
+		check(hotkeyResolveWindow([document], focused: HotkeyFocusedWindow(frame: nil, title: "No frame")) == (5, "No frame"), "a focused window without a frame is the only window there is")
+		let panel = HotkeyWindowCandidate(windowId: 9, bounds: CGRect(x: 600, y: 300, width: 260, height: 400), title: "", layer: 3)
+		check(hotkeyResolveWindow([panel, document], focused: HotkeyFocusedWindow(frame: panel.bounds, title: "Inspector")) == (9, "Inspector"), "a focused floating panel is matched on its own layer")
+		check(hotkeyResolveWindow([panel, document], focused: nil) == (5, "Document"), "without AX a floating panel is never the top window")
 		check(hotkeyResolveWindow([document], focused: HotkeyFocusedWindow(frame: document.bounds, title: "")) == (5, "Document"), "an empty AX title falls back to the window name")
 		check(hotkeyResolveWindow([document, sheet], focused: nil) == (5, "Document"), "without AX the top window and its name are used")
 		check(hotkeyResolveWindow([], focused: HotkeyFocusedWindow(frame: nil, title: "Only a title")) == (0, "Only a title"), "no window on screen leaves windowId 0")

@@ -79,6 +79,10 @@ fn missed_events_do_not_fire_and_heal() {
     assert!(fires(&[Mods(true, true), Mods(true, false), Mods(true, true)]).is_empty());
     assert_eq!(fires(&[Mods(true, true), Mods(false, false), Mods(true, false), Mods(true, true)]), [3]);
     assert!(fires(&[Mods(true, false), Mods(false, true)]).is_empty());
+    // 触发之后松开左键,右键的抬起没收到;下一次只按着左键 = 换了边,中间两个必然都松开过。
+    assert_eq!(fires(&[Mods(true, false), Mods(true, true), Mods(false, true), Mods(true, false), Mods(true, true)]), [1, 4]);
+    assert_eq!(fires(&[Mods(true, false), Key, Mods(false, true), Mods(true, true)]), [3]);
+    assert!(fires(&[Mods(true, false), ModsWithOthers(false, true), ModsWithOthers(true, true)]).is_empty());
 }
 
 #[test]
@@ -203,6 +207,12 @@ fn a_missed_key_up_heals_without_firing() {
     keyboard.down.clear();
     assert!(!keyboard.event(VK_RCONTROL, true));
     assert!(!keyboard.event(VK_RCONTROL, false));
+    assert_eq!(keyboard.run(&[(VK_LCONTROL, true), (VK_RCONTROL, true)]), 1);
+
+    // 触发之后右 Ctrl 的抬起没收到(左 Ctrl 的收到了):下一次干净的手势照常触发。
+    let mut keyboard = Keyboard::new();
+    assert_eq!(keyboard.run(&[(VK_LCONTROL, true), (VK_RCONTROL, true), (VK_LCONTROL, false)]), 1);
+    keyboard.down.clear();
     assert_eq!(keyboard.run(&[(VK_LCONTROL, true), (VK_RCONTROL, true)]), 1);
 }
 

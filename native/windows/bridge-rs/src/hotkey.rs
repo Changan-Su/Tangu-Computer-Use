@@ -35,6 +35,8 @@ struct Sub {
     id: u64,
     exclude: Vec<u32>,
     outbox: Arc<Outbox>,
+    /// 订阅那一刻的手势序号:在这之前发生、还排在投递线程里的手势不归它(按序号比,不按时钟 —— 时钟会被调)。
+    since: u64,
 }
 
 struct Hook {
@@ -50,7 +52,10 @@ struct Registry {
 
 struct Fired {
     hwnd: isize,
+    /// 手势那一刻前台窗口所属的进程。对 `excludePids` 用它:等投递线程去查时窗口可能已经关了。
+    owner: u32,
     at: i64,
+    seq: u64,
 }
 
 fn registry() -> &'static Mutex<Registry> {
@@ -60,6 +65,8 @@ fn registry() -> &'static Mutex<Registry> {
 
 static SUBSCRIBERS: AtomicUsize = AtomicUsize::new(0);
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+/// 手势序号:每成立一次加一(钩子线程写)。
+static FIRE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// 手势订阅者数(diagnostics 报;空闲退出的看门狗也看它 —— 有手势订阅者时进程不能退)。
 pub fn subscriber_count() -> usize {
@@ -75,7 +82,7 @@ pub fn subscribe(exclude: Vec<u32>, outbox: Arc<Outbox>, ack: &Value) -> Result<
     }
     outbox.send(ack);
     let id = NEXT_ID.fetch_add(1, Ordering::AcqRel);
-    registry.subs.push(Sub { id, exclude, outbox });
+    registry.subs.push(Sub { id, exclude, outbox, since: FIRE_SEQ.load(Ordering::Acquire) });
     SUBSCRIBERS.store(registry.subs.len(), Ordering::Release);
     Ok(id)
 }
@@ -116,7 +123,12 @@ fn start_hook() -> Result<Hook, String> {
         };
         MACHINE.with(|machine| machine.set(ModPair::new()));
         FIRED.with(|fired| *fired.borrow_mut() = Some(fired_tx));
-        let _ = ready_tx.send(Ok(GetCurrentThreadId()));
+        if ready_tx.send(Ok(GetCurrentThreadId())).is_err() {
+            // 等的人已经超时走了,没人会来停这个线程:自己把钩子摘掉退出,不留一个没人管的钩子。
+            let _ = UnhookWindowsHookEx(hook);
+            FIRED.with(|fired| fired.borrow_mut().take());
+            return;
+        }
         // 这个线程没有窗口:GetMessage 只用来让系统把钩子回调派进来,以及收 WM_QUIT。
         let mut message = MSG::default();
         while GetMessageW(&mut message, None, 0, 0).0 > 0 {}
@@ -168,11 +180,13 @@ fn on_key(vk: u32, down: bool) {
     if !fire {
         return;
     }
-    // 手势成立的那一刻就把前台窗口记下(只是一个句柄);其余的交给投递线程。
-    let hwnd = unsafe { GetForegroundWindow() }.0 as isize;
+    // 手势成立的那一刻就把前台窗口和它所属的进程记下(一个句柄、一个进程号);其余的交给投递线程。
+    let foreground = unsafe { GetForegroundWindow() };
+    let owner = if foreground.0.is_null() { 0 } else { recorder::window_pid(foreground) };
     FIRED.with(|fired| {
         if let Some(tx) = fired.borrow().as_ref() {
-            let _ = tx.send(Fired { hwnd, at: recorder::now_ms() });
+            let seq = FIRE_SEQ.fetch_add(1, Ordering::AcqRel);
+            let _ = tx.send(Fired { hwnd: foreground.0 as isize, owner, at: recorder::now_ms(), seq });
         }
     });
 }
@@ -180,8 +194,15 @@ fn on_key(vk: u32, down: bool) {
 fn dispatch(rx: Receiver<Fired>) {
     let own = unsafe { GetCurrentProcessId() };
     for fired in rx {
-        let front = front_of(fired.hwnd);
-        let pids = front.as_ref().map(|(_, pids)| pids.to_vec()).unwrap_or_default();
+        let front = front_of(fired.hwnd, fired.owner);
+        // 那一刻窗口所属的进程,加上解析出来的 App 进程(UWP 的窗口挂在宿主进程名下)。窗口没了也照样按前者排除。
+        let mut pids = Vec::with_capacity(2);
+        if fired.owner != 0 {
+            pids.push(fired.owner);
+        }
+        if let Some(front) = &front {
+            pids.push(front.pid);
+        }
         if pids.contains(&own) {
             continue;
         }
@@ -189,7 +210,7 @@ fn dispatch(rx: Receiver<Fired>) {
             Ok(registry) => registry
                 .subs
                 .iter()
-                .filter(|sub| !logic::excluded(&sub.exclude, &pids))
+                .filter(|sub| sub.since <= fired.seq && !logic::excluded(&sub.exclude, &pids))
                 .map(|sub| Arc::clone(&sub.outbox))
                 .collect(),
             Err(_) => return,
@@ -197,34 +218,29 @@ fn dispatch(rx: Receiver<Fired>) {
         if targets.is_empty() {
             continue;
         }
-        let line = logic::event(fired.at, front.as_ref().map(|(front, _)| front));
+        let line = logic::event(fired.at, front.as_ref());
         for outbox in targets {
             outbox.send(&line);
         }
     }
 }
 
-/// 前台窗口 → App 身份与标题,外加用来对 `excludePids` 的进程号(窗口所属进程;UWP 再加上里面真正的 App 进程)。
-/// `windowId` 始终是顶层窗口的句柄。没有前台窗口 → None(事件里 `front: null`)。
-fn front_of(hwnd: isize) -> Option<(Front, [u32; 2])> {
-    if hwnd == 0 {
-        return None;
-    }
-    let owner = recorder::window_pid(HWND(hwnd as *mut _));
-    if owner == 0 {
+/// 前台窗口 → App 身份与标题。`pid` 是真正的 App 进程(UWP 的窗口属于 ApplicationFrameHost,App 在它里面);
+/// `windowId` 始终是顶层窗口的句柄。那一刻没有前台窗口,或窗口已经不在了(句柄不再属于当时的进程)→ None(事件里 `front: null`)。
+fn front_of(hwnd: isize, owner: u32) -> Option<Front> {
+    if hwnd == 0 || owner == 0 || recorder::window_pid(HWND(hwnd as *mut _)) != owner {
         return None;
     }
     // 读不到进程路径(受保护的进程)时 window_app 给 None:照样报进程号、窗口和标题,exe / path 留空。
     let (pid, exe) = recorder::window_app(hwnd).map(|(pid, exe, _)| (pid, exe)).unwrap_or((owner, String::new()));
     let path = recorder::process_path(pid).unwrap_or_default();
     let description = recorder::file_description(&path);
-    let front = Front {
+    Some(Front {
         exe: exe.to_lowercase(),
         app: logic::app_name(description.as_deref(), &exe),
         path,
         pid,
         window_id: hwnd as i64,
         title: logic::window_title(&recorder::window_text(hwnd)),
-    };
-    Some((front, [owner, pid]))
+    })
 }

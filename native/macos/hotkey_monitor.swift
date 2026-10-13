@@ -30,12 +30,16 @@ struct ModPairMachine: Equatable {
 	/// 下一次变化时自愈;同一状态重复送进来(按键重复)不会再触发。返回 true = 手势成立。
 	mutating func modifiers(left: Bool, right: Bool, others: Bool) -> Bool {
 		let wasExactlyOne = self.left != self.right
+		// 换了边(上一次只按着左、这一次只按着右):中间那次抬起没看到,但两个键必然同时松开过 —— 按新的一轮算。
+		// 不这样的话,漏掉一次抬起会让下一次干净的手势白按。
+		let swapped = wasExactlyOne && left != right && left != self.left
 		self.left = left
 		self.right = right
 		guard left || right else {
 			spent = false
 			return false
 		}
+		if swapped { spent = false }
 		if others { spent = true }
 		guard left && right else { return false }
 		// 从「一个都没按」直接跳到「两个都按着」= 中间漏了事件,不知道期间发生过什么,不触发。
@@ -89,6 +93,8 @@ struct HotkeyWindowCandidate: Equatable {
 	var windowId: UInt32
 	var bounds: CGRect
 	var title: String
+	/// CGWindowLayer:0 = 普通窗口;浮动面板、菜单等在更高的层。
+	var layer = 0
 }
 
 /// 手势发生那一刻的前台:App 身份 + 它在屏上的窗口(前 → 后)。全部来自 NSWorkspace 与 CGWindowList,不碰 AX。
@@ -104,27 +110,30 @@ struct HotkeyFocusedWindow: Equatable {
 	var title: String
 }
 
-/// 某个进程在屏上的普通窗口(layer 0、不透明),按 CGWindowList 的顺序(前 → 后)。与 dockCandidates 同一个来源,
-/// 所以 windowId 对得上。kCGWindowName 要屏幕录制授权,没有就是空串。
+/// 某个进程在屏上的窗口(不透明的),按 CGWindowList 的顺序(前 → 后)。与 dockCandidates 同一个来源,
+/// 所以 windowId 对得上。各层都收(焦点可能落在浮动面板上),层号记下来。kCGWindowName 要屏幕录制授权,没有就是空串。
 func hotkeyWindowCandidates(pid: pid_t, entries: [[String: Any]]) -> [HotkeyWindowCandidate] {
 	var candidates: [HotkeyWindowCandidate] = []
 	for entry in entries {
 		guard (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
-			((entry[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0) == 0,
 			let windowId = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
 			let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
 			let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
 		else { continue }
 		if let alpha = (entry[kCGWindowAlpha as String] as? NSNumber)?.doubleValue, alpha <= 0 { continue }
-		candidates.append(HotkeyWindowCandidate(windowId: windowId, bounds: bounds, title: (entry[kCGWindowName as String] as? String) ?? ""))
+		candidates.append(HotkeyWindowCandidate(
+			windowId: windowId, bounds: bounds, title: (entry[kCGWindowName as String] as? String) ?? "",
+			layer: (entry[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0
+		))
 		if candidates.count == 64 { break }
 	}
 	return candidates
 }
 
-/// 没有 AX 焦点窗口可对时取哪一个:最前面那个够大的(小的多半是浮层 / 提示),都不够大就取最前面的。
+/// 没有 AX 焦点窗口可对时取哪一个:最前面那个够大的普通窗口(小的多半是浮层 / 提示),都不够大就取最前面的普通窗口。
 func hotkeyTopWindow(_ windows: [HotkeyWindowCandidate]) -> HotkeyWindowCandidate? {
-	windows.first { $0.bounds.width >= 100 && $0.bounds.height >= 80 } ?? windows.first
+	let ordinary = windows.filter { $0.layer == 0 }
+	return ordinary.first { $0.bounds.width >= 100 && $0.bounds.height >= 80 } ?? ordinary.first
 }
 
 /// 最前面的窗口已经有标题(有屏幕录制授权)就不用再问 AX。
@@ -132,19 +141,29 @@ func hotkeyNeedsFocusedWindow(_ windows: [HotkeyWindowCandidate]) -> Bool {
 	hotkeyTopWindow(windows)?.title.isEmpty ?? true
 }
 
-/// 「正在看的窗口」:AX 焦点窗口的位置大小对得上的那一个(表单 / 对话框压在文档窗口上时,焦点窗口是文档窗口);
-/// 对不上就取最前面的。标题优先用 AX 的(只要辅助功能授权)。都拿不到 → 0 / ""。
+/// 焦点窗口与候选窗口的位置大小差多少以内算同一个(四个量的差之和,单位点)。叠放的窗口一般错开几十点。
+let hotkeyFrameTolerance: CGFloat = 12
+
+/// 「正在看的窗口」。`windows` 是手势那一刻拍下的;`focused` 是随后才读到的 AX 焦点窗口,只在它的位置大小
+/// 对得上那一刻的某个窗口时才采用(表单 / 对话框压在文档窗口上时,焦点窗口是文档窗口;焦点也可能在浮动面板上)——
+/// 对不上说明读的时候焦点已经换了,或者它不在屏上:窗口号仍用那一刻最前面的,绝不把一个窗口的标题安到另一个窗口头上。
+/// 都拿不到 → 0 / ""。
 func hotkeyResolveWindow(_ windows: [HotkeyWindowCandidate], focused: HotkeyFocusedWindow?) -> (windowId: UInt32, title: String) {
 	let top = hotkeyTopWindow(windows)
-	guard let focused else { return (top?.windowId ?? 0, top?.title ?? "") }
-	let matched = focused.frame.flatMap { frame in
-		windows.first {
-			abs($0.bounds.minX - frame.minX) <= 2 && abs($0.bounds.minY - frame.minY) <= 2
-				&& abs($0.bounds.width - frame.width) <= 2 && abs($0.bounds.height - frame.height) <= 2
-		}
+	let fallback = (windowId: top?.windowId ?? 0, title: top?.title ?? "")
+	guard let focused else { return fallback }
+	// 屏上一个窗口都没有:窗口号给不出,标题照实给。
+	if windows.isEmpty { return (0, focused.title) }
+	guard let frame = focused.frame else {
+		// 没有位置大小可对:只有一个窗口时才敢把这个标题安给它。
+		return windows.count == 1 && !focused.title.isEmpty ? (fallback.windowId, focused.title) : fallback
 	}
-	let chosen = matched ?? top
-	return (chosen?.windowId ?? 0, focused.title.isEmpty ? (chosen?.title ?? "") : focused.title)
+	func distance(_ window: HotkeyWindowCandidate) -> CGFloat {
+		abs(window.bounds.minX - frame.minX) + abs(window.bounds.minY - frame.minY)
+			+ abs(window.bounds.width - frame.width) + abs(window.bounds.height - frame.height)
+	}
+	guard let nearest = windows.min(by: { distance($0) < distance($1) }), distance(nearest) <= hotkeyFrameTolerance else { return fallback }
+	return (nearest.windowId, focused.title.isEmpty ? nearest.title : focused.title)
 }
 
 /// 事件里的 `front`。字段与 dockCandidates 的一项同名同义;拿不到的给 0 / ""。
@@ -282,8 +301,9 @@ final class HotkeyMonitor {
 		let entry = subscribers.removeValue(forKey: fd)
 		registryLock.unlock()
 		guard let entry else { return }
-		entry.writer.close()
+		// 先排上拆监听,再排空写队列(对端卡住时要等到写超时):没有订阅者了,监听不该多留那几秒。
 		DispatchQueue.main.async { [self] in syncMonitors() }
+		entry.writer.close()
 	}
 
 	/// 只给测试:全局监听装没装上。须在主线程调用。
@@ -299,18 +319,22 @@ final class HotkeyMonitor {
 
 	/// 按「现在有没有订阅者」对齐全局监听:有就装、没有就拆。幂等,所以订阅 / 退订交错到达也不会装两份或漏拆。
 	private func syncMonitors() {
-		let wanted = subscriberCount > 0
-		if wanted, flagsMonitor == nil {
-			machine = ModPairMachine()
-			command = (false, false)
-			flagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [self] event in handle(event) }
-			// 只用来知道「按了一个非修饰键」:事件本身碰都不碰。
-			keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [self] _ in otherKeyDown() }
-		} else if !wanted, flagsMonitor != nil || keyMonitor != nil {
+		guard subscriberCount > 0 else {
 			if let flagsMonitor { NSEvent.removeMonitor(flagsMonitor) }
 			if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
 			flagsMonitor = nil
 			keyMonitor = nil
+			return
+		}
+		// 两个监听各自补齐(哪个没装上,下一次对齐时只补那一个,不会把已有的再装一份)。
+		if flagsMonitor == nil {
+			machine = ModPairMachine()
+			command = (false, false)
+			flagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [self] event in handle(event) }
+		}
+		if keyMonitor == nil {
+			// 只用来知道「按了一个非修饰键」:事件本身碰都不碰。
+			keyMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [self] _ in otherKeyDown() }
 		}
 	}
 
