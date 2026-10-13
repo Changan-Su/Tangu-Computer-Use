@@ -1,6 +1,6 @@
 # 更新日志
 
-## 未发布
+## 0.7.0 — 2026-10-13
 
 - 新增全局手势订阅 `hotkeySubscribe`（macOS 协议 15；Windows 在 `windows-bridge.exe serve --pipe` 进程里，两个协议号都不变）。左右两个 ⌘（Windows 上是左右两个 Ctrl）同时按下时，helper 把那一刻的前台 App 和窗口推给订阅连接，供 Forsion 桌面端做「引用我正在看的窗口」。以前只有 Forsion 自己在前台时才看得到这个手势。
 - 订阅方式与电脑历史相同：专用连接发一行 `{"id":"…","cmd":"hotkeySubscribe","gesture":"modPair","excludePids":[…]}`，首行回 `{"id":"…","ok":true,"result":{"subscribed":true}}`，之后一行一条 `{"ev":{"t":<毫秒时间戳>,"kind":"hotkey","gesture":"modPair","front":{…}}}`，关闭连接即退订。`front` 在 macOS 上是 `bundleId` / `app` / `pid` / `windowId` / `title`，在 Windows 上是 `exe`（小写文件名）/ `path` / `app` / `pid` / `windowId`（HWND）/ `title`；拿不到的字段给空串或 0，前台判断不出来时 `front` 是 `null`。前台进程在 `excludePids` 里时不推（桌面端自己在前台时由它自己的窗口处理）。可以有多个订阅者，各用各的 `excludePids`。
