@@ -205,7 +205,7 @@ async function main() {
 	fired = await gesture(a, [[VK.LCTRL, true], [VK.LCTRL, true], [VK.RCTRL, true], [VK.RCTRL, true], [VK.LCTRL, true], [VK.RCTRL, false], [VK.RCTRL, true], [VK.RCTRL, false], [VK.LCTRL, false]]);
 	check("key repeat and re-pressing one key while the other is held fire only once", fired.length === 1, JSON.stringify(fired));
 
-	// ── 0.8.0:双 Shift 是另一个手势;订 shiftPair 的只收它,订 modPair 的收不到它 ──
+	// ── 0.7.1:双 Shift 是另一个手势;订 shiftPair 的只收它,订 modPair 的收不到它 ──
 	const sp = await open({ id: "hk_s", cmd: "hotkeySubscribe", gesture: "shiftPair", excludePids: [] }, "s");
 	check("a shiftPair subscription is accepted", sp.reply?.ok === true, JSON.stringify(sp.reply));
 	const aBefore = a.events().length;
