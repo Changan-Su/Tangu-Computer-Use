@@ -6,10 +6,11 @@
 //!
 //! 线程:
 //!   - 钩子线程:自己的低层键盘钩子 + 消息循环,只在有手势订阅者时存在(与电脑历史的钩子线程互不相干,那个只在有
-//!     电脑历史订阅者时存在)。回调里只更新状态机;手势成立时取前台窗口句柄和时间,丢进通道就返回 ——
+//!     电脑历史订阅者时存在)。回调里只更新状态机(三族各一台,每条事件三台都喂,不管有没有人订那一族 —— 便宜,
+//!     而且订阅一来状态就是准的);手势成立时取前台窗口句柄和时间,丢进通道就返回 ——
 //!     **绝不**在回调里读进程路径 / 版本资源 / 标题(低层钩子回调慢了会拖住全系统输入,超时还会被系统摘掉),
 //!     也从不吞键,一律 CallNextHookEx。
-//!   - 投递线程:把句柄解析成 App 身份与标题,发给没有排除它的订阅者。
+//!   - 投递线程:把句柄解析成 App 身份与标题,发给订了这个手势、又没有排除它的订阅者(没人订这个手势就不去解析)。
 
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -28,11 +29,13 @@ use windows::Win32::UI::WindowsAndMessaging::{
     HC_ACTION, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
-use crate::hotkey_logic::{self as logic, AsyncKeys, Front, KeyClass, ModPair};
+use crate::hotkey_logic::{self as logic, AsyncKeys, Family, Front, KeyClass, ModPair};
 use crate::recorder::{self, Outbox};
 
 struct Sub {
     id: u64,
+    /// 订的是哪一个手势:别的手势成立时不推给它。
+    gesture: Family,
     exclude: Vec<u32>,
     outbox: Arc<Outbox>,
     /// 订阅那一刻的手势序号:在这之前发生、还排在投递线程里的手势不归它(按序号比,不按时钟 —— 时钟会被调)。
@@ -51,6 +54,7 @@ struct Registry {
 }
 
 struct Fired {
+    gesture: Family,
     hwnd: isize,
     /// 手势那一刻前台窗口所属的进程。对 `excludePids` 用它:等投递线程去查时窗口可能已经关了。
     owner: u32,
@@ -73,16 +77,16 @@ pub fn subscriber_count() -> usize {
     SUBSCRIBERS.load(Ordering::Acquire)
 }
 
-/// 注册一个订阅者;第一个订阅者到来时装键盘钩子,装不上 → Err(调用方回错误包)。
-/// `ack` 在持锁期间排进它的出口:投递也要这把锁,所以事件一定排在回包后面。
-pub fn subscribe(exclude: Vec<u32>, outbox: Arc<Outbox>, ack: &Value) -> Result<u64, String> {
+/// 注册一个订阅者(只订 `gesture` 这一个手势);第一个订阅者到来时装键盘钩子(不论订的哪个手势,钩子只有一个),
+/// 装不上 → Err(调用方回错误包)。`ack` 在持锁期间排进它的出口:投递也要这把锁,所以事件一定排在回包后面。
+pub fn subscribe(gesture: Family, exclude: Vec<u32>, outbox: Arc<Outbox>, ack: &Value) -> Result<u64, String> {
     let mut registry = registry().lock().map_err(|_| "hotkey registry is poisoned".to_owned())?;
     if registry.hook.is_none() {
         registry.hook = Some(start_hook()?);
     }
     outbox.send(ack);
     let id = NEXT_ID.fetch_add(1, Ordering::AcqRel);
-    registry.subs.push(Sub { id, exclude, outbox, since: FIRE_SEQ.load(Ordering::Acquire) });
+    registry.subs.push(Sub { id, gesture, exclude, outbox, since: FIRE_SEQ.load(Ordering::Acquire) });
     SUBSCRIBERS.store(registry.subs.len(), Ordering::Release);
     Ok(id)
 }
@@ -103,8 +107,8 @@ pub fn unsubscribe(id: u64) {
 }
 
 thread_local! {
-    // 只在钩子线程上用:低层钩子的回调总是在装钩子的那个线程上被调。
-    static MACHINE: Cell<ModPair> = const { Cell::new(ModPair::new()) };
+    // 只在钩子线程上用:低层钩子的回调总是在装钩子的那个线程上被调。下标 = `Family` 的判别值。
+    static MACHINES: Cell<[ModPair; 3]> = const { Cell::new([ModPair::new(); 3]) };
     static FIRED: RefCell<Option<Sender<Fired>>> = const { RefCell::new(None) };
 }
 
@@ -121,7 +125,7 @@ fn start_hook() -> Result<Hook, String> {
                 return;
             }
         };
-        MACHINE.with(|machine| machine.set(ModPair::new()));
+        MACHINES.with(|machines| machines.set([ModPair::new(); 3]));
         FIRED.with(|fired| *fired.borrow_mut() = Some(fired_tx));
         if ready_tx.send(Ok(GetCurrentThreadId())).is_err() {
             // 等的人已经超时走了,没人会来停这个线程:自己把钩子摘掉退出,不留一个没人管的钩子。
@@ -165,28 +169,39 @@ fn on_key(vk: u32, down: bool) {
         AsyncKeys {
             left_ctrl: key_down(logic::VK_LCONTROL),
             right_ctrl: key_down(logic::VK_RCONTROL),
+            left_shift: key_down(logic::VK_LSHIFT),
+            right_shift: key_down(logic::VK_RSHIFT),
+            left_alt: key_down(logic::VK_LMENU),
+            right_alt: key_down(logic::VK_RMENU),
+            ctrl: key_down(logic::VK_CONTROL),
             shift: key_down(logic::VK_SHIFT),
             alt: key_down(logic::VK_MENU),
             win: key_down(logic::VK_LWIN) || key_down(logic::VK_RWIN),
         }
     };
-    let input = logic::key_input(vk, down, keys);
-    let fire = MACHINE.with(|cell| {
-        let mut machine = cell.get();
-        let fire = machine.feed(input);
-        cell.set(machine);
-        fire
+    // 每条事件三族都喂(非修饰键的按下 = 三台都记一笔「按过别的键」)。实际上一条事件最多成立一个手势
+    // (另一族按着就是别的修饰键),但不靠这一点:成立几个就报几个。
+    let mut fired = [false; 3];
+    MACHINES.with(|cell| {
+        let mut machines = cell.get();
+        for family in Family::ALL {
+            fired[family.index()] = machines[family.index()].feed(logic::key_input(family, vk, down, keys));
+        }
+        cell.set(machines);
     });
-    if !fire {
+    if !fired.contains(&true) {
         return;
     }
     // 手势成立的那一刻就把前台窗口和它所属的进程记下(一个句柄、一个进程号);其余的交给投递线程。
     let foreground = unsafe { GetForegroundWindow() };
     let owner = if foreground.0.is_null() { 0 } else { recorder::window_pid(foreground) };
-    FIRED.with(|fired| {
-        if let Some(tx) = fired.borrow().as_ref() {
-            let seq = FIRE_SEQ.fetch_add(1, Ordering::AcqRel);
-            let _ = tx.send(Fired { hwnd: foreground.0 as isize, owner, at: recorder::now_ms(), seq });
+    let at = recorder::now_ms();
+    FIRED.with(|slot| {
+        if let Some(tx) = slot.borrow().as_ref() {
+            for gesture in Family::ALL.into_iter().filter(|family| fired[family.index()]) {
+                let seq = FIRE_SEQ.fetch_add(1, Ordering::AcqRel);
+                let _ = tx.send(Fired { gesture, hwnd: foreground.0 as isize, owner, at, seq });
+            }
         }
     });
 }
@@ -194,6 +209,20 @@ fn on_key(vk: u32, down: bool) {
 fn dispatch(rx: Receiver<Fired>) {
     let own = unsafe { GetCurrentProcessId() };
     for fired in rx {
+        // 先挑订了这个手势、而且订阅早于这次手势的;一个都没有就不去解析前台(读进程路径、版本资源不便宜)。
+        // 回包在订阅者进注册表之前就排进了它的出口,所以这里挑出来的,事件一定排在回包后面。
+        let candidates: Vec<(Arc<Outbox>, Vec<u32>)> = match registry().lock() {
+            Ok(registry) => registry
+                .subs
+                .iter()
+                .filter(|sub| sub.gesture == fired.gesture && sub.since <= fired.seq)
+                .map(|sub| (Arc::clone(&sub.outbox), sub.exclude.clone()))
+                .collect(),
+            Err(_) => return,
+        };
+        if candidates.is_empty() {
+            continue;
+        }
         let front = front_of(fired.hwnd, fired.owner);
         // 那一刻窗口所属的进程,加上解析出来的 App 进程(UWP 的窗口挂在宿主进程名下)。窗口没了也照样按前者排除。
         let mut pids = Vec::with_capacity(2);
@@ -206,21 +235,11 @@ fn dispatch(rx: Receiver<Fired>) {
         if pids.contains(&own) {
             continue;
         }
-        let targets: Vec<Arc<Outbox>> = match registry().lock() {
-            Ok(registry) => registry
-                .subs
-                .iter()
-                .filter(|sub| sub.since <= fired.seq && !logic::excluded(&sub.exclude, &pids))
-                .map(|sub| Arc::clone(&sub.outbox))
-                .collect(),
-            Err(_) => return,
-        };
-        if targets.is_empty() {
-            continue;
-        }
-        let line = logic::event(fired.at, front.as_ref());
-        for outbox in targets {
-            outbox.send(&line);
+        let line = logic::event(fired.gesture.gesture(), fired.at, front.as_ref());
+        for (outbox, exclude) in candidates {
+            if !logic::excluded(&exclude, &pids) {
+                outbox.send(&line);
+            }
         }
     }
 }

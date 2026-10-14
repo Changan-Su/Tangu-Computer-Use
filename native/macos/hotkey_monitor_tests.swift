@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 // 全局手势订阅(hotkey_monitor.swift)的单测(npm run check:hotkey-logic),不需要任何授权。
-// 纯逻辑:左右修饰键状态机 / 从 flagsChanged 的标志算左右 ⌘ / 让手势作废的修饰键 / 窗口候选与焦点窗口的对齐 / 事件形状。
+// 纯逻辑:左右修饰键状态机 / 从 flagsChanged 的标志算左右 ⌘ ⇧ ⌥ / 让手势作废的修饰键 / 窗口候选与焦点窗口的对齐 / 事件形状。
 // subscriptionStream 走真实的订阅路径:会装上 NSEvent 全局监听(本进程没有辅助功能授权时收不到按键),
 // 按键一律由测试直接喂给监听的入口(不往系统里发任何事件),前台快照与焦点窗口用假的;
 // 断言回包与事件的形状、excludePids、Secure Input、退订后的拆除。绝不读真实前台、不打印事件内容。
@@ -16,6 +16,7 @@ import Foundation
 		setvbuf(stdout, nil, _IOLBF, 0)
 		machine()
 		commandState()
+		otherFamilies()
 		windows()
 		eventShape()
 		subscriptionStream()
@@ -77,16 +78,16 @@ import Foundation
 
 	static let released: UInt = 0x100
 	static let command = NSEvent.ModifierFlags.command.rawValue
-	static let leftDown = command | 0x100 | modPairDeviceLeftCommand
-	static let rightDown = command | 0x100 | modPairDeviceRightCommand
+	static let leftDown = command | 0x100 | ModPairFamily.command.deviceLeft
+	static let rightDown = command | 0x100 | ModPairFamily.command.deviceRight
 	static let bothDown = leftDown | rightDown
 
 	static func commandState() {
 		func state(_ previous: (Bool, Bool), _ keyCode: UInt16, _ flags: UInt) -> [Bool] {
-			let next = modPairCommandState(previous: (left: previous.0, right: previous.1), keyCode: keyCode, flags: flags)
+			let next = modPairKeyState(.command, previous: (left: previous.0, right: previous.1), keyCode: keyCode, flags: flags)
 			return [next.left, next.right]
 		}
-		check(modPairDeviceLeftCommand == 0x08 && modPairDeviceRightCommand == 0x10, "device bits match NX_DEVICELCMDKEYMASK / NX_DEVICERCMDKEYMASK")
+		check(ModPairFamily.command.deviceLeft == 0x08 && ModPairFamily.command.deviceRight == 0x10, "device bits match NX_DEVICELCMDKEYMASK / NX_DEVICERCMDKEYMASK")
 		check(state((false, false), 55, leftDown) == [true, false], "left command down is read from its device bit")
 		check(state((true, false), 54, bothDown) == [true, true], "right command down while left is held")
 		check(state((true, true), 55, rightDown) == [false, true], "left command up while right is held")
@@ -103,11 +104,38 @@ import Foundation
 		check(state((true, false), 56, command | NSEvent.ModifierFlags.shift.rawValue) == [true, false], "another modifier's change keeps the tracked state")
 		check(state((false, false), 56, command | NSEvent.ModifierFlags.shift.rawValue) == [false, false], "an unknown side stays unknown")
 
-		check(modPairDisqualified(flags: leftDown | NSEvent.ModifierFlags.shift.rawValue), "shift disqualifies")
-		check(modPairDisqualified(flags: leftDown | NSEvent.ModifierFlags.option.rawValue), "option disqualifies")
-		check(modPairDisqualified(flags: leftDown | NSEvent.ModifierFlags.control.rawValue), "control disqualifies")
-		check(!modPairDisqualified(flags: bothDown), "command alone does not disqualify")
-		check(!modPairDisqualified(flags: bothDown | NSEvent.ModifierFlags.capsLock.rawValue | NSEvent.ModifierFlags.function.rawValue), "caps lock and fn do not disqualify")
+		check(modPairDisqualified(.command, flags: leftDown | NSEvent.ModifierFlags.shift.rawValue), "shift disqualifies")
+		check(modPairDisqualified(.command, flags: leftDown | NSEvent.ModifierFlags.option.rawValue), "option disqualifies")
+		check(modPairDisqualified(.command, flags: leftDown | NSEvent.ModifierFlags.control.rawValue), "control disqualifies")
+		check(!modPairDisqualified(.command, flags: bothDown), "command alone does not disqualify")
+		check(!modPairDisqualified(.command, flags: bothDown | NSEvent.ModifierFlags.capsLock.rawValue | NSEvent.ModifierFlags.function.rawValue), "caps lock and fn do not disqualify")
+	}
+
+	/// ⇧ + ⇧ 与 ⌥ + ⌥:同一套读法,设备位 / 键码各是各的(NX_DEVICE{L,R}SHIFTKEYMASK 0x02/0x04、{L,R}ALT 0x20/0x40;kVK_Shift 56 / RightShift 60、Option 58 / RightOption 61)。
+	static func otherFamilies() {
+		let shift = NSEvent.ModifierFlags.shift.rawValue, option = NSEvent.ModifierFlags.option.rawValue
+		check(ModPairFamily.shift.deviceLeft == 0x02 && ModPairFamily.shift.deviceRight == 0x04 && ModPairFamily.shift.leftKeyCode == 56 && ModPairFamily.shift.rightKeyCode == 60, "shift device bits and key codes")
+		check(ModPairFamily.option.deviceLeft == 0x20 && ModPairFamily.option.deviceRight == 0x40 && ModPairFamily.option.leftKeyCode == 58 && ModPairFamily.option.rightKeyCode == 61, "option device bits and key codes")
+		func state(_ family: ModPairFamily, _ previous: (Bool, Bool), _ keyCode: UInt16, _ flags: UInt) -> [Bool] {
+			let next = modPairKeyState(family, previous: (left: previous.0, right: previous.1), keyCode: keyCode, flags: flags)
+			return [next.left, next.right]
+		}
+		check(state(.shift, (false, false), 56, shift | 0x100 | 0x02) == [true, false], "left shift down is read from its device bit")
+		check(state(.shift, (true, false), 60, shift | 0x100 | 0x06) == [true, true], "right shift down while left is held")
+		check(state(.shift, (true, true), 60, 0x100) == [false, false], "no shift flag means both shifts are up")
+		check(state(.shift, (false, false), 55, leftDown) == [false, false], "a command change says nothing about shift")
+		check(state(.option, (false, false), 58, option | 0x100 | 0x20) == [true, false], "left option down is read from its device bit")
+		check(state(.option, (true, false), 61, option | 0x100 | 0x60) == [true, true], "right option down while left is held")
+		check(state(.option, (true, false), 61, option) == [true, true], "without device bits the option key code completes the pair")
+
+		check(!modPairDisqualified(.shift, flags: shift | 0x106), "shift alone does not disqualify the shift pair")
+		check(modPairDisqualified(.shift, flags: shift | command), "command disqualifies the shift pair")
+		check(modPairDisqualified(.shift, flags: shift | option), "option disqualifies the shift pair")
+		check(modPairDisqualified(.shift, flags: shift | NSEvent.ModifierFlags.control.rawValue), "control disqualifies the shift pair")
+		check(!modPairDisqualified(.option, flags: option | 0x160), "option alone does not disqualify the option pair")
+		check(modPairDisqualified(.option, flags: option | shift), "shift disqualifies the option pair")
+		check(modPairDisqualified(.command, flags: bothDown | shift), "shift still disqualifies the command pair")
+		check(Set(ModPairFamily.all.map(\.gesture)) == ["modPair", "shiftPair", "altPair"], "the three gesture names")
 	}
 
 	// MARK: 窗口
@@ -349,6 +377,27 @@ import Foundation
 			check(false, "flagsChanged NSEvents can be constructed")
 		}
 
+		// ⇧ + ⇧ 的订阅者只收 ⇧ + ⇧;⌘ + ⌘ 的订阅者收不到它,反过来也一样。
+		var third: [Int32] = [0, 0]
+		precondition(socketpair(AF_UNIX, SOCK_STREAM, 0, &third) == 0)
+		let readerC = Reader(fd: third[1])
+		check(monitor.subscribe(fd: third[0], id: "h3", gesture: "shiftPair", excludePids: []) == nil, "a shiftPair subscription succeeds")
+		readerC.wait(count: 1)
+		let shift = NSEvent.ModifierFlags.shift.rawValue
+		press([(56, shift | 0x102), (60, shift | 0x106)])
+		readerC.wait(count: 2)
+		readerA.settle()
+		check(readerC.events.last?["gesture"] as? String == "shiftPair" && readerA.lines.count == 6, "both shifts reach only the shiftPair subscriber, named shiftPair")
+		press(pair)
+		readerA.wait(count: 7)
+		readerC.settle()
+		check(readerC.lines.count == 2, "both commands do not reach the shiftPair subscriber")
+		press([(56, shift | 0x102), (55, shift | 0x102 | leftDown), (60, shift | 0x106 | leftDown)])
+		readerC.settle()
+		check(readerC.lines.count == 2, "a held command spoils the shift pair")
+		monitor.unsubscribe(fd: third[0])
+		for fd in third { close(fd) }
+
 		monitor.unsubscribe(fd: second[0])
 		check(monitor.subscriberCount == 1, "closing one connection leaves the other subscribed")
 		RunLoop.main.run(until: Date().addingTimeInterval(0.2))
@@ -356,9 +405,9 @@ import Foundation
 		readerB.settle()
 		let countB = readerB.lines.count
 		press(pair)
-		readerA.wait(count: 7)
+		readerA.wait(count: 8)
 		readerB.settle()
-		check(readerA.lines.count == 7 && readerB.lines.count == countB, "an unsubscribed connection gets nothing more")
+		check(readerA.lines.count == 8 && readerB.lines.count == countB, "an unsubscribed connection gets nothing more")
 
 		monitor.unsubscribe(fd: first[0])
 		monitor.unsubscribe(fd: first[0])
@@ -368,7 +417,7 @@ import Foundation
 		check(!monitor.debugMonitorsInstalled, "the last subscriber leaving removes the global monitors")
 		press(pair)
 		readerA.settle()
-		check(readerA.lines.count == 7, "nothing is streamed after the last subscriber leaves")
+		check(readerA.lines.count == 8, "nothing is streamed after the last subscriber leaves")
 		check(readerA.lines.dropFirst().allSatisfy { ($0["ev"] as? [String: Any])?["kind"] as? String == "hotkey" }, "every streamed line after the reply is a hotkey ev")
 		for fd in first + second { close(fd) }
 	}

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 全局手势订阅 hotkeySubscribe(协议 15 引入)的接线检查,不需要任何授权:照 recorder.check.mjs 的做法,
+// 全局手势订阅 hotkeySubscribe(协议 15 引入;⇧⇧ / ⌥⌥ 与 windowImage 协议 16)的接线检查,不需要任何授权:照 recorder.check.mjs 的做法,
 // 直接起刚编好的 helper 二进制(serve 模式、临时 socket;不走 open、不碰用户常驻的 helper),然后断言:
 //   1. diagnostics 报的协议号 = 这份 bridge.swift 源码里的号,手势订阅者(hotkeySubscribers)为 0;
 //   2. 不认识的手势 → ok:false + unknown_gesture(这一步在查授权之前,所以没授权也能验),这条连接仍是普通连接;
@@ -174,6 +174,23 @@ try {
     subscription.socket.destroy();
     console.log('PASS denied connection stays a normal request connection with no subscriber');
   }
+
+  // 协议 16:⇧ + ⇧ / ⌥ + ⌥ 是认得的手势(回 ok 或没授权时的 accessibility_denied,绝不是 unknown_gesture)。
+  for (const gesture of ['shiftPair', 'altPair']) {
+    const c = await connect();
+    c.send({ id: `hk-${gesture}`, cmd: 'hotkeySubscribe', gesture });
+    const r = await c.next();
+    assert.ok(r.ok === true || r.error?.code === 'accessibility_denied', `${gesture} must be a known gesture, got ${JSON.stringify(r)}`);
+    c.socket.destroy();
+  }
+  console.log('PASS shiftPair and altPair are known gestures');
+
+  // windowImage:参数不对 → invalid_args;没有屏幕录制授权 → screen_recording_denied(不碰 ScreenCaptureKit,不弹框);
+  // 有授权时一个不存在的窗口号 → window_not_found。这里不截真窗口(不读任何画面)。
+  assert.equal((await request({ id: 'wi-0', cmd: 'windowImage' })).error?.code, 'invalid_args', 'windowImage without a windowId is invalid_args');
+  const missing = await request({ id: 'wi-1', cmd: 'windowImage', windowId: 4_000_000_000 });
+  assert.ok(['screen_recording_denied', 'window_not_found'].includes(missing.error?.code), `windowImage on a missing window: ${JSON.stringify(missing.error)}`);
+  console.log(`PASS windowImage rejects bad args and answers ${missing.error.code} for a missing window`);
 
   // stdin 模式没有能长开的连接,也没有主线程 run loop:明确拒绝,不装监听。
   const stdio = spawnSync(binary, [], { input: `${JSON.stringify({ id: 'hk-stdin', cmd: 'hotkeySubscribe', gesture: 'modPair' })}\n`, encoding: 'utf8', timeout: 10_000 });

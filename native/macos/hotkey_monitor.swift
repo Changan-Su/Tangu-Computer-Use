@@ -2,14 +2,14 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-// Tangu 新增:全局手势订阅 —— `hotkeySubscribe`(协议 15)的 helper 侧。目前只有一个手势 `modPair`:
-// 左右两个 ⌘ 同时按下。Forsion 桌面端自己在前台时能在渲染层里看到这个手势;别的 App 在前台时只有 helper
+// Tangu 新增:全局手势订阅 —— `hotkeySubscribe`(协议 15 起)的 helper 侧。手势都是「左右两个同名修饰键同时按下」:
+// `modPair` = ⌘ + ⌘,`shiftPair` = ⇧ + ⇧,`altPair` = ⌥ + ⌥(后两个协议 16 起)。Forsion 桌面端自己在前台时能在渲染层里看到这个手势;别的 App 在前台时只有 helper
 // (辅助功能授权)看得到,所以由 helper 在手势发生的那一刻拍下前台 App 与窗口,推给订阅连接。
 //
 // 与电脑历史(activity_recorder.swift)同一套订阅模型,并复用它的写队列(RecorderSubscriber):专用连接、
 // 首行是回包、之后一行一条 `{"ev":{…}}`,对端关闭即退订;最后一个订阅者走后全局监听随即拆掉。
 //
-// 隐私:键盘监听只取「左右 ⌘ 各自按没按下」与「有没有按过别的键」这一个布尔 —— `.keyDown` 的回调不碰事件本身,
+// 隐私:键盘监听只取「左右修饰键各自按没按下」与「有没有按过别的键」这一个布尔 —— `.keyDown` 的回调不碰事件本身,
 // 键码、字符都不读、不存、不发。Secure Input(密码框)期间系统不投递按键,「中途按过别的键」无从得知,一律不触发。
 // 线程:NSEvent 全局监听只能挂在主线程;回调里只做状态机和一次 CGWindowList 快照(不碰 AX),
 // 读焦点窗口标题(AX)放到自己的串行队列上,不占 NSApp 主线程(agent 光标 / 边缘光效在那画)。
@@ -54,39 +54,49 @@ struct ModPairMachine: Equatable {
 	}
 }
 
-/// NSEvent.modifierFlags 低 16 位里与设备相关的位(IOKit hidsystem/IOLLEvent.h 的 NX_DEVICELCMDKEYMASK /
-/// NX_DEVICERCMDKEYMASK):哪一边的 ⌘ 此刻按着。真键盘的事件都带;合成事件可能不带。
-let modPairDeviceLeftCommand: UInt = 0x0000_0008
-let modPairDeviceRightCommand: UInt = 0x0000_0010
-let modPairLeftCommandKeyCode: UInt16 = 55
-let modPairRightCommandKeyCode: UInt16 = 54
+/// 一种「左右同名修饰键」手势:看哪一个修饰键标志,左右两边各自的设备位与键码。
+/// 设备位是 NSEvent.modifierFlags 低 16 位(IOKit hidsystem/IOLLEvent.h 的 NX_DEVICE*KEYMASK):哪一边此刻按着。
+/// 真键盘的事件都带;合成事件可能不带。键码是 HIToolbox Events.h 的 kVK_*。
+struct ModPairFamily: Equatable {
+	let gesture: String
+	let flag: UInt
+	let deviceLeft: UInt
+	let deviceRight: UInt
+	let leftKeyCode: UInt16
+	let rightKeyCode: UInt16
 
-/// 一条 flagsChanged 事件之后,左右 ⌘ 各自按没按下。以事件自带的标志为准:
-///   - 没有 ⌘ 标志 → 两个都没按(漏掉的抬起在这里自愈);
+	static let command = ModPairFamily(gesture: "modPair", flag: NSEvent.ModifierFlags.command.rawValue, deviceLeft: 0x08, deviceRight: 0x10, leftKeyCode: 55, rightKeyCode: 54)
+	static let shift = ModPairFamily(gesture: "shiftPair", flag: NSEvent.ModifierFlags.shift.rawValue, deviceLeft: 0x02, deviceRight: 0x04, leftKeyCode: 56, rightKeyCode: 60)
+	static let option = ModPairFamily(gesture: "altPair", flag: NSEvent.ModifierFlags.option.rawValue, deviceLeft: 0x20, deviceRight: 0x40, leftKeyCode: 58, rightKeyCode: 61)
+	static let all: [ModPairFamily] = [.command, .shift, .option]
+}
+
+/// 一条 flagsChanged 事件之后,这一族的左右两个键各自按没按下。以事件自带的标志为准:
+///   - 没有这一族的标志 → 两个都没按(漏掉的抬起在这里自愈);
 ///   - 带设备位 → 直接读;
-///   - ⌘ 标志在、设备位不在(合成事件)→ 只能按键码翻转上一次的状态。
-func modPairCommandState(previous: (left: Bool, right: Bool), keyCode: UInt16, flags: UInt) -> (left: Bool, right: Bool) {
-	guard flags & NSEvent.ModifierFlags.command.rawValue != 0 else { return (false, false) }
-	let deviceLeft = flags & modPairDeviceLeftCommand != 0
-	let deviceRight = flags & modPairDeviceRightCommand != 0
+///   - 标志在、设备位不在(合成事件)→ 只能按键码翻转上一次的状态。
+func modPairKeyState(_ family: ModPairFamily, previous: (left: Bool, right: Bool), keyCode: UInt16, flags: UInt) -> (left: Bool, right: Bool) {
+	guard flags & family.flag != 0 else { return (false, false) }
+	let deviceLeft = flags & family.deviceLeft != 0
+	let deviceRight = flags & family.deviceRight != 0
 	if deviceLeft || deviceRight { return (deviceLeft, deviceRight) }
 	var next = previous
 	switch keyCode {
-	case modPairLeftCommandKeyCode: next.left.toggle()
-	case modPairRightCommandKeyCode: next.right.toggle()
+	case family.leftKeyCode: next.left.toggle()
+	case family.rightKeyCode: next.right.toggle()
 	default: return previous
 	}
-	// ⌘ 标志还在,却算出两个都没按:这条事件只能是「按下」。
+	// 标志还在,却算出两个都没按:这条事件只能是「按下」。
 	if !next.left && !next.right {
-		if keyCode == modPairLeftCommandKeyCode { next.left = true } else { next.right = true }
+		if keyCode == family.leftKeyCode { next.left = true } else { next.right = true }
 	}
 	return next
 }
 
-/// 让手势作废的修饰键:⇧ ⌥ ⌃(Caps Lock、Fn 不算)。
-func modPairDisqualified(flags: UInt) -> Bool {
-	let mask = NSEvent.ModifierFlags.shift.rawValue | NSEvent.ModifierFlags.option.rawValue | NSEvent.ModifierFlags.control.rawValue
-	return flags & mask != 0
+/// 让这一族的手势作废的修饰键:⌘ ⇧ ⌥ ⌃ 里除了它自己的另外三个(Caps Lock、Fn 不算)。
+func modPairDisqualified(_ family: ModPairFamily, flags: UInt) -> Bool {
+	let all = NSEvent.ModifierFlags.command.rawValue | NSEvent.ModifierFlags.shift.rawValue | NSEvent.ModifierFlags.option.rawValue | NSEvent.ModifierFlags.control.rawValue
+	return flags & (all & ~family.flag) != 0
 }
 
 struct HotkeyWindowCandidate: Equatable {
@@ -239,7 +249,7 @@ func hotkeyAXFocusedWindow(pid: pid_t) -> HotkeyFocusedWindow? {
 
 final class HotkeyMonitor {
 	static let shared = HotkeyMonitor()
-	static let gestures: Set<String> = ["modPair"]
+	static let gestures = Set(ModPairFamily.all.map(\.gesture))
 
 	/// 测试缝:单测注入「已授权」,好在没有辅助功能授权的机器上跑通订阅流(未授权时全局监听收不到按键)。
 	var accessibilityTrusted: () -> Bool = { AXIsProcessTrusted() }
@@ -252,6 +262,7 @@ final class HotkeyMonitor {
 	private struct Entry {
 		let writer: RecorderSubscriber
 		let excludePids: Set<pid_t>
+		let gesture: String
 	}
 
 	// 订阅者注册表(任意线程,registryLock)。
@@ -263,8 +274,9 @@ final class HotkeyMonitor {
 	// ↓ 以下只在主线程读写。
 	private var flagsMonitor: Any?
 	private var keyMonitor: Any?
-	private var machine = ModPairMachine()
-	private var command: (left: Bool, right: Bool) = (false, false)
+	/// 每一族一台状态机、一份左右键状态(按 gesture 名索引;没订阅的族也照跑,便宜,订阅一来就是准的)。
+	private var machines: [String: ModPairMachine] = [:]
+	private var keys: [String: (left: Bool, right: Bool)] = [:]
 
 	// MARK: 对外(任意线程)
 
@@ -289,7 +301,7 @@ final class HotkeyMonitor {
 		// 先排回包、再进注册表:触发路径从注册表取订阅者,所以事件一定排在回包后面。
 		writer.send(["id": id, "ok": true, "result": ["subscribed": true]])
 		registryLock.lock()
-		subscribers[fd] = Entry(writer: writer, excludePids: excludePids)
+		subscribers[fd] = Entry(writer: writer, excludePids: excludePids, gesture: gesture)
 		registryLock.unlock()
 		DispatchQueue.main.async { [self] in syncMonitors() }
 		return nil
@@ -328,8 +340,8 @@ final class HotkeyMonitor {
 		}
 		// 两个监听各自补齐(哪个没装上,下一次对齐时只补那一个,不会把已有的再装一份)。
 		if flagsMonitor == nil {
-			machine = ModPairMachine()
-			command = (false, false)
+			machines = [:]
+			keys = [:]
 			flagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [self] event in handle(event) }
 		}
 		if keyMonitor == nil {
@@ -344,24 +356,27 @@ final class HotkeyMonitor {
 	}
 
 	func flagsChanged(keyCode: UInt16, flags: UInt) {
-		command = modPairCommandState(previous: command, keyCode: keyCode, flags: flags)
-		if machine.modifiers(left: command.left, right: command.right, others: modPairDisqualified(flags: flags)) {
-			fired()
+		for family in ModPairFamily.all {
+			let state = modPairKeyState(family, previous: keys[family.gesture] ?? (false, false), keyCode: keyCode, flags: flags)
+			keys[family.gesture] = state
+			if machines[family.gesture, default: ModPairMachine()].modifiers(left: state.left, right: state.right, others: modPairDisqualified(family, flags: flags)) {
+				fired(family.gesture)
+			}
 		}
 	}
 
 	func otherKeyDown() {
-		machine.otherKey()
+		for gesture in machines.keys { machines[gesture]?.otherKey() }
 	}
 
-	private func fired() {
+	private func fired(_ gesture: String) {
 		let at = Int64(recorderNowMs())
 		guard !secureInputActive() else { return }
 		let snapshot = frontmost()
 		// helper 自己(授权引导窗口)在前台:没有可引用的东西。
 		if let snapshot, snapshot.pid == getpid() { return }
 		registryLock.lock()
-		let targets = subscribers.values.filter { entry in snapshot.map { !entry.excludePids.contains($0.pid) } ?? true }.map(\.writer)
+		let targets = subscribers.values.filter { entry in entry.gesture == gesture && (snapshot.map { !entry.excludePids.contains($0.pid) } ?? true) }.map(\.writer)
 		registryLock.unlock()
 		guard !targets.isEmpty else { return }
 		work.async { [self] in
@@ -370,7 +385,7 @@ final class HotkeyMonitor {
 				let focused = hotkeyNeedsFocusedWindow(snapshot.windows) ? focusedWindow(snapshot.pid) : nil
 				front = hotkeyFrontJSON(snapshot, focused: focused)
 			}
-			let event = hotkeyEvent(gesture: "modPair", at: at, front: front)
+			let event = hotkeyEvent(gesture: gesture, at: at, front: front)
 			for target in targets { target.send(event) }
 		}
 	}

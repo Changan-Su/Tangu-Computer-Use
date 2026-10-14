@@ -3,17 +3,54 @@
 //! 与 macOS 的 `native/macos/hotkey_monitor.swift` 同一份语义(那边的状态机逐条移植到这里,单测在
 //! `tests/hotkey_logic_tests.rs`,在任何平台都能跑)。平台相关的部分(键盘钩子、前台窗口)在 `hotkey.rs`,只在 Windows 编译。
 //!
-//! 目前只有一个手势 `modPair`:左右两个 Ctrl 同时按下(macOS 上是左右两个 ⌘)。
-//! 隐私:键盘钩子只取「左右 Ctrl 各自按没按下」与「有没有按过别的键」这一个布尔,键值不存、不发。
+//! 手势都是「左右两个同名修饰键同时按下」,一族修饰键一个手势:`modPair` = 左右 Ctrl(macOS 上是左右 ⌘),
+//! `shiftPair` = 左右 Shift,`altPair` = 左右 Alt(macOS 上是左右 ⌥)。三族各跑一台同样的状态机,互不相干;
+//! 一个订阅者只订一个手势。
+//! 隐私:键盘钩子只取「这三族修饰键左右各自按没按下」与「有没有按过别的键」这一个布尔,键值不存、不发。
 
 use serde_json::{json, Value};
 
 use crate::recorder_logic;
 
 pub const GESTURE_MOD_PAIR: &str = "modPair";
+pub const GESTURE_SHIFT_PAIR: &str = "shiftPair";
+pub const GESTURE_ALT_PAIR: &str = "altPair";
+
+/// 认得的手势名,按 `Family::ALL` 的顺序(`unknown_gesture` 的报错里列出来)。
+pub const GESTURES: [&str; 3] = [GESTURE_MOD_PAIR, GESTURE_SHIFT_PAIR, GESTURE_ALT_PAIR];
+
+/// 一族修饰键 = 一个手势。判别值就是钩子线程里那台状态机的下标。
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Family {
+    Ctrl = 0,
+    Shift = 1,
+    Alt = 2,
+}
+
+impl Family {
+    pub const ALL: [Family; 3] = [Family::Ctrl, Family::Shift, Family::Alt];
+
+    pub const fn gesture(self) -> &'static str {
+        match self {
+            Family::Ctrl => GESTURE_MOD_PAIR,
+            Family::Shift => GESTURE_SHIFT_PAIR,
+            Family::Alt => GESTURE_ALT_PAIR,
+        }
+    }
+
+    /// 大小写敏感,与 macOS 一致。
+    pub fn from_gesture(gesture: &str) -> Option<Family> {
+        Family::ALL.into_iter().find(|family| family.gesture() == gesture)
+    }
+
+    pub const fn index(self) -> usize {
+        self as usize
+    }
+}
 
 pub fn gesture_known(gesture: Option<&str>) -> bool {
-    gesture == Some(GESTURE_MOD_PAIR)
+    gesture.and_then(Family::from_gesture).is_some()
 }
 
 /// 「左右两个同名修饰键同时按下」的状态机。输入只有两种:修饰键的按下状态变了(左、右各自按没按下,
@@ -61,7 +98,7 @@ impl ModPair {
         fire
     }
 
-    /// 按了一个非修饰键。只在左 / 右有一个按着时才有意义(Ctrl+C 之后再按另一个 Ctrl 不算手势)。
+    /// 按了一个非修饰键。只在左 / 右有一个按着时才有意义(Ctrl+C 之后再按另一个 Ctrl 不算手势,Shift 打大写字母同理)。
     pub fn other_key(&mut self) {
         if self.left || self.right {
             self.spent = true;
@@ -94,33 +131,83 @@ pub const VK_RMENU: u32 = 0xA5;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyClass {
-    LeftCtrl,
-    RightCtrl,
-    /// 不分左右的 Ctrl(注入的输入可能这样报):不算别的修饰键,左右各自的状态照旧向系统问。
-    Ctrl,
-    /// 让手势作废的修饰键:Shift / Alt / Win。
-    Disqualifier,
+    Left(Family),
+    Right(Family),
+    /// 不分左右的 VK_CONTROL / VK_SHIFT / VK_MENU(注入的输入可能这样报):对它自己那一族不算别的修饰键,
+    /// 左右各自的状态照旧向系统问;对另外两族就是别的修饰键。
+    Either(Family),
+    /// 对哪一族都是别的修饰键。
+    Win,
     Other,
+}
+
+impl KeyClass {
+    /// 这个键按下时,`family` 那一轮是不是该作废(另外两族的任何一个键,或 Win)。
+    pub fn disqualifies(self, family: Family) -> bool {
+        match self {
+            KeyClass::Left(own) | KeyClass::Right(own) | KeyClass::Either(own) => own != family,
+            KeyClass::Win => true,
+            KeyClass::Other => false,
+        }
+    }
 }
 
 pub fn classify_vk(vk: u32) -> KeyClass {
     match vk {
-        VK_LCONTROL => KeyClass::LeftCtrl,
-        VK_RCONTROL => KeyClass::RightCtrl,
-        VK_CONTROL => KeyClass::Ctrl,
-        VK_SHIFT | VK_MENU | VK_LSHIFT | VK_RSHIFT | VK_LMENU | VK_RMENU | VK_LWIN | VK_RWIN => KeyClass::Disqualifier,
+        VK_LCONTROL => KeyClass::Left(Family::Ctrl),
+        VK_RCONTROL => KeyClass::Right(Family::Ctrl),
+        VK_CONTROL => KeyClass::Either(Family::Ctrl),
+        VK_LSHIFT => KeyClass::Left(Family::Shift),
+        VK_RSHIFT => KeyClass::Right(Family::Shift),
+        VK_SHIFT => KeyClass::Either(Family::Shift),
+        VK_LMENU => KeyClass::Left(Family::Alt),
+        VK_RMENU => KeyClass::Right(Family::Alt),
+        VK_MENU => KeyClass::Either(Family::Alt),
+        VK_LWIN | VK_RWIN => KeyClass::Win,
         _ => KeyClass::Other,
     }
 }
 
 /// 钩子回调那一刻系统报的键状态(GetAsyncKeyState)。⚠️回调时**这次事件的那个键**还没更新进去,别的键是准的。
+/// 分左右的只用于它自己那一族的状态机;「另外两族有没有按着」看不分左右的那个(系统里它就是左右之和,
+/// 注入的不分左右的键也算进去),再并上左右两个。
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct AsyncKeys {
     pub left_ctrl: bool,
     pub right_ctrl: bool,
+    pub left_shift: bool,
+    pub right_shift: bool,
+    pub left_alt: bool,
+    pub right_alt: bool,
+    /// VK_CONTROL。
+    pub ctrl: bool,
+    /// VK_SHIFT。
     pub shift: bool,
+    /// VK_MENU。
     pub alt: bool,
     pub win: bool,
+}
+
+impl AsyncKeys {
+    /// 这一族的左、右各自按没按下。
+    pub fn sides(&self, family: Family) -> (bool, bool) {
+        match family {
+            Family::Ctrl => (self.left_ctrl, self.right_ctrl),
+            Family::Shift => (self.left_shift, self.right_shift),
+            Family::Alt => (self.left_alt, self.right_alt),
+        }
+    }
+
+    /// 这一族有没有哪个键按着(左、右、不分左右的,任一个)。
+    pub fn held(&self, family: Family) -> bool {
+        let (left, right) = self.sides(family);
+        left || right
+            || match family {
+                Family::Ctrl => self.ctrl,
+                Family::Shift => self.shift,
+                Family::Alt => self.alt,
+            }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,19 +217,21 @@ pub enum KeyInput {
     Ignore,
 }
 
-/// 一次键盘钩子事件对状态机意味着什么。事件里的那个键以事件为准,其余的以系统报的为准 ——
-/// 所以漏过事件(UAC 安全桌面、锁屏、提权窗口在前台时钩子收不到)之后,下一次修饰键变化就对齐回来。
-/// 非修饰键只看按下,而且不需要 `keys`(调用方可以不问系统)。
-pub fn key_input(vk: u32, down: bool, keys: AsyncKeys) -> KeyInput {
+/// 一次键盘钩子事件对 `family` 那台状态机意味着什么(钩子把每条事件喂给三族各一次)。事件里的那个键以事件为准,
+/// 其余的以系统报的为准 —— 所以漏过事件(UAC 安全桌面、锁屏、提权窗口在前台时钩子收不到)之后,下一次修饰键变化就对齐回来。
+/// 非修饰键只看按下,对三族都一样,而且不需要 `keys`(调用方可以不问系统)。
+pub fn key_input(family: Family, vk: u32, down: bool, keys: AsyncKeys) -> KeyInput {
     let class = classify_vk(vk);
     if class == KeyClass::Other {
         return if down { KeyInput::OtherKey } else { KeyInput::Ignore };
     }
+    let (left, right) = keys.sides(family);
+    let others_held = Family::ALL.into_iter().any(|other| other != family && keys.held(other));
     KeyInput::Modifiers {
-        left: if class == KeyClass::LeftCtrl { down } else { keys.left_ctrl },
-        right: if class == KeyClass::RightCtrl { down } else { keys.right_ctrl },
+        left: if class == KeyClass::Left(family) { down } else { left },
+        right: if class == KeyClass::Right(family) { down } else { right },
         // 抬起别的修饰键时系统还报它按着,多算一次「有别的修饰键」无妨:它按着的时候这一轮已经作废了。
-        others: keys.shift || keys.alt || keys.win || (class == KeyClass::Disqualifier && down),
+        others: others_held || keys.win || (class.disqualifies(family) && down),
     }
 }
 
@@ -181,8 +270,8 @@ pub fn window_title(raw: &str) -> String {
     recorder_logic::title(raw).unwrap_or_default()
 }
 
-/// 推给订阅连接的一行:与电脑历史同一个 `{"ev":{…}}` 信封。前台判断不出来 → `front: null`。
-pub fn event(at: i64, front: Option<&Front>) -> Value {
+/// 推给订阅连接的一行:与电脑历史同一个 `{"ev":{…}}` 信封,`gesture` = 成立的那个手势名。前台判断不出来 → `front: null`。
+pub fn event(gesture: &str, at: i64, front: Option<&Front>) -> Value {
     let front = front.map(|f| {
         json!({
             "exe": f.exe,
@@ -193,5 +282,5 @@ pub fn event(at: i64, front: Option<&Front>) -> Value {
             "title": f.title,
         })
     });
-    json!({ "ev": { "t": at, "kind": "hotkey", "gesture": GESTURE_MOD_PAIR, "front": front } })
+    json!({ "ev": { "t": at, "kind": "hotkey", "gesture": gesture, "front": front } })
 }

@@ -1,5 +1,12 @@
 # 更新日志
 
+## 0.8.0 — 2026-10-14
+
+- 全局手势多了两种：`shiftPair`（左右两个 Shift 同时按下）和 `altPair`（左右两个 ⌥，Windows 上是左右两个 Alt），规则和 `modPair` 一样：第二个键按下、第一个还按着时触发一次；按着别的修饰键，或中途按过任何别的键，都不算。Forsion 桌面端的「引用刚才在用的窗口」快捷键改成双 ⇧ / 双 ⌥ 时用它们。一条订阅只认一个手势，换手势就断开重订；老 helper 对这两个名字回 `unknown_gesture`。
+- 新增命令 `windowImage`（macOS）：按窗口号截一扇窗口此刻的画面，回 JPEG（长边缺省不超过 1600）。只截图，不碰辅助功能树；窗口被挡住也截得到。没有屏幕录制授权时回 `screen_recording_denied`，不去碰 ScreenCaptureKit，所以不会弹系统授权框。Forsion 桌面端用快捷键引用窗口时，用它把截图当附件挂上。
+- macOS 的 helper 协议号升到 16（多了一条命令、两个手势），插件更新后会重启还在运行的旧 helper。Windows 的两个协议号不变。
+- 检查：`check:hotkey-logic` 加了 ⇧ / ⌥ 两族的读法、作废规则和按手势分发的用例；`check:hotkey` 加了「新手势认得」和 `windowImage` 的参数 / 授权回包；Windows 的 `cargo test --test hotkey_logic_tests` 同样补了两族。
+
 ## 0.7.0 — 2026-10-13
 
 - 新增全局手势订阅 `hotkeySubscribe`（macOS 协议 15；Windows 在 `windows-bridge.exe serve --pipe` 进程里，两个协议号都不变）。左右两个 ⌘（Windows 上是左右两个 Ctrl）同时按下时，helper 把那一刻的前台 App 和窗口推给订阅连接，供 Forsion 桌面端做「引用我正在看的窗口」。以前只有 Forsion 自己在前台时才看得到这个手势。
