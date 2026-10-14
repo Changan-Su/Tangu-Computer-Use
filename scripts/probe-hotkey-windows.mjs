@@ -49,7 +49,7 @@ const USER32 = `Add-Type -Name U -Namespace W -MemberDefinition '
 [DllImport("user32.dll")] public static extern void keybd_event(byte v, byte s, uint f, IntPtr e);
 ';`;
 
-const VK = { LCTRL: 0xa2, RCTRL: 0xa3, LSHIFT: 0xa0, C: 0x43 };
+const VK = { LCTRL: 0xa2, RCTRL: 0xa3, LSHIFT: 0xa0, RSHIFT: 0xa1, C: 0x43 };
 /** 一次 PowerShell 调用里按顺序注入一串按键:[虚拟键, 按下?]。右 Ctrl 带扩展键标志。 */
 function keys(sequence, gapMs = 70) {
 	const calls = sequence.map(([vk, down]) => {
@@ -204,6 +204,17 @@ async function main() {
 
 	fired = await gesture(a, [[VK.LCTRL, true], [VK.LCTRL, true], [VK.RCTRL, true], [VK.RCTRL, true], [VK.LCTRL, true], [VK.RCTRL, false], [VK.RCTRL, true], [VK.RCTRL, false], [VK.LCTRL, false]]);
 	check("key repeat and re-pressing one key while the other is held fire only once", fired.length === 1, JSON.stringify(fired));
+
+	// ── 0.8.0:双 Shift 是另一个手势;订 shiftPair 的只收它,订 modPair 的收不到它 ──
+	const sp = await open({ id: "hk_s", cmd: "hotkeySubscribe", gesture: "shiftPair", excludePids: [] }, "s");
+	check("a shiftPair subscription is accepted", sp.reply?.ok === true, JSON.stringify(sp.reply));
+	const aBefore = a.events().length;
+	fired = await gesture(sp, [[VK.LSHIFT, true], [VK.RSHIFT, true], [VK.RSHIFT, false], [VK.LSHIFT, false]]);
+	check("both Shift keys fire shiftPair once, to the shiftPair subscriber only", fired.length === 1 && fired[0]?.gesture === "shiftPair" && a.events().length === aBefore, JSON.stringify(fired));
+	fired = await gesture(sp, PAIR);
+	check("both Ctrl keys do not reach the shiftPair subscriber", fired.length === 0, JSON.stringify(fired));
+	sp.socket.destroy();
+	await sleep(300);
 
 	// ── excludePids:订阅方自己的进程在前台时不推 ──
 	fg = foreground();

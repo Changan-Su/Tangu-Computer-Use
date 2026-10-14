@@ -309,19 +309,20 @@ fn serve_client(raw: isize) {
     let id = request.get("id").and_then(Value::as_str).unwrap_or("unknown").to_owned();
     let mut writer = file;
     // 全局手势订阅(hotkey.rs)与电脑历史订阅走同一条连接模型:回包排第一、之后只推事件、对端关闭即退订。
-    let wants_hotkey = match request.get("cmd").and_then(Value::as_str) {
-        Some("recordSubscribe") => false,
+    // 一条连接只订一个手势;不认识的(含老版本 exe 不认识的新手势名)回 unknown_gesture。
+    let hotkey_gesture = match request.get("cmd").and_then(Value::as_str) {
+        Some("recordSubscribe") => None,
         Some("hotkeySubscribe") => {
             let gesture = request.get("gesture").and_then(Value::as_str);
-            if !hotkey_logic::gesture_known(gesture) {
+            let Some(family) = gesture.and_then(hotkey_logic::Family::from_gesture) else {
                 let reply = json!({ "id": id, "ok": false, "error": {
                     "code": "unknown_gesture",
-                    "message": format!("Unknown gesture '{}'. Supported: {}", gesture.unwrap_or(""), hotkey_logic::GESTURE_MOD_PAIR),
+                    "message": format!("Unknown gesture '{}'. Supported: {}", gesture.unwrap_or(""), hotkey_logic::GESTURES.join(", ")),
                 }});
                 let _ = writeln!(writer, "{reply}");
                 return;
-            }
-            true
+            };
+            Some(family)
         }
         Some("diagnostics") => {
             let reply = json!({ "id": id, "ok": true, "result": {
@@ -351,9 +352,9 @@ fn serve_client(raw: isize) {
     let (tx, rx) = mpsc::sync_channel::<String>(SUBSCRIBER_QUEUE);
     let outbox = Arc::new(Outbox { tx, dropped: AtomicUsize::new(0) });
     // 回包排在这条连接写队列的第一位,之后才是事件。
-    let hotkey_sub = if wants_hotkey {
+    let hotkey_sub = if let Some(gesture) = hotkey_gesture {
         let ack = json!({ "id": id, "ok": true, "result": { "subscribed": true } });
-        match hotkey::subscribe(hotkey_logic::exclude_pids(request.get("excludePids")), Arc::clone(&outbox), &ack) {
+        match hotkey::subscribe(gesture, hotkey_logic::exclude_pids(request.get("excludePids")), Arc::clone(&outbox), &ack) {
             Ok(sub) => Some(sub),
             Err(message) => {
                 // 键盘钩子装不上:回错误包,这条连接到此为止。

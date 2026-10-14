@@ -369,7 +369,7 @@ final class InputSuppressionGuard {
 }
 
 final class Bridge {
-	private let protocolVersion = 15
+	private let protocolVersion = 16
 	private let refStore = AXRefStore()
 	private let inputSuppressionGuard = InputSuppressionGuard()
 	private let physicalInputLock = NSRecursiveLock()
@@ -802,6 +802,8 @@ final class Bridge {
 			return try actBatch(request)
 		case "liveView":
 			return try liveView(request)
+		case "windowImage":
+			return try windowImage(request)
 		case "hitTest":
 			return try hitTest(request)
 		case "axWaitFor":
@@ -1546,6 +1548,25 @@ final class Bridge {
 			}
 		}
 		return output
+	}
+
+	/// Tangu 新增(协议 16):一扇窗口此刻的画面(JPEG),给 Forsion「引用窗口」时附截图用。只截图 —— 不碰 AX、不开
+	/// AXEnhancedUserInterface,窗口被挡住也截得到(ScreenCaptureKit 按窗口截)。没有屏幕录制授权时直接报
+	/// screen_recording_denied,**不去碰** ScreenCaptureKit:那会弹系统授权框,而这条命令是按快捷键时调的。
+	private func windowImage(_ request: [String: Any]) throws -> [String: Any] {
+		guard let windowId = optionalIntArg(request, "windowId"), windowId > 0, windowId <= Int(UInt32.max) else {
+			throw BridgeFailure(message: "windowImage needs a positive windowId", code: "invalid_args")
+		}
+		guard CGPreflightScreenCaptureAccess() else {
+			throw BridgeFailure(message: "The helper does not have the Screen Recording permission", code: "screen_recording_denied")
+		}
+		let maxDimension = max(64, optionalIntArg(request, "maxDimension") ?? 1600)
+		let capture = try captureWindow(windowId: UInt32(windowId))
+		let image = downscaledImage(capture.image, maxDimension: maxDimension) ?? capture.image
+		guard let jpeg = jpegData(image: image, quality: 0.8) else {
+			throw BridgeFailure(message: "Failed to encode the window image as JPEG", code: "encoding_failed")
+		}
+		return ["jpegBase64": jpeg.base64EncodedString(), "width": image.width, "height": image.height]
 	}
 
 	private func look(_ request: [String: Any]) throws -> [String: Any] {
