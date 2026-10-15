@@ -158,6 +158,15 @@ jobs:
       - name: Pack
         run: npm pack
 
+      # Keep manual dry-run packages downloadable without publishing a release.
+      - name: Upload verified development package
+        uses: actions/upload-artifact@v4
+        with:
+          name: computer-use-package
+          path: forsion-tangu-computer-use-*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Collect sealed helper app archives
         run: |
           for arch in arm64 x64; do
