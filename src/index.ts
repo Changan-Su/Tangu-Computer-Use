@@ -10,6 +10,7 @@ import { buildToolProvider, PLUGIN_ID } from './tools.ts';
 import { SETTINGS } from './settings.ts';
 import { cliMain } from './setup.ts';
 import { shutdownComputerUseSession } from './vendor/bridge.ts';
+import { stopJevRuns } from './jevRun.ts';
 
 // helper 惰性启动后常驻;进程退出时收口(无 pi 的 session_shutdown 钩子)。
 // stop 放模块级、引用唯一:宿主热插拔时会在同一个模块对象上反复 activate / deactivate(启动时每个插件先 activate、
@@ -17,7 +18,7 @@ import { shutdownComputerUseSession } from './vendor/bridge.ts';
 // 摘不掉,每拨一次开关叠一组监听 → MaxListenersExceededWarning、退出时 shutdown 跑 N 遍。
 // 同 id 升级 import 的是新一代模块,自带一个 stop:各代只摘自己的,互不干扰。
 const EXIT_EVENTS = ['exit', 'SIGTERM', 'SIGINT'] as const;
-const stop = (): void => { void shutdownComputerUseSession(); };
+const stop = (): void => { stopJevRuns(); void shutdownComputerUseSession(); };
 
 const plugin: TanguPlugin = {
   activate(ctx) {
@@ -36,6 +37,7 @@ const plugin: TanguPlugin = {
           ? [
               'Computer Use tools in your tool list are already available and directly callable. Do not load them with load_tools unless they appear in the Additional Tools catalog. Reading a skill does not enable a disabled plugin.',
               'Desktop control loop: find_roots → observe_ui → (search_ui/expand_ui/inspect_ui) → act_ui.',
+              ...(process.platform === 'darwin' && ctx.sdk.pluginStore.getScopeSettings(PLUGIN_ID, 'global').jev_enabled === true ? ['Jev experimental acceleration is enabled. Prefer jev_ui for short, explicit click/fill sequences within one known native window: the main model supplies target descriptions and exact fill text, Jev handles each fresh target selection. For a user-requested speed comparison, use mode=elements or vision explicitly; preview=true measures one target without clicking. Read its per-step report, verify the final state, and never replay an executed or uncertain step. Other actions continue to use act_ui.'] : []),
               'These control ANY on-screen application through its accessibility tree + OCR + screenshots — use them when the task needs a desktop app rather than an API/CLI/file.',
               process.platform === 'darwin'
                 ? 'On macOS, if the target app may not be running yet, call ensure_app first — it starts the app in the background (no focus steal).'
@@ -68,6 +70,7 @@ const plugin: TanguPlugin = {
   deactivate() {
     // 只摘本模块自己的 stop(新一代模块与宿主的监听不动),helper 照旧收口。
     for (const ev of EXIT_EVENTS) process.off(ev, stop);
+    stopJevRuns();
     void shutdownComputerUseSession();
   },
 };

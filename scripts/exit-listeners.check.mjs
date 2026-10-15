@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EVENTS = ['exit', 'SIGTERM', 'SIGINT'];
 const FIXTURES = {
+  './jevRun.ts': `export function stopJevRuns() {}`,
   './tools.ts': `export const PLUGIN_ID = 'computer-use'; export const buildToolProvider = () => ({ tools: () => [] });`,
   './setup.ts': `export async function cliMain() { return 0; }`,
   './vendor/bridge.ts': `export async function shutdownComputerUseSession() { globalThis.__cuShutdowns = (globalThis.__cuShutdowns ?? 0) + 1; }`,
@@ -25,7 +26,7 @@ try {
   const bundle = path.join(temp, 'plugin.mjs');
   await build({ entryPoints: [path.join(root, 'src/index.ts')], outfile: bundle, bundle: true, platform: 'node', format: 'esm',
     plugins: [{ name: 'lifecycle-fixture', setup(b) {
-      b.onResolve({ filter: /^\.\/(tools|setup|vendor\/bridge)\.ts$/ }, (args) => ({ path: args.path, namespace: 'fixture' }));
+      b.onResolve({ filter: /^\.\/(tools|setup|jevRun|vendor\/bridge)\.ts$/ }, (args) => ({ path: args.path, namespace: 'fixture' }));
       b.onLoad({ filter: /.*/, namespace: 'fixture' }, (args) => ({ contents: FIXTURES[args.path] }));
     } }], logLevel: 'silent' });
 

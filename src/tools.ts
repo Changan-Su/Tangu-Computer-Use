@@ -22,6 +22,7 @@ import { currentPlatformBackend } from './vendor/platform/index.ts';
 import { isSupportedPlatform } from './helperState.ts';
 import { autoInstallFailed, ensureHelperCurrent, guideMissingPermissions } from './onboarding.ts';
 import { expectNote, foregroundNote, goneHint, imageNote, noRootsHint, scrollNote, selfWindowNote } from './foregroundNote.ts';
+import { runJev, parseJevArgs } from './jevRun.ts';
 
 const execFileP = promisify(execFile);
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -86,15 +87,30 @@ interface ToolSpec {
   parameters: ReturnType<typeof obj>;
   exec?: PiExecute;
   // 适配层自有工具(非 vendor 委托),给定则走它,拿到 args/tcx/pctx 直接返回 string。
-  run?: (args: Record<string, any>, tcx: ToolContext, pctx: ExtensionContext) => Promise<string>;
+  run?: (args: Record<string, any>, tcx: ToolContext, pctx: ExtensionContext, store: PluginStore) => Promise<string>;
   sideEffect: 'read' | 'system' | 'browser';
   approval?: 'command';
   browserOnly?: boolean;
   darwinOnly?: boolean;
+  jevOnly?: boolean;
   timeoutMs: number;
 }
 
 const SPECS: ToolSpec[] = [
+  {
+    name: 'jev_ui', sideEffect: 'system', approval: 'command', darwinOnly: true, jevOnly: true, timeoutMs: 180_000,
+    description: 'Experimental Jev acceleration: execute 1–8 explicit click/fill steps within ONE native desktop root, locating each target on a fresh observation without a main-model round trip per step. Use after find_roots/observe_ui for a short, already-authorized sequence. mode=elements selects accessibility refs; vision uses screenshot boxes; auto tries elements then vision. fill uses atomic setText on native editable elements in Elements/Auto only; web/visual fields and keyboard typing use ordinary tools. preview=true locates ONE step without acting. Stops on missing/ambiguous targets, low confidence, cancellation or uncertain execution; inspect the returned state and resume only remaining steps. Do not batch irreversible/outward-facing actions without the user authorization required by the normal Computer Use rules. Does not scroll, drag, invent text, cross windows or verify the overall goal. Returns per-step timing and progress; use ordinary act_ui for unsupported actions. Never put API keys in arguments.',
+    parameters: obj({
+      root: S('Exact native desktop @r root from find_roots'),
+      steps: { type: 'array', minItems: 1, maxItems: 8, items: obj({ action: { type: 'string', enum: ['click', 'fill'] }, target: S('Unambiguous description of the control in its surrounding UI', 512), text: S('Exact replacement text, required only for fill', 10_000) }, ['action', 'target']) },
+      mode: { type: 'string', enum: ['auto', 'elements', 'vision'], description: 'Override the plugin default for comparison' },
+      preview: { type: 'boolean', description: 'Locate one target without input; default false' },
+    }, ['root', 'steps']),
+    run: async (args, tcx, pctx, store) => {
+      const result = await runJev(args, () => store.getScopeSettings(PLUGIN_ID, 'global'), () => store.isPluginEnabledSync(PLUGIN_ID), pctx, tcx.signal);
+      return JSON.stringify(result.report) + (result.last ? '\n' + render(result.last, tcx) : '');
+    },
+  },
   {
     name: 'find_roots', exec: executeFind as PiExecute, sideEffect: 'read', timeoutMs: 30_000,
     description: 'Find a bounded, ranked set of controllable UI roots with refs, geometry, and focus state. Find a target root before observe_ui when needed.',
@@ -323,6 +339,7 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
     && store.isPluginEnabledSync(PLUGIN_ID)
     && isSupportedPlatform()
     && (!spec.darwinOnly || process.platform === 'darwin')
+    && (!spec.jevOnly || store.getScopeSettings(PLUGIN_ID, 'global').jev_enabled === true)
     // 直接读设置,不读 vendor 的配置对象:后者要等这个进程里调过一次工具才同步,在那之前「浏览器工具」关了也照样列出来。
     && (!spec.browserOnly || store.getScopeSettings(PLUGIN_ID, 'global').browser_use !== false);
 
@@ -333,6 +350,10 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
     capabilities: { sideEffect: spec.sideEffect, parallel: false, concurrencyKey: 'computer-use', defaultTimeoutMs: spec.timeoutMs, approval: spec.approval },
     definition: { type: 'function', function: { name: spec.name, description: spec.description, parameters: spec.parameters } },
     execute: async (args: Record<string, any>, tcx: ToolContext): Promise<string> => {
+      if (spec.jevOnly) {
+        if (!gate(spec)({ capabilities: { hostExec: tcx.execMode !== 'sandbox' } } as AppProfile)) return 'Jev is disabled or unavailable on this platform.';
+        parseJevArgs(args);
+      }
       syncSettings(store);
       // ⚠️这里**绝不能**再加「没装就 return 指导文本」的早退:vendor 的 ensureInstalled() 本来就会
       // 自动跑 setup-helper.mjs,早退等于把上游的自动安装堵死(用户报的「首次安装还要敲命令」就是它)。
@@ -354,7 +375,7 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
       }
       // 装/升级过就在结果里说一句 —— 用户装了什么、agent 替他做了什么,不该是暗箱。
       const prefix = installNote ? `${installNote}\n` : '';
-      if (spec.run) return prefix + await spec.run(args, tcx, pctx);
+      if (spec.run) return prefix + await spec.run(args, tcx, pctx, store);
       let result: AgentToolResult;
       try {
         result = await spec.exec!('', args, tcx.signal, undefined, pctx);
