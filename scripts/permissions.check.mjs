@@ -8,6 +8,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+if (process.platform !== 'darwin') {
+  console.log('macOS permission checks skipped (not macOS)');
+  process.exit(0);
+}
+
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const source = fs.readFileSync(path.join(root, 'native/macos/bridge.swift'), 'utf8');
 function method(name) {
