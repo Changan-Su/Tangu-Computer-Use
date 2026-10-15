@@ -1908,6 +1908,7 @@ async function terminalDesktopActionResult(
 	error: unknown,
 	condition?: ReturnType<typeof validateCondition>,
 ): Promise<AgentToolResult<TerminalDesktopActionDetails>> {
+	const deliveryFailure = execution.steps?.find((step) => step.error)?.error;
 	let exactRootAvailable: boolean | undefined;
 	try {
 		for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -1933,7 +1934,7 @@ async function terminalDesktopActionResult(
 			},
 		];
 	}
-	if (targetClosed && condition) {
+	if (targetClosed && condition && !deliveryFailure) {
 		const verificationStatus = condition.gone ? "verified" : "failed";
 		execution.verification = {
 			status: verificationStatus,
@@ -1971,7 +1972,9 @@ async function terminalDesktopActionResult(
 		execution,
 		error: { code, message },
 	};
-	const result = targetClosed
+	const result = deliveryFailure
+		? `The UI action sequence stopped: ${deliveryFailure.code}: ${deliveryFailure.message}. Its source root ${target.appName} — ${target.windowTitle} could not be observed afterward: ${message}`
+		: targetClosed
 		? `The action was delivered, and its source root ${target.appName} — ${target.windowTitle} closed before a successor observation could be captured.`
 		: `The action was delivered, but its source root ${target.appName} — ${target.windowTitle} could not be observed afterward: ${message}`;
 	return {
