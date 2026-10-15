@@ -21,6 +21,21 @@ when a web page must be handled inside the same window forest as a desktop app.
 
 ## The loop
 
+When `jev_ui` is available (macOS, Jev experiment enabled), use it for a short, explicit sequence of
+clicks or field replacements within one known native window. Pass the root from `find_roots` and
+1–8 steps `{action:"click"|"fill", target:"unambiguous control description", text:"exact fill text"}`.
+Jev locates each target against a fresh observation, avoiding a main-model round trip per step.
+`mode:"elements"` sends only element labels; `mode:"vision"` uses screenshot boxes;
+`mode:"auto"` tries elements before vision. `preview:true` measures one target without input.
+Fill supports native editable elements in Elements/Auto only. Web/visual text fields use ordinary tools;
+the Jev loop never sends focus-following select-all/typing sequences.
+The same authorization rules below apply. Never put API keys in tool arguments. Check the report's
+executed/attempted counts and returned state before continuing; never blindly replay a failed batch.
+The tool stops on ambiguity, low confidence, stale observations, a changed window, cancellation,
+or uncertain input delivery. It does not verify the whole task. Scroll/drag/keyboard-only operations
+and cross-window transitions continue through the normal tools. Report measured elapsed times,
+not an assumed speedup. When Jev is disabled or unavailable, follow the ordinary loop below.
+
 ```
 find_roots  →  observe_ui  →  (search_ui / expand_ui / inspect_ui)  →  act_ui
 ```
