@@ -1876,6 +1876,7 @@ function aggregateExecutions(steps: ExecutionTrace[]): ExecutionTrace {
 		outcome,
 		steps,
 		actionCount: steps.length,
+		error: steps.find((step) => step.error)?.error,
 		rootDelta: steps.flatMap((step) => step.rootDelta ?? []),
 		backgroundFirst: true,
 		escalatedToForeground: Boolean(fallback),
@@ -1994,7 +1995,7 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 		const execution = await dispatchUiTransaction(actions, target, look, headless, signal);
 		const executedActions = actions.slice(0, execution.actionCount ?? actions.length);
 		try {
-			if (condition) {
+			if (condition && !execution.error) {
 				const { text: expectedText, role: expectedRole, value: expectedValue, scopeExact, gone, timeoutMs } = condition;
 				const beforePresent = outlineConditionPresent(look.parsedOutline!, condition);
 				const desiredWasPreexisting = beforePresent !== gone;
@@ -2028,11 +2029,15 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 				await sleep(settleMsForExecution(execution), signal);
 			}
 			const capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);
-			execution.outcome = outcomeAfterObservedValues(execution.outcome ?? "unknown", executedActions, (ref) => nodeByRef(capture.outline, ref)?.value);
+			if (!execution.error) execution.outcome = outcomeAfterObservedValues(execution.outcome ?? "unknown", executedActions, (ref) => nodeByRef(capture.outline, ref)?.value);
 			for (const action of executedActions) {
 				state.currentNote = noteAfterAct(state.currentNote ?? noteBefore, action.ref, capture.outline, { window: noteWindowForTarget(capture.target, capture.look), rootDelta: execution.rootDelta });
 			}
-			return await buildToolResult("act_ui", `Executed ${executedActions.length} checked UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}. Returned state ${capture.capture.stateId}.`, capture, execution, signal, state.currentImageMode, baseView);
+			const failure = execution.steps?.find((step) => step.error)?.error;
+			const summary = failure
+				? `Stopped UI action sequence${execution.stoppedAt !== undefined ? ` at action ${execution.stoppedAt + 1}` : ""}: ${failure.code}: ${failure.message}. Earlier actions may have completed.`
+				: `Executed ${executedActions.length} checked UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}.`;
+			return await buildToolResult("act_ui", `${summary} Returned state ${capture.capture.stateId}.`, capture, execution, signal, state.currentImageMode, baseView);
 		} catch (error) {
 			if (signal?.aborted) {
 				clearDesktopOperationState(state);
