@@ -45,6 +45,10 @@ async function unitTests() {
   // 升级原因透传
   const withReason = foregroundNote({ escalatedToForeground: true, escalationReason: 'foreground_required' });
   assert.ok(withReason.includes('foreground_required'), 'reason surfaced');
+  assert.ok(has(foregroundNote({ delivery: 'ax', rootDelta: [{ change: 'focused' }] })), 'an accessibility provider can activate its own window');
+  assert.ok(has(foregroundNote({ steps: [{ delivery: 'ax' }], rootDelta: [{ change: 'focused' }] })), 'batch-level focus evidence is not hidden by AX steps');
+  assert.equal(foregroundNote({ delivery: 'ax', rootDelta: [{ change: 'appeared' }] }), '', 'a new root alone does not prove foreground activation');
+  assert.equal(foregroundNote({ rootDelta: {}, steps: [null] }), '', 'malformed optional metadata does not break tool output');
 
   console.log('✓ unit: foregroundNote 判据 9 项全过');
 

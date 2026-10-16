@@ -954,6 +954,7 @@ fn act_on_ref(
         .get(reference)
         .cloned()
         .ok_or_else(|| ProtocolError::new("Element reference is stale", ErrorCode::StaleRef))?;
+    enforce_background_web_policy(parsed, &element)?;
     if parsed.policy != "ax_only"
         && is_web_backed(&element)
         && matches!(parsed.action.as_str(), "press" | "click" | "setText")
@@ -1121,6 +1122,22 @@ fn is_web_backed(element: &ElementRecord) -> bool {
         || class.contains("chromium")
         || class.contains("webview")
         || class.contains("electron")
+}
+
+fn enforce_background_web_policy(
+    request: &input::ParsedActRequest,
+    element: &ElementRecord,
+) -> Result<(), ProtocolError> {
+    // Chromium's UIA value writes and scrolling can activate its window even
+    // without global input or an explicit SetFocus call by the helper.
+    if request.policy == "ax_only" && is_web_backed(element)
+        && matches!(request.action.as_str(), "press" | "click" | "setText" | "scroll") {
+        return Err(ProtocolError::new(
+            "Windows browser accessibility controls can activate their window. Strict background mode blocks this action; use browser tools or allow foreground input.",
+            ErrorCode::ForegroundRequired,
+        ));
+    }
+    Ok(())
 }
 
 fn stale_ref_from_uia(message: String) -> ProtocolError {
@@ -1697,6 +1714,30 @@ mod tests {
         assert!(!action_may_use_physical_input(&ax_only, &record));
         let coordinates = json!({"lookId":"look","action":"click","policy":"foreground","target":{"x":1,"y":2},"params":{}});
         assert!(action_may_use_physical_input(&coordinates, &record));
+    }
+
+    #[test]
+    fn strict_background_blocks_web_activation_but_keeps_native_value_writes() {
+        let mut record = look_with_element(1.0);
+        let mut request = input::parse_act_request(&json!({
+            "lookId":"look", "action":"setText", "policy":"ax_only",
+            "target":{"ref":"same-ref"}, "params":{"text":"fixture"}
+        })).unwrap();
+        let element = record.elements.get_mut("same-ref").unwrap();
+        element.class_name = "Edit".to_owned();
+        assert!(enforce_background_web_policy(&request, element).is_ok());
+        for class in ["Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND", "WebView2", "Electron"] {
+            element.class_name = class.to_owned();
+            for action in ["press", "click", "setText", "scroll"] {
+                request.action = action.to_owned();
+                assert_eq!(enforce_background_web_policy(&request, element).unwrap_err().code, ErrorCode::ForegroundRequired);
+            }
+        }
+        request.policy = "foreground".to_owned();
+        assert!(enforce_background_web_policy(&request, element).is_ok());
+        request.policy = "ax_only".to_owned();
+        element.class_name = "Edit".to_owned();
+        assert!(enforce_background_web_policy(&request, element).is_ok());
     }
 
     #[test]
