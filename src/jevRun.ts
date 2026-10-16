@@ -225,7 +225,7 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
       item.elapsedMs = Math.round(performance.now() - stepStart);
       if (!nativeOk) {
         item.status = 'uncertain';
-        throw new Error(`Step ${i + 1} was attempted, but nothing confirmed it (native outcome unknown${step.expect ? '; Elements mode never takes screenshots, so expect was not checked' : ' and no expect was given'}); ${params.steps.length - attempted} later step(s) were NOT attempted. Look at the returned screenshot before continuing. Give each step an expect so Jev can check it visually.`);
+        throw new Error(`Step ${i + 1} was attempted, but nothing confirmed it (native outcome unknown${step.expect ? '; Elements mode never takes screenshots, so expect was not checked' : ' and no expect was given'}); ${params.steps.length - attempted} later step(s) were NOT attempted. Look at the returned screenshot before continuing.${i + 1 < params.steps.length ? ' Give each step that changes the screen an expect so Jev can check it visually.' : ''}`);
       }
       confirmed++;
       Object.assign(item, { status: 'confirmed', confirmedBy: 'native' });

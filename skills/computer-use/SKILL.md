@@ -32,6 +32,9 @@ confirm input natively, so without `expect` the run stops after that step. Write
 something visible: "the Daily picks song list is shown", "row 3 shows a playing icon and the bottom
 bar shows its title". When look-alikes are on screen, say which ones must not be there: "the chat
 header reads exactly Anna (not Anna Lee)". Use `double_click` where the app needs it (playing a song row, opening a file).
+`fill` needs a native text field (setText); canvas, CEF and web windows refuse it. There, make the
+click into the field the last step of the call and give it no `expect` (a caret or focus ring is too
+small to check), then type with `act_ui` and read the field on the screenshot before going on.
 End the call before an irreversible step (send, pay, delete, post): look at the returned screenshot
 yourself, then send that last step on its own.
 The report is the result: `confirmedSteps` (natively or visually confirmed), `attemptedSteps` (input
