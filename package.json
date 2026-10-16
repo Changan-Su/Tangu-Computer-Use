@@ -73,7 +73,8 @@
     "check:recorder": "node scripts/recorder.check.mjs",
     "check:hotkey-logic": "node scripts/hotkey-logic.check.mjs",
     "check:hotkey": "node scripts/hotkey.check.mjs",
-    "check:jev": "node scripts/jev.check.mjs"
+    "check:jev": "node scripts/jev.check.mjs",
+    "check:jev-feedback-live": "node scripts/jev-feedback-live.check.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
