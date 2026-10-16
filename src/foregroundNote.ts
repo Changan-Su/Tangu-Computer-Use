@@ -13,7 +13,7 @@
  *
  * ⚠️但 delivery==='ax' 一票否决 policy:坐标点击在 TS 层**永远**被判 needsForeground(actions.ts),
  * 于是 policy 恒为 foreground;而 helper 现在会先做 AX 命中测试、命中就在后台按下去,压根没动焦点。
- * 不否决的话,每一次成功的后台盲点都会倒过来跟用户说"我抢了你的前台" —— 比不提示更坏。
+ * 不否决的话,每一次成功的后台盲点都会倒过来跟用户说"我抢了你的前台"。但 rootDelta 里实际聚焦的证据优先于送达方式。
  */
 
 interface ExecStep {
@@ -25,6 +25,7 @@ interface ExecStep {
   delivery?: string;
   deliveryPolicy?: string;
   steps?: ExecStep[];
+  rootDelta?: Array<{ change?: string }>;
 }
 
 /** Surface native facts without copying field contents or the whole internal trace. */
@@ -59,7 +60,7 @@ export function executionNote(details: unknown): string {
 function tookForeground(step: ExecStep | undefined): boolean {
   if (!step) return false;
   if (step.escalatedToForeground === true) return true;
-  // AX 送达 = 没发过物理事件、没激活过任何 App,无论名义 policy 是什么
+  // AX 没有全局输入;窗口仍可能被它自己的无障碍提供方激活,由 rootDelta 单独报告。
   if (step.delivery === 'ax') return false;
   return step.delivery === 'hid' || step.deliveryPolicy === 'foreground';
 }
@@ -69,9 +70,12 @@ export function foregroundNote(execution: unknown): string {
   const exec = execution as ExecStep | undefined;
   if (!exec || typeof exec !== 'object') return '';
   const steps: ExecStep[] = Array.isArray(exec.steps) && exec.steps.length ? exec.steps : [exec];
+  if ([exec, ...steps].some(s => Array.isArray(s?.rootDelta) && s.rootDelta.some(d => d?.change === 'focused'))) {
+    return '\n[foreground] The target window became foreground during this action, even if delivery used accessibility input. The target app may have activated itself.';
+  }
   if (!steps.some(tookForeground)) return '';
   const why = steps.map((s) => s?.escalationReason).find(Boolean);
-  return `\n[foreground] This action took the foreground (focus/pointer was moved to the target)${why ? ` — ${why}` : ''}. To keep actions in the background, prefer setText to fill fields; strict background-only is the plugin's "strict background" setting (act_ui no longer takes a headless parameter).`;
+  return `\n[foreground] This action took the foreground (focus/pointer was moved to the target)${why ? ` — ${why}` : ''}. Use the plugin's "strict background" setting to block actions that require foreground access (act_ui no longer takes a headless parameter).`;
 }
 
 /**
