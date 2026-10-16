@@ -371,12 +371,12 @@ try {
     r = await run({ steps: [scrollStep] });
     assert.deepEqual([r.report.steps[0].status, r.report.steps[0].stopReason, acts().length], ['failed', 'input_failed', 1]);
   });
-  await test('scroll (Codex review): stale frames, a resized window, a cancel and an executor problem all stop with the input accounted for', async () => {
-    reset(); scrolling(); const observe = j.jevRuntime.observe;
+  await test('scroll (Codex review): a stale frame is observed again; a resized window, a cancel and an executor problem stop with the input accounted for', async () => {
+    reset(); scrolling({ seenAt: 2 }); const observe = j.jevRuntime.observe;
     j.jevRuntime.observe = async (...a) => { const r = await observe(...a); if (observed === 2) r.details.capture.timestamp -= 6000; return r; };
     let r = await run({ steps: [scrollStep] });
-    assert.deepEqual([r.report.steps[0].stopReason, r.report.steps[0].scrolls, r.report.steps[0].status, acts().length], ['stale', 1, 'unverified', 1]);
-    assert.match(r.report.error, /over 5 seconds old.*stopped before scrolling again/);
+    assert.deepEqual([r.report.steps[0].stopReason, r.report.steps[0].scrolls, observed], ['until_seen', 2, 4]);
+    assert.deepEqual(acts().map(c => c.stateId), ['s1', 's3'], 'the second scroll goes out on the fresh observation, not the stale one');
     reset(); scrolling(); const observe2 = j.jevRuntime.observe;
     j.jevRuntime.observe = async (...a) => { const r = await observe2(...a); if (observed >= 2) r.details.capture.width = 1200; return r; };
     r = await run({ steps: [scrollStep] });

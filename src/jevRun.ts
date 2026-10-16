@@ -91,7 +91,7 @@ const NOTE = 'attemptedSteps = inputs sent (a scroll step whose until was alread
   + 'Unknown is unverified, not failed: a step without expect whose native outcome is unknown stops the run, and so does an expect that did not appear in time. Look at the returned screenshot before continuing, '
   + 'and continue only the steps that were not confirmed; never repeat an attempted step blindly with jev_ui or act_ui. '
   + 'point is in Jev\'s own capture (see capture); pointFraction/box are fractions of the window, so compare them with other screenshots that way. '
-  + 'A scroll step reports how often it scrolled and why it stopped (until_seen, max_scrolls, no_change, input_failed, stale, window_resized, cancelled). '
+  + 'A scroll step reports how often it scrolled and why it stopped (until_seen, max_scrolls, no_change, input_failed, window_resized, cancelled). '
   + 'Jev uses the SAME executor and foreground policy as act_ui; foregroundTaken describes this run only. Preview only locates and cannot test input delivery.';
 
 export async function runJev(args: Record<string, unknown>, settings: () => Record<string, unknown>, enabled: () => boolean, ctx: ExtensionContext, signal?: AbortSignal): Promise<JevRunResult> {
@@ -213,8 +213,9 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
           if (await look()) stopReason = 'until_seen';
           while (!stopReason) {
             if (scrolls === MAX_SCROLLS) { stopReason = 'max_scrolls'; break; }
-            // The list was located once: a frame that is too old, or a window that changed size, no longer vouches for that point.
-            if (Date.now() - d.capture!.timestamp > 5000) { stopReason = 'stale'; break; }
+            // The list was located once. Its point holds while the window keeps its size, so a frame left old by a slow
+            // answer is just observed again; a window that changed size no longer vouches for that point.
+            if (Date.now() - d.capture!.timestamp > 5000) d = await observe(true);
             if (d.capture!.width !== area.width || d.capture!.height !== area.height) { stopReason = 'window_resized'; break; }
             check();
             if (!scrolls) { attempted++; item.status = 'attempted'; }
@@ -252,7 +253,6 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
           item.status = stopReason === 'input_failed' ? 'failed' : scrolls ? 'unverified' : 'stopped';
           const later = `${params.steps.length - attempted} later step(s) were NOT attempted. Look at the returned screenshot`;
           throw new Error(stopReason === 'input_failed' ? `Step ${i + 1}'s scroll #${scrolls} was attempted, but the executor reported a problem; ${later} and its execution facts before continuing, and do not replay it blindly.`
-            : stopReason === 'stale' ? (scrolls ? `Step ${i + 1} scrolled ${scrolls} time(s), then its latest frame was over 5 seconds old (a slow Jev answer), so it stopped before scrolling again; ${later}, then call jev_ui again to continue.` : `Step ${i + 1}: the observation was over 5 seconds old before the first scroll; stopped, no input was sent. Call jev_ui again.`)
             : stopReason === 'window_resized' ? `Step ${i + 1}: the window changed size after ${scrolls} scroll(s), so the located list may have moved; ${later}, then locate it again with a new jev_ui call.`
             : stopReason === 'no_change' ? `Step ${i + 1}: the area stopped moving after ${scrolls} scroll(s) (the end of the list, or nothing scrolls at that point) and until is not in view; ${later}: it may be in the other direction or worded differently from what is drawn.`
             : `Step ${i + 1} scrolled ${MAX_SCROLLS} times without until coming fully into view (Jev visual check ${seen.toFixed(2)}, minimum ${verifyThreshold}); ${later}: it may be further away (call again to keep scrolling), in the other direction, or worded differently from what is drawn.`);
