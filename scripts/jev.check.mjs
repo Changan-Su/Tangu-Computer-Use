@@ -50,7 +50,11 @@ try {
   await test('box presence, finite geometry and original screenshot coordinates', () => {
     const point = j.visionSelection(box(), image, .85).point;
     assert(Math.abs(point.x - 400) < .001 && Math.abs(point.y - 300) < .001);
-    assert.throws(() => j.visionSelection(box(.1), image, .85), /visibility=0.1.*minimum 0.9/);
+    assert.throws(() => j.visionSelection(box(.1), image, .85), /visibility=0.1.*minimum 0.85 for both/);
+    // Visibility follows the configured threshold; it used to be floored at 0.9 whatever the setting said.
+    assert.equal(j.visionSelection(box(.8, .8), image, .75).visibility, .8);
+    assert.throws(() => j.visionSelection(box(.7, .99), image, .75), /visibility=0.7/);
+    assert.deepEqual(j.visionSelection(box(), image, .85).box, { left: .1, right: .3, top: .2, bottom: .4 });
     assert.throws(() => j.visionSelection(box(.99, .3), image, .85));
     const malformed = box(); malformed.answers.target.box.left = NaN;
     assert.throws(() => j.visionSelection(malformed, image, .85));
@@ -68,7 +72,7 @@ try {
   });
   await test('two-step loop gets a fresh state each time', async () => {
     reset(); const r = await run({ steps: [step, step], mode: 'elements' });
-    assert.equal(r.report.status, 'executed'); assert.equal(r.report.executedSteps, 2);
+    assert.equal(r.report.status, 'completed'); assert.equal(r.report.confirmedSteps, 2);
     assert.deepEqual(calls.filter(x => typeof x === 'object').map(x => x.stateId), ['s1', 's2']);
     assert.equal(r.report.steps.length, 2);
   });
@@ -78,7 +82,7 @@ try {
   });
   await test('auto can recover via a new visual observation', async () => {
     reset(); j.jevRuntime.request = async (_k, b) => b.assets ? box() : choice('not_found');
-    const r = await run(); assert.equal(r.report.status, 'executed');
+    const r = await run(); assert.equal(r.report.status, 'completed');
     assert.equal(r.report.steps[0].fallback, 'elements_to_vision');
     assert.equal(calls.at(-1).stateId, 's2');
   });
@@ -105,17 +109,17 @@ try {
     reset(); let n = 0;
     j.jevRuntime.act = async () => ({ content: [], details: { capture: { stateId: 'after' }, execution: { outcome: ++n === 1 ? 'worked' : 'unknown' } } });
     const r = await run({ steps: [step, step, step] });
-    assert.equal(n, 2); assert.equal(r.report.executedSteps, 1); assert.equal(r.report.attemptedSteps, 2);
+    assert.equal(n, 2); assert.equal(r.report.confirmedSteps, 1); assert.equal(r.report.attemptedSteps, 2);
     assert.equal(r.report.steps[1].status, 'uncertain');
   });
   await test('native result contract, foreground delivery and interrupted input', async () => {
     reset();
     j.jevRuntime.act = async () => ({ content: [], details: { capture: { stateId: 'after' }, execution: { outcome: 'worked', steps: [{ delivery: 'hid', deliveryPolicy: 'foreground' }] } } });
-    let r = await run(); assert.equal(r.report.executedSteps, 1); assert.equal(r.report.foregroundTaken, true);
+    let r = await run(); assert.equal(r.report.confirmedSteps, 1); assert.equal(r.report.foregroundTaken, true);
     reset(); j.jevRuntime.act = async () => ({ content: [], details: { status: 'target_closed', execution: { outcome: 'worked' } } });
     r = await run({steps: [step, step]});
-    assert.equal(r.report.executedSteps, 1); assert.equal(r.report.attemptedSteps, 1);
-    assert.equal(r.report.status, 'stopped'); assert.equal(r.report.steps[0].status, 'executed');
+    assert.equal(r.report.confirmedSteps, 1); assert.equal(r.report.attemptedSteps, 1);
+    assert.equal(r.report.status, 'stopped'); assert.equal(r.report.steps[0].status, 'confirmed');
     reset(); const ac = new AbortController();
     j.jevRuntime.act = async () => { ac.abort(); throw new Error('native input interrupted'); };
     r = await run({}, ac.signal); assert.equal(r.report.attemptedSteps, 1); assert.equal(r.last, undefined); assert.equal(r.report.foregroundTaken, null);
@@ -128,7 +132,7 @@ try {
     }};
     j.jevRuntime.act = async () => after;
     const r = await run({steps: [step, step], mode: 'vision'});
-    assert.equal(r.report.executedSteps, 0); assert.equal(r.report.attemptedSteps, 1); assert.equal(r.report.unattemptedSteps, 1);
+    assert.equal(r.report.confirmedSteps, 0); assert.equal(r.report.attemptedSteps, 1); assert.equal(r.report.unattemptedSteps, 1);
     assert.equal(r.report.executor, 'act_ui'); assert.equal(r.report.steps[0].execution.strictBackground, true);
     assert.equal(r.report.steps[0].execution.steps[0].delivery, 'pid');
     const text = JSON.stringify(r.report) + j.render(after, {});
@@ -150,7 +154,7 @@ try {
     assert.equal((await run()).report.attemptedSteps, 0);
     reset(); const observe2 = j.jevRuntime.observe;
     j.jevRuntime.observe = async (...args) => { const r = await observe2(...args); if (observed > 1) r.details.target.pid = 9; return r; };
-    assert.equal((await run({ steps: [step, step] })).report.executedSteps, 1);
+    assert.equal((await run({ steps: [step, step] })).report.confirmedSteps, 1);
   });
   await test('HTTP adapter uses the configured endpoint, pins model and redacts upstream errors', async () => {
     const fetch = globalThis.fetch;
@@ -184,6 +188,62 @@ try {
       const point=j.visionSelection(r,p,.85).point;
       assert(Math.abs(point.x-width/2)<.001 && Math.abs(point.y-height/2)<.001);
     }
+  });
+
+  // ── 10-16: you plan, Jev clicks and checks (feedback 0c0cd24f: canvas apps stopped after every step) ──
+  const verdict = (noul) => ({ model: j.JEV_MODEL, answers: { done: { type: 'noul', noul } }, usage: { input_tokens: 50 } });
+  const unknownAct = async (stateId, actions) => { calls.push({ stateId, actions }); return { content: [], details: { capture: { stateId: `after-${stateId}` }, execution: { outcome: 'unknown' } } }; };
+  j.jevTiming.verifyWindowMs = 300; j.jevTiming.pollMs = 50;
+  await test('double_click is a two-count physical click and needs a screenshot', async () => {
+    assert.deepEqual(j.parseJevArgs({ root: '@r1', steps: [{ action: 'double_click', target: 'Row 3', expect: 'Row 3 is playing' }] }).steps[0], { action: 'double_click', target: 'Row 3', expect: 'Row 3 is playing' });
+    assert.deepEqual(j.selectedActions({ action: 'double_click', target: 'Row' }, { point: { x: 5, y: 6 } }, []), [{ action: 'click', clickCount: 2, x: 5, y: 6 }]);
+    assert.throws(() => j.parseJevArgs({ root: '@r1', steps: [{ action: 'triple_click', target: 'x' }] }));
+    assert.throws(() => j.parseJevArgs({ root: '@r1', steps: [{ action: 'click', target: 'x', expect: '' }] }));
+    reset(); let r = await run({ steps: [{ action: 'double_click', target: 'Row 3' }], mode: 'elements' });
+    assert.equal(r.report.attemptedSteps, 0); assert.match(r.report.error, /double_click needs Auto or Vision/);
+    reset(); r = await run({ steps: [{ action: 'double_click', target: 'Row 3' }] });
+    assert.deepEqual(calls.slice(0, 2), ['observe:true', 'box'], 'auto mode goes straight to vision for double_click');
+    const [a] = calls[2].actions; assert.deepEqual([a.action, a.clickCount, Math.round(a.x), Math.round(a.y)], ['click', 2, 200, 150]);
+  });
+  await test('expect lets a canvas sequence continue: Jev confirms each step on a fresh screenshot', async () => {
+    reset(); j.jevRuntime.act = unknownAct;
+    j.jevRuntime.request = async (_k, b) => { calls.push(b.questions.done ? `verify:${Object.keys(b.assets).length}` : b.assets ? 'box' : 'choice'); return b.questions.done ? verdict(.97) : box(); };
+    const r = await run({ mode: 'vision', steps: [{ ...step, expect: 'The list page is shown' }, { action: 'double_click', target: 'Row 3', expect: 'Row 3 is playing' }] });
+    assert.equal(r.report.status, 'completed', JSON.stringify(r.report)); assert.equal(r.report.confirmedSteps, 2); assert.equal(r.report.attemptedSteps, 2);
+    assert.deepEqual(r.report.steps.map(s => s.confirmedBy), ['visual', 'visual']);
+    assert.equal(r.report.steps[0].verify.met, true); assert.equal(r.report.steps[0].verify.attempts, 1);
+    // before (locate shot) + after frame; step 2 locates on the check's observation instead of observing again.
+    assert.deepEqual(calls.filter(c => typeof c === 'string'), ['observe:true', 'box', 'observe:true', 'verify:2', 'box', 'observe:true', 'verify:2']);
+    assert.equal(r.report.steps[1].observation, 'reused_from_previous_check');
+    assert.deepEqual(r.report.steps[0].capture, { width: 1000, height: 500 });
+    assert.deepEqual(r.report.steps[0].pointFraction, { x: .2, y: .3 });
+  });
+  await test('expect waits for a slow page, then stops with the screenshot when it never appears', async () => {
+    reset(); j.jevRuntime.act = unknownAct; let n = 0;
+    j.jevRuntime.request = async (_k, b) => b.questions.done ? verdict(++n < 3 ? .1 : .9) : box();
+    let r = await run({ mode: 'vision', steps: [{ ...step, expect: 'Loaded' }] });
+    assert.equal(r.report.status, 'completed'); assert.equal(r.report.steps[0].verify.attempts, 3);
+    reset(); j.jevRuntime.act = unknownAct;
+    j.jevRuntime.request = async (_k, b) => b.questions.done ? verdict(.2) : box();
+    r = await run({ mode: 'vision', steps: [{ ...step, expect: 'Loaded' }, step] });
+    assert.equal(r.report.status, 'stopped'); assert.equal(r.report.confirmedSteps, 0); assert.equal(r.report.attemptedSteps, 1);
+    assert.equal(r.report.steps[0].status, 'unverified'); assert.equal(r.report.steps[0].verify.met, false);
+    assert(r.report.steps[0].verify.attempts > 1); assert.match(r.report.error, /expect did not appear/);
+    assert(r.last.content.some(c => c.type === 'image'), 'the latest screenshot goes back to the main model');
+  });
+  await test('expect is never checked with screenshots in Elements mode', async () => {
+    reset(); j.jevRuntime.act = unknownAct;
+    const r = await run({ mode: 'elements', steps: [{ ...step, expect: 'Next page' }] });
+    assert.equal(r.report.steps[0].status, 'uncertain'); assert.match(r.report.error, /Elements mode never takes screenshots/);
+    assert(!calls.includes('observe:true')); assert(!calls.includes('box'));
+  });
+  await test('natively confirmed steps without expect still continue; the run limit grows with steps', async () => {
+    reset(); const r = await run({ mode: 'elements', steps: [step, step, step] });
+    assert.deepEqual(r.report.steps.map(s => s.confirmedBy), ['native', 'native', 'native']);
+    assert.equal(j.runLimitMs(1), 40_000); assert.equal(j.runLimitMs(8), 170_000);
+    const v = j.verifyRequest(image, { ...step, expect: 'Done' });
+    assert.equal(Object.keys(v.assets).length, 1); assert.equal(v.questions.done.type, 'noul'); assert.equal(v.state.expected, 'Done');
+    assert.throws(() => j.verifyAnswer({ answers: { done: { type: 'noul', noul: 2 } } }));
   });
   console.log(`${passed} Jev checks passed (Jev responses are fixtures; no live API claim).`);
 } finally { Object.assign(j.jevRuntime, originals); await fs.rm(outfile, { force: true }); }
