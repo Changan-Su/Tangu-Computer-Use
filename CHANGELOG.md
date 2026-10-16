@@ -1,5 +1,22 @@
 # 更新日志
 
+## 0.7.2-jev.3 — 2026-10-16（开发实验 / development experiment）
+
+- `jev_ui` 补上滚动、打字、按键（反馈 d995c9a2：Jev 只能定位，滚动和打字还得回到 `act_ui`，传统模式仍占主导）：
+  - `scroll`：写明哪个列表和 `until`（要滚到能看见什么）。Jev 每次滚半个列表（至少窗口高度的一成）、最多 8 次，每滚一次自己看一眼，看全了就停；画面不再变（到底了）也停。报告里有 `scrolls` 和 `stopReason`。
+  - `type`：先点目标（给了的话）再在光标处输入，自绘 / CEF / 网页输入框也能用；不清空输入框。
+  - `key`：发 `["return"]`、`["cmd","a"]` 这类键，给了目标就先点它。
+  - 这三种都要截图，只在自动 / 视觉模式下可用；含滚动的调用，时限里滚动那步按两步算。`act_ui` 只剩拖动，或同一个目标换着说法被拒两次之后。
+- 单击之后 `expect` 没出现时，报错里提示「只是被选中（高亮）的话，这个 App 要双击」：live 里主模型想播歌常先单击，没有这句时它连单击三次后退回了 `act_ui`。
+- 提示词、工具说明和技能：目标按画面上画的写（标签、行标题文字），不写像素坐标；列表里的行瞄标题文字，不瞄整行；`expect` 只写肯定会出现的东西，没看到过的标题别猜；目标被拒或 `expect` 没出现，是换个说法再交给 Jev，不是「Jev 做不了」；消息框里按回车就是发送，照不可撤回的步骤处理。
+- `jev_ui` now scrolls, types and presses keys (feedback d995c9a2: Jev could only locate, so scrolling and typing went back to `act_ui`):
+  - `scroll` names the list and an `until`; Jev scrolls half the list at a time (at least a tenth of the window), at most 8 times, checking every frame, and stops once `until` is fully in view or the frame stops changing. The report adds `scrolls` and `stopReason`.
+  - `type` clicks its target (when given), then types at the caret; it works on canvas, CEF and web fields and never clears the field.
+  - `key` sends keys such as `["return"]` or `["cmd","a"]`, after clicking its target when given.
+  - All three need screenshots (Auto or Vision mode); a scroll step counts twice in the run limit. `act_ui` is left for dragging, or for a target Jev rejected twice under different descriptions.
+- When a click's `expect` never appears, the error now adds that an item which only shows as selected wants `double_click` (live: the model single-clicked a song row three times, then fell back to `act_ui`).
+- Prompt, tool description and skill: describe targets by what is drawn (labels, a row's title text), never pixel coordinates; target a list row by its title text, not the whole row; write `expect` only from what will certainly appear and never guess an unseen title; a rejected target or a missing `expect` means re-describe and call Jev again, not "Jev cannot do it"; return in a message field sends.
+
 ## 0.7.2-jev.2 — 2026-10-16（开发实验 / development experiment）
 
 - Jev 改成「主模型布置、Jev 点和看」：`jev_ui` 一次收一串步骤（click / double_click / fill），每步写 `expect`；Jev 点完自己看新截图（最多等 4 秒加载），对上了才走下一步，对不上就停、把最新截图交回主模型。原生层确认不了的窗口（画布、CEF、网页）也能连着走完。报告按步给出耗时、可见性、框置信度和确认结果，坐标另给窗口比例 `pointFraction`。

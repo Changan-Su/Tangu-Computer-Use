@@ -43,7 +43,7 @@ fs.mkdirSync(shotsDir, { recursive: true })
 // 每个替身截哪些画面(都是启动参数摆出来的,或者 selftest 跑完 --hold 住的最后一个画面)
 const VARIANTS = {
   melody: [
-    { page: 'home' }, { page: 'daily' }, { page: 'daily', play: 3 }, { page: 'comments:3' }, { page: 'loading' },
+    { page: 'home' }, { page: 'daily' }, { page: 'daily', play: 3 }, { page: 'liked' }, { page: 'comments:3' }, { page: 'loading' },
     { page: 'featured' }, { page: 'playlist:每日新歌速递' }, { hold: true },
   ],
   chatter: [
@@ -106,6 +106,7 @@ function checkShape(name, s, label) {
   }
   if (name === 'melody') {
     assert.equal(s.catalog.daily.length, 30, `${label}: catalog.daily has 30 songs`)
+    assert.equal(s.catalog.liked.length, 30, `${label}: catalog.liked has 30 songs`)
     assert.ok(s.catalog.hottest['3']?.text?.length > 0, `${label}: catalog.hottest["3"].text`)
   } else {
     assert.ok(s.contacts.includes('Sakura') && s.contacts.includes('Saku'), `${label}: contacts include Sakura and Saku`)
@@ -143,14 +144,14 @@ function probesFor(name, v, s) {
   const add = (what, it, dx, dy, test) => { if (!it) { out.push({ what, missing: true }); return } out.push({ what, x: it.rect.x + (typeof dx === 'function' ? dx(it.rect) : dx), y: it.rect.y + (typeof dy === 'function' ? dy(it.rect) : dy), test }) }
   const midY = (r) => r.h / 2
   if (name === 'melody') {
-    const section = s.section === 'featured' ? '精选' : '推荐'
+    const section = { featured: '精选', liked: '我喜欢的音乐' }[s.section] ?? '推荐'
     add(`sidebar ${section} is the red selected pill`, find(s, 'sidebar', section), 5, midY, isRed)
     add('sidebar 播客 is plain', find(s, 'sidebar', '播客'), 5, midY, (c) => avg(c) < 60)
     if (v.page === 'home') {
       add('card 每日推荐 cover is red', find(s, 'card', '每日推荐'), 10, 10, isRed)
       add('card 私人漫游 cover is blue', find(s, 'card', '私人漫游'), 10, 10, isBlue)
     }
-    if (s.page === 'daily' && !s.loading) add('button 播放全部 is red', find(s, 'button', '播放全部'), 5, midY, isRed)
+    if ((s.page === 'daily' || s.page === 'liked') && !s.loading) add('button 播放全部 is red', find(s, 'button', '播放全部'), 5, midY, isRed)
     if (s.playing) add('play/pause circle is red', find(s, 'button', s.paused ? '播放' : '暂停'), 5, midY, isRed)
     if (v.hold) {
       add('selected row has the lighter row fill', find(s, 'row', (it) => it.selected), 5, midY, (c) => avg(c) > 34 && avg(c) < 90)

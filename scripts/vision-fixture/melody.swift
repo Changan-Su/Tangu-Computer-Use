@@ -177,6 +177,10 @@ let songRows: [(String, String, String, String, String)] = [
 	("Last Tram Home", "NOVA K", "Bloom", "03:38", ""),
 ]
 let songs: [Song] = songRows.enumerated().map { Song(index: $0.offset + 1, title: $0.element.0, artist: $0.element.1, album: $0.element.2, duration: $0.element.3, tag: $0.element.4) }
+/// 「我喜欢的音乐」:同一批歌换个固定顺序,行号是在这个歌单里的位置,不是歌的编号(第 18 首 ≠ 每日推荐的第 18 首)。
+/// 页头和网易云一样写「<昵称>喜欢的音乐」,不是侧栏上的「我喜欢的音乐」:照侧栏的字去猜标题的 expect 对不上。
+let likedOrder: [Int] = [12, 5, 27, 1, 19, 8, 30, 14, 3, 22, 9, 17, 25, 6, 28, 11, 2, 20, 15, 29, 4, 23, 10, 26, 7, 18, 13, 24, 16, 21]
+let likedTitle = "听风的人喜欢的音乐"
 
 struct Card { let title: String, from: NSColor, to: NSColor, icon: String, plays: String }
 let topCards: [Card] = [
@@ -315,6 +319,8 @@ func hottestDict(_ index: Int) -> [String: Any] {
 }
 let catalog: [String: Any] = [
 	"daily": songs.map { ["index": $0.index, "title": $0.title, "artist": $0.artist] as [String: Any] },
+	"liked": likedOrder.enumerated().map { ["position": $0.offset + 1, "index": $0.element, "title": songs[$0.element - 1].title, "artist": songs[$0.element - 1].artist] as [String: Any] },
+	"likedTitle": likedTitle,
 	"hottest": Dictionary(uniqueKeysWithValues: songs.map { ("\($0.index)", hottestDict($0.index)) }),
 ]
 
@@ -376,8 +382,10 @@ final class Canvas: NSView {
 		for (row, cards) in [topCards, hotCards].enumerated() { if let col = cards.firstIndex(where: { $0.title == title }) { return cardHit(row, col) } }
 		return nil
 	}
-	// 每日推荐(整页一起滚,表头不吸顶)
-	var dailyTop: CGFloat { mainRect.minY - off(.daily) }
+	// 列表页:每日推荐 / 我喜欢的音乐(整页一起滚,表头不吸顶),行号 = 在当前这页里的位置
+	var listPage: Page { page == .liked ? .liked : .daily }
+	func order(_ p: Page) -> [Int] { p == .liked ? likedOrder : songs.map(\.index) }
+	var dailyTop: CGFloat { mainRect.minY - off(listPage) }
 	var playAllRect: NSRect { NSRect(x: mainRect.minX + padX, y: dailyTop + 108, width: 124, height: 34) }
 	var collectRect: NSRect { NSRect(x: mainRect.minX + padX + 136, y: dailyTop + 108, width: 112, height: 34) }
 	let rowH: CGFloat = 44
@@ -402,7 +410,7 @@ final class Canvas: NSView {
 
 	func maxOffset(_ p: Page) -> CGFloat {
 		switch p {
-		case .daily: return max(0, dailyHeight - mainRect.height)
+		case .daily, .liked: return max(0, dailyHeight - mainRect.height)
 		case .comments: return max(0, (commentsFor.map { commentLayout(songs[$0 - 1]).height } ?? 0) - commentsView.height)
 		case .home: return max(0, 58 + 2 * (cardW + 102) - mainRect.height)
 		default: return 0
@@ -465,7 +473,7 @@ final class Canvas: NSView {
 			if loading { drawSpinner() } else {
 				switch page {
 				case .home: drawHome()
-				case .daily: drawDaily()
+				case .daily, .liked: drawDaily()
 				case .comments: drawComments()
 				case .playlist: drawPlaylist()
 				default: drawEmpty(nav.first { $0.page == page }?.title ?? "")
@@ -584,13 +592,18 @@ final class Canvas: NSView {
 
 	func drawDaily() {
 		let m = mainRect, cy = dailyTop
-		let tile = NSRect(x: m.minX + padX, y: cy + 14, width: 80, height: 80)
+		let tile = NSRect(x: m.minX + padX, y: cy + 14, width: 80, height: 80), liked = page == .liked
 		gradient(tile, rgb(255, 104, 96), C.accentDeep, 14)
-		label("星期五", NSRect(x: tile.minX, y: tile.minY + 7, width: tile.width, height: 15), font(10.5, .semibold), NSColor.white.withAlphaComponent(0.85), .center)
-		label("16", NSRect(x: tile.minX, y: tile.minY + 19, width: tile.width, height: 54), digits(37, .heavy), .white, .center)
-		item("text", "16", tile)
-		item("text", "每日推荐", label("每日推荐", NSRect(x: m.minX + 130, y: cy + 18, width: 400, height: 40), font(27, .bold), C.text))
-		let sub = "根据你的音乐口味生成 · 每天 6:00 更新"
+		if liked {
+			symbol("heart.fill", NSPoint(x: tile.midX, y: tile.midY), 30, .white)
+		} else {
+			label("星期五", NSRect(x: tile.minX, y: tile.minY + 7, width: tile.width, height: 15), font(10.5, .semibold), NSColor.white.withAlphaComponent(0.85), .center)
+			label("16", NSRect(x: tile.minX, y: tile.minY + 19, width: tile.width, height: 54), digits(37, .heavy), .white, .center)
+			item("text", "16", tile)
+		}
+		let title = liked ? likedTitle : "每日推荐"
+		item("text", title, label(title, NSRect(x: m.minX + 130, y: cy + 18, width: 400, height: 40), font(27, .bold), C.text))
+		let sub = liked ? "歌单 · 听风的人 · 2024-03-02 创建" : "根据你的音乐口味生成 · 每天 6:00 更新"
 		item("text", sub, label(sub, NSRect(x: m.minX + 130, y: cy + 62, width: 420, height: 20), font(13), C.text2))
 		let pa = playAllRect
 		gradient(pa, C.accentLight, C.accentDeep, pa.height / 2, 0)
@@ -610,20 +623,20 @@ final class Canvas: NSView {
 			item("text", title, label(title, NSRect(x: x, y: hy, width: w, height: 28), font(12), C.text3, align))
 		}
 		fill(NSRect(x: m.minX + 16, y: hy + 29, width: m.width - 32, height: 1), C.line)
-		for s in songs {
-			let r = rowRect(s.index)
+		for (k, i) in order(listPage).enumerated() {
+			let s = songs[i - 1], pos = k + 1, r = rowRect(pos)
 			guard r.maxY > m.minY, r.minY < m.maxY else { continue }
 			let isSel = selected == s.index, isPlay = playing == s.index
-			if isSel { fill(r, C.rowSel, 8) } else if s.index % 2 == 0 { fill(r, C.rowAlt, 8) }
+			if isSel { fill(r, C.rowSel, 8) } else if pos % 2 == 0 { fill(r, C.rowAlt, 8) }
 			if isPlay { symbol(paused ? "speaker.fill" : "speaker.wave.2.fill", NSPoint(x: m.minX + padX + 8, y: r.midY), 12, C.accent) }
-			else { label(String(format: "%02d", s.index), NSRect(x: m.minX + padX, y: r.minY, width: 30, height: r.height), digits(13), C.text3) }
+			else { label(String(format: "%02d", pos), NSRect(x: m.minX + padX, y: r.minY, width: 30, height: r.height), digits(13), C.text3) }
 			let tr = label(s.title, NSRect(x: colTitle, y: r.minY, width: 240, height: r.height), font(14, isPlay ? .medium : .regular), isPlay ? C.accent : C.text)
 			if !s.tag.isEmpty { badge(s.tag, x: min(tr.maxX + 8, colArtist - 40), midY: r.midY) }
 			label(s.artist, NSRect(x: colArtist, y: r.minY, width: 140, height: r.height), font(13), isPlay ? C.accent.withAlphaComponent(0.85) : C.text2)
 			label(s.album, NSRect(x: colAlbum, y: r.minY, width: 150, height: r.height), font(13), C.text2)
 			label(s.duration, NSRect(x: m.maxX - 36 - 60, y: r.minY, width: 60, height: r.height), digits(13), C.text3, .right)
-			item("row", "\(String(format: "%02d", s.index)) \(s.title) — \(s.artist)", r,
-				["index": s.index, "title": s.title, "artist": s.artist, "album": s.album, "playing": isPlay, "selected": isSel])
+			item("row", "\(String(format: "%02d", pos)) \(s.title) — \(s.artist)", r,
+				["index": s.index, "position": pos, "title": s.title, "artist": s.artist, "album": s.album, "playing": isPlay, "selected": isSel])
 		}
 	}
 
@@ -801,9 +814,10 @@ final class Canvas: NSView {
 			for (row, cards) in [topCards, hotCards].enumerated() {
 				for (col, card) in cards.enumerated() where cardHit(row, col).contains(p) { openCard(card); return }
 			}
-		case .daily:
-			if playAllRect.contains(p) { play(1); return }
-			if let i = rowAt(p) {
+		case .daily, .liked:
+			if playAllRect.contains(p) { play(order(page)[0]); return }
+			if let k = rowAt(p) {
+				let i = order(page)[k - 1]
 				if selected != i { selected = i; log("select", "\(i) \(songs[i - 1].title)") }
 				if count >= 2 { play(i) }
 			}
@@ -826,7 +840,7 @@ final class Canvas: NSView {
 		guard dx != 0 || dy != 0 else { return }
 		scrolls += 1
 		defer { changed() }
-		guard mainRect.contains(p), !loading, [.home, .daily, .comments].contains(page) else { return }
+		guard mainRect.contains(p), !loading, [.home, .daily, .liked, .comments].contains(page) else { return }
 		let old = off(page), new = min(maxOffset(page), max(0, old - dy))
 		if new != old { offsets[page] = new; log("scroll", "\(page.rawValue):\(Int(new))", coalesce: true) }
 	}
@@ -1044,7 +1058,7 @@ final class Canvas: NSView {
 			"comments": (page == .comments ? commentsFor : nil).map { ["for": $0, "hottest": hottestDict($0)] as Any } ?? NSNull(),
 			"playlist": playlist.map { $0 as Any } ?? NSNull(),
 			"focus": focused ? "search" as Any : NSNull(), "search": search, "selectAll": selectAll,
-			"offsets": ["home": Double(off(.home)), "daily": Double(off(.daily)), "comments": Double(off(.comments))],
+			"offsets": ["home": Double(off(.home)), "daily": Double(off(.daily)), "liked": Double(off(.liked)), "comments": Double(off(.comments))],
 			"clicks": clicks, "doubleClicks": doubleClicks, "scrolls": scrolls, "keys": keys,
 			"window": ["x": Double(f.minX), "y": Double(ph - f.maxY), "w": Double(f.width), "h": Double(f.height)],
 			"content": ["w": Double(bounds.width), "h": Double(bounds.height)],
@@ -1192,6 +1206,18 @@ final class SelfTest {
 		then(1.0) {
 			let c = self.c
 			self.expect(c.page == .liked && !c.loading, "stale loading timer does not fire")
+			self.expect(likedOrder.sorted() == songs.map(\.index), "liked is a reordering of all songs")
+			self.click(c.rowRect(1))
+			self.expectHit("row 01 \(songs[likedOrder[0] - 1].title)")
+			self.expect(c.selected == likedOrder[0], "liked row 1 selects the song at position 1")
+			self.scroll(-300)
+			self.expect(c.off(.liked) == 300 && c.off(.daily) == 0, "liked scrolls on its own (got \(c.off(.liked)))")
+			self.scroll(-200)
+			self.doubleClick(c.rowRect(18))
+			self.expectHit("row 18 \(songs[likedOrder[17] - 1].title)")
+			self.expect(c.playing == likedOrder[17] && likedOrder[17] != 18, "liked row 18 plays position 18, not song 18")
+			self.scroll(-100_000)
+			self.expect(c.off(.liked) == c.maxOffset(.liked) && c.rowRect(30).maxY <= c.mainRect.maxY + 0.5, "liked clamps at bottom")
 			self.click(c.navRect(0))
 			self.click(c.cardRect("每日推荐"))
 		}
