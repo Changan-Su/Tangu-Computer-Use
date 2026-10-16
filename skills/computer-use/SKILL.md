@@ -41,7 +41,9 @@ The report is the result: `confirmedSteps` (natively or visually confirmed), `at
 sent), and per step the timings, `confidence`, `visibility` and `verify` (`met`, `noul`, attempts,
 wait). When it stops early it says why and returns the latest screenshot; continue only the
 unconfirmed steps — with `jev_ui` again, or `act_ui` for typing, scrolling, dragging and keys.
-A target rejected as not visible means Jev does not see it as described: scroll, wait for loading, or
+A stopped step is not a dead end: read the returned screenshot, work out what is really on screen (an
+expect that never appeared usually means you picked a control that does not lead there), and send the
+corrected step. A target rejected as not visible means Jev does not see it as described: scroll, wait for loading, or
 describe it by what is drawn (label, row number, position) and call `jev_ui` again before clicking
 your own coordinate estimate with `act_ui`. Before telling the user a name is not on screen, ask Jev for
 it with `preview:true` ("the list entry named exactly Sakura"): it reads a long list more reliably than
@@ -168,7 +170,8 @@ a description that fits exactly one thing on screen. This covers messages and po
 payments, deletions, installs, settings or sensitive personal data.
 
 A person, chat, file or item the user names means **the exact match** on screen. A longer name that
-contains it is someone else: "Sakura 樱花" or "Sakura Lee" is not "Sakura". With no exact match, or more
+contains it is someone else: "Sakura 樱花" or "Sakura Lee" is not "Sakura". If exactly one entry reads
+exactly that name, it is the recipient; look-alikes do not make it ambiguous. With no exact match, or more
 than one, ask instead of choosing, and name the candidates exactly as the screen shows them. Ask the
 same way when the description of what to send fits more than one thing.
 
