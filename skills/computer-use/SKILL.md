@@ -21,6 +21,26 @@ when a web page must be handled inside the same window forest as a desktop app.
 
 ## The loop
 
+When `jev_ui` is available (macOS, Jev experiment enabled), use it for a short, explicit sequence of
+clicks or field replacements within one known native window. Pass the root from `find_roots` and
+1–8 steps `{action:"click"|"fill", target:"unambiguous control description", text:"exact fill text"}`.
+Jev locates each target against a fresh observation, avoiding a main-model round trip per step.
+`mode:"elements"` sends only element labels; `mode:"vision"` uses screenshot boxes;
+`mode:"auto"` tries elements before vision. `preview:true` measures one target without input.
+Fill supports native editable elements in Elements/Auto only. Web/visual text fields use ordinary tools;
+the Jev loop never sends focus-following select-all/typing sequences.
+The same authorization rules below apply. Never put API keys in tool arguments. Check the report's
+executed/attempted counts and returned state before continuing. `attemptedSteps` counts attempts;
+`executedSteps` counts native confirmations. `unknown` means unverified, not failed: a canvas can
+change without accessibility confirmation. Inspect the returned screenshot before repeating an
+attempt with **any** tool; if the intended result is present, continue only the remaining steps.
+Jev and `act_ui` use the **same executor and foreground policy**. `foregroundTaken:false` describes
+that run, not a background-only restriction on Jev. Preview sends no input and cannot test delivery.
+The tool stops on ambiguity, low confidence, stale observations, a changed window, cancellation,
+or uncertain input delivery. It does not verify the whole task. Scroll/drag/keyboard-only operations
+and cross-window transitions continue through the normal tools. Report measured elapsed times,
+not an assumed speedup. When Jev is disabled or unavailable, follow the ordinary loop below.
+
 ```
 find_roots  →  observe_ui  →  (search_ui / expand_ui / inspect_ui)  →  act_ui
 ```
@@ -45,13 +65,15 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
 
 - **Re-observe right before you act.** Element refs go stale as soon as the UI changes.
 - **Only use refs from the latest observation.** Never reuse an `@e` from an earlier state; every
-  operation carries the `stateId` that owns its refs.
+  operation carries the `stateId` that owns its refs. If a root becomes stale, rediscover the same app
+  with `find_roots`; do not omit the root and switch to the frontmost app by accident.
 - **Prefer the accessibility text** over the screenshot. Fall back to the image only when the tree is
   incomplete (`pictureOnly` nodes are coordinate-only).
 - **Coordinates are pixels in the attached screenshot.** A result that attaches a screenshot states its
   size on an `[image]` line. The screenshot is the target window only, scaled down; `x`/`y` and `drag`
   paths are read straight off it, origin top-left. Never convert them to screen points or to the window
-  frame size from `find_roots`. Some apps (WeChat, for one) expose no accessibility tree at all: there
+  frame size from `find_roots`. After navigation or opening a popup, inspect the new state before
+  targeting a newly revealed control; do not batch its guessed coordinates from the old screenshot. Some apps (WeChat, for one) expose no accessibility tree at all: there
   the screenshot and coordinates are the only way to work, and that is fine.
 - If a tool result says `output truncated` it hands you an `@o` ref — continue it with
   `read_text({ ref: "@oN", offset: … })`, or better, narrow the query.
@@ -81,6 +103,8 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
 - Background is attempted first; the foreground is taken only when an action truly needs it, and the
   result then carries a `[foreground]` line. **When you see that line, tell the user** — you moved
   their focus. Users who never want that can turn on the plugin's "strict background" setting.
+  When it is on, do not bypass it through shell, AppleScript, `open`/activate or another tool.
+  If foreground input is needed, ask the user to switch the app or change the setting.
 - Clicking by coordinates no longer implies the foreground: the helper hit-tests that point inside the
   target app first and presses via accessibility when it lands on a real control. Web content, text
   fields, right/middle clicks and double clicks still need the foreground. So prefer `ref` when you

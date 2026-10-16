@@ -1,5 +1,11 @@
 # 更新日志
 
+## 0.7.2-jev.1 — 2026-10-15（开发实验 / development experiment）
+
+- 新增默认关闭的 macOS Jev 定位工具：元素选择、视觉 Box 和自动切换，支持只定位预览及逐步耗时。API 地址和密钥在 Computer Use 设置手动填写，配套宿主改动提供密码框。原生文本填写使用 setText；网页/视觉填写继续走原工具。不确定、取消或窗口变化时停止，已尝试的动作不自动重放。
+- Adds an opt-in macOS Jev targeting tool with element choice, visual Box, automatic fallback, preview and per-step timings. Enter the API URL and key in Computer Use settings; the companion host change masks the key. Fill uses native setText; web/visual text fields use ordinary tools. Uncertain input, cancellation and window changes stop the run without replaying attempted steps.
+- 验证 / validation: offline fault/geometry checks, real Electron settings persistence, real macOS input with fixture HTTP responses. No live Jev accuracy or speed result yet.
+
 ## 0.7.1 — 2026-10-14
 
 - 全局手势多了两种：`shiftPair`（左右两个 Shift 同时按下）和 `altPair`（左右两个 ⌥，Windows 上是左右两个 Alt），规则和 `modPair` 一样：第二个键按下、第一个还按着时触发一次；按着别的修饰键，或中途按过任何别的键，都不算。Forsion 桌面端的「引用刚才在用的窗口」快捷键改成双 ⇧ / 双 ⌥ 时用它们。一条订阅只认一个手势，换手势就断开重订；老 helper 对这两个名字回 `unknown_gesture`。

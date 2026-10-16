@@ -24,6 +24,19 @@ if (!process.env.CU_CONTRACT_PLATFORM) {
   plugin.activate({ registerPlugin: (m) => { meta = m; }, registerCommand() {}, log() {}, sdk: { pluginStore: { isPluginEnabledSync: () => true, getScopeSettings: () => stored } } });
   const listed = () => meta.toolProvider.tools().filter((t) => t.isEnabledFor({ capabilities: { hostExec: true } }));
   const visible = listed();
+  assert(!visible.some((t) => t.name === 'jev_ui'), 'Jev defaults off');
+  stored.jev_enabled = true;
+  const jev = listed().find((t) => t.name === 'jev_ui');
+  assert.equal(!!jev, platform === 'darwin', 'Jev experimental support is macOS-only');
+  if (jev) {
+    assert.equal(jev.capabilities.approval, 'command');
+    assert.equal(jev.capabilities.concurrencyKey, 'computer-use');
+    assert.match(meta.promptSection({ execMode: 'host' }), /Jev experimental acceleration is enabled/);
+  }
+  stored.jev_enabled = false;
+  assert(!listed().some((t) => t.name === 'jev_ui'), 'Jev disappears immediately when disabled');
+  assert(meta.settings.fields.some((f) => f.key === 'jev_api_key' && f.secret === true), 'API key must use a masked settings field');
+  assert(meta.settings.fields.some((f) => f.key === 'jev_api_url'), 'API endpoint must be configurable');
   // 「浏览器工具」关掉之后,这个进程里一次工具都还没调过也得立刻不列出来(以前要等调过一次才同步,而且同步了也会被冲掉)。
   assert(visible.some((t) => t.name === 'navigate_browser'), `${platform}: browser tools are listed by default`);
   stored.browser_use = false;

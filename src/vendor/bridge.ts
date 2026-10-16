@@ -2039,7 +2039,7 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 			const failure = execution.steps?.find((step) => step.error)?.error;
 			const summary = failure
 				? `Stopped UI action sequence${execution.stoppedAt !== undefined ? ` at action ${execution.stoppedAt + 1}` : ""}: ${failure.code}: ${failure.message}. Earlier actions may have completed.`
-				: `Executed ${executedActions.length} checked UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}.`;
+				: `Attempted ${executedActions.length} UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}.`;
 			return await buildToolResult("act_ui", `${summary} Returned state ${capture.capture.stateId}.`, capture, execution, signal, state.currentImageMode, baseView);
 		} catch (error) {
 			if (signal?.aborted) {

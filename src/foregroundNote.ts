@@ -17,12 +17,44 @@
  */
 
 interface ExecStep {
+  outcome?: string;
+  error?: { code?: string; message?: string };
+  performed?: { delivery?: string; grounding?: string; verification?: string };
   escalatedToForeground?: boolean;
   escalationReason?: string;
   delivery?: string;
   deliveryPolicy?: string;
   steps?: ExecStep[];
   rootDelta?: Array<{ change?: string }>;
+}
+
+/** Surface native facts without copying field contents or the whole internal trace. */
+export function executionSummary(details: unknown) {
+  const d = details as { config?: { headless?: boolean }; execution?: ExecStep } | undefined;
+  const exec = d?.execution;
+  if (!exec || (!exec.outcome && !exec.error)) return undefined;
+  const steps = (exec.steps?.length ? exec.steps : [exec]).map(s => ({
+    outcome: s.outcome ?? 'unknown',
+    delivery: s.delivery ?? s.performed?.delivery ?? 'unknown',
+    policy: s.deliveryPolicy ?? 'unknown',
+    grounding: s.performed?.grounding,
+    verification: s.performed?.verification,
+    error: s.error ? { code: s.error.code, message: s.error.message?.slice(0, 384) } : undefined,
+  }));
+  return { outcome: exec.outcome ?? 'unknown', strictBackground: d?.config?.headless ?? null, steps,
+    error: exec.error ? { code: exec.error.code, message: exec.error.message?.slice(0, 384) } : undefined };
+}
+
+export function executionNote(details: unknown): string {
+  const summary = executionSummary(details);
+  if (!summary) return '';
+  const meaning = summary.error || summary.outcome === 'didnt'
+    ? 'The executor reported a failure. Check the error and current state before deciding what to do.'
+    : summary.outcome === 'unknown'
+      ? 'The input was attempted; its effect is UNVERIFIED, not proven failed. A canvas can change without accessibility confirmation. Inspect the returned state before any retry, including a retry with another tool.'
+      : 'The native executor confirmed this action; still verify the requested task result.';
+  return `[execution] ${JSON.stringify(summary)}\n${meaning} Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\n`
+    + (summary.strictBackground ? '[policy] Strict background is ON. Do not bypass it with shell, AppleScript, open/activate, or another tool. If foreground input is needed, ask the user to switch the app or change this setting.\n' : '');
 }
 
 function tookForeground(step: ExecStep | undefined): boolean {

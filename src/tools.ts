@@ -21,7 +21,8 @@ import { getComputerUseConfig } from './vendor/config.ts';
 import { currentPlatformBackend } from './vendor/platform/index.ts';
 import { isSupportedPlatform } from './helperState.ts';
 import { autoInstallFailed, ensureHelperCurrent, guideMissingPermissions } from './onboarding.ts';
-import { expectNote, foregroundNote, goneHint, imageNote, noRootsHint, scrollNote, selfWindowNote } from './foregroundNote.ts';
+import { executionNote, expectNote, foregroundNote, goneHint, imageNote, noRootsHint, scrollNote, selfWindowNote } from './foregroundNote.ts';
+import { runJev, parseJevArgs } from './jevRun.ts';
 
 const execFileP = promisify(execFile);
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -86,15 +87,30 @@ interface ToolSpec {
   parameters: ReturnType<typeof obj>;
   exec?: PiExecute;
   // 适配层自有工具(非 vendor 委托),给定则走它,拿到 args/tcx/pctx 直接返回 string。
-  run?: (args: Record<string, any>, tcx: ToolContext, pctx: ExtensionContext) => Promise<string>;
+  run?: (args: Record<string, any>, tcx: ToolContext, pctx: ExtensionContext, store: PluginStore) => Promise<string>;
   sideEffect: 'read' | 'system' | 'browser';
   approval?: 'command';
   browserOnly?: boolean;
   darwinOnly?: boolean;
+  jevOnly?: boolean;
   timeoutMs: number;
 }
 
 const SPECS: ToolSpec[] = [
+  {
+    name: 'jev_ui', sideEffect: 'system', approval: 'command', darwinOnly: true, jevOnly: true, timeoutMs: 180_000,
+    description: 'Experimental Jev acceleration: execute 1–8 explicit click/fill steps within ONE native desktop root, locating each target on a fresh observation without a main-model round trip per step. Use after find_roots/observe_ui for a short, already-authorized sequence. mode=elements selects accessibility refs; vision uses screenshot boxes; auto tries elements then vision. fill uses atomic setText on native editable elements in Elements/Auto only; web/visual fields and keyboard typing use ordinary tools. preview=true locates ONE step without acting. Stops on missing/ambiguous targets, low confidence, cancellation or uncertain execution; inspect the returned state and resume only remaining steps. Do not batch irreversible/outward-facing actions without the user authorization required by the normal Computer Use rules. Does not scroll, drag, invent text, cross windows or verify the overall goal. Uses the SAME native executor and foreground policy as act_ui. Unknown means an attempted input with an unverified effect, not a failed click; inspect the returned state before repeating it with any tool. foregroundTaken=false does not mean Jev is background-only. Preview cannot test input delivery. Returns per-step timing and progress; use ordinary act_ui for unsupported actions. Never put API keys in arguments.',
+    parameters: obj({
+      root: S('Exact native desktop @r root from find_roots'),
+      steps: { type: 'array', minItems: 1, maxItems: 8, items: obj({ action: { type: 'string', enum: ['click', 'fill'] }, target: S('Unambiguous description of the control in its surrounding UI', 512), text: S('Exact replacement text, required only for fill', 10_000) }, ['action', 'target']) },
+      mode: { type: 'string', enum: ['auto', 'elements', 'vision'], description: 'Override the plugin default for comparison' },
+      preview: { type: 'boolean', description: 'Locate one target without input; default false' },
+    }, ['root', 'steps']),
+    run: async (args, tcx, pctx, store) => {
+      const result = await runJev(args, () => store.getScopeSettings(PLUGIN_ID, 'global'), () => store.isPluginEnabledSync(PLUGIN_ID), pctx, tcx.signal);
+      return JSON.stringify(result.report) + (result.last ? '\n' + render(result.last, tcx) : '');
+    },
+  },
   {
     name: 'find_roots', exec: executeFind as PiExecute, sideEffect: 'read', timeoutMs: 30_000,
     description: 'Find a bounded, ranked set of controllable UI roots with refs, geometry, and focus state. Find a target root before observe_ui when needed.',
@@ -131,7 +147,7 @@ const SPECS: ToolSpec[] = [
   },
   {
     name: 'act_ui', exec: executeAct as PiExecute, sideEffect: 'system', approval: 'command', timeoutMs: 120_000,
-    description: 'Perform one or more precisely targeted checked actions and return the successor state. Pass dependent click/type steps together and use expect for observable completion instead of a separate observe_ui call. expect reads accessibility text only, never the pixels: on a window whose outline has almost no text it will rarely match, so prefer leaving it out there and judging from the attached screenshot. Coordinates (x / y, drag path) are pixels in the latest attached screenshot, whose size the result states on an [image] line. After clicking an editable region in the same call, omit ref from typeText/keypress so input follows that focus; a later call can omit ref only while the target window is still frontmost, otherwise click again first. To fill a text field prefer a single setText action — it writes the value in the background without taking focus; only click the field first (which takes the foreground) if setText reports it did not take, as happens on some web/Electron inputs. When any action takes the foreground the result says so on a [foreground] line. For strict background-only runs, turn on the plugin\'s "strict background" setting.',
+    description: 'Perform one or more precisely targeted checked actions and return the successor state. Batch only actions whose targets are already present in this state (for example focus then type). After navigation or opening a popup, inspect the successor state before targeting a newly revealed control; do not guess its coordinates from the old screenshot. Use expect for observable completion. expect reads accessibility text only, never the pixels: on a window whose outline has almost no text it will rarely match, so prefer leaving it out there and judging from the attached screenshot. Coordinates (x / y, drag path) are pixels in the latest attached screenshot, whose size the result states on an [image] line. After clicking an editable region in the same call, omit ref from typeText/keypress so input follows that focus; a later call can omit ref only while the target window is still frontmost, otherwise click again first. To fill a text field prefer a single setText action — it writes the value in the background without taking focus; only click the field first (which takes the foreground) if setText reports it did not take, as happens on some web/Electron inputs. When any action takes the foreground the result says so on a [foreground] line. For strict background-only runs, turn on the plugin\'s "strict background" setting.',
     parameters: obj({
       stateId,
       expect: obj(conditionProps),
@@ -230,7 +246,7 @@ export function render(result: AgentToolResult, tcx: ToolContext, args?: Record<
     targets.set(stateId, { app: details.target.app, bundleId: details.target.bundleId });
     if (targets.size > 64) targets.delete(targets.keys().next().value!);
   }
-  return body + imageNote(details, attached) + expectNote(details) + scrollNote(args?.actions, details?.execution) + foregroundNote(details?.execution) + selfWindowNote(details) + noRootsHint(details);
+  return executionNote(details) + body + imageNote(details, attached) + expectNote(details) + scrollNote(args?.actions, details?.execution) + foregroundNote(details?.execution) + selfWindowNote(details) + noRootsHint(details);
 }
 
 /** ensure_app:后台启动目标 app(open -g)+ 轮询 find_roots 直到有可观察窗口,回其 roots。
@@ -288,7 +304,7 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
       // 「本来就在跑」按名字 / bundleId 认,名字对不上(本地化名、别名)就不升级,退回原来的「等满 12 秒」。
       if (wasRunning && !triedActivating && Date.now() - started > (strict ? 0 : 1_500)) {
         if (strict) {
-          return `${name} is running but has no window on the current desktop (it is on another desktop, or hidden). Bringing it back means taking the foreground, which the strict background setting forbids. Ask the user to switch to ${name} themselves, or to turn strict background off.`;
+          return `${name} is running but has no window on the current desktop (it is on another desktop, or hidden). Bringing it back means taking the foreground, which the strict background setting forbids. Do not bypass this setting through shell, AppleScript, open/activate, or another tool. Ask the user to switch to ${name} themselves, or to turn strict background off.`;
         }
         if (tcx.signal?.aborted) return 'ensure_app aborted.';
         triedActivating = true;
@@ -323,6 +339,7 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
     && store.isPluginEnabledSync(PLUGIN_ID)
     && isSupportedPlatform()
     && (!spec.darwinOnly || process.platform === 'darwin')
+    && (!spec.jevOnly || store.getScopeSettings(PLUGIN_ID, 'global').jev_enabled === true)
     // 直接读设置,不读 vendor 的配置对象:后者要等这个进程里调过一次工具才同步,在那之前「浏览器工具」关了也照样列出来。
     && (!spec.browserOnly || store.getScopeSettings(PLUGIN_ID, 'global').browser_use !== false);
 
@@ -333,6 +350,10 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
     capabilities: { sideEffect: spec.sideEffect, parallel: false, concurrencyKey: 'computer-use', defaultTimeoutMs: spec.timeoutMs, approval: spec.approval },
     definition: { type: 'function', function: { name: spec.name, description: spec.description, parameters: spec.parameters } },
     execute: async (args: Record<string, any>, tcx: ToolContext): Promise<string> => {
+      if (spec.jevOnly) {
+        if (!gate(spec)({ capabilities: { hostExec: tcx.execMode !== 'sandbox' } } as AppProfile)) return 'Jev is disabled or unavailable on this platform.';
+        parseJevArgs(args);
+      }
       syncSettings(store);
       // ⚠️这里**绝不能**再加「没装就 return 指导文本」的早退:vendor 的 ensureInstalled() 本来就会
       // 自动跑 setup-helper.mjs,早退等于把上游的自动安装堵死(用户报的「首次安装还要敲命令」就是它)。
@@ -354,7 +375,7 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
       }
       // 装/升级过就在结果里说一句 —— 用户装了什么、agent 替他做了什么,不该是暗箱。
       const prefix = installNote ? `${installNote}\n` : '';
-      if (spec.run) return prefix + await spec.run(args, tcx, pctx);
+      if (spec.run) return prefix + await spec.run(args, tcx, pctx, store);
       let result: AgentToolResult;
       try {
         result = await spec.exec!('', args, tcx.signal, undefined, pctx);
