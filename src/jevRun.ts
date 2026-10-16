@@ -316,7 +316,7 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
         item.elapsedMs = Math.round(performance.now() - stepStart);
         if (!met) {
           item.status = 'unverified';
-          throw new Error(`Step ${i + 1} was attempted but its expect did not appear within ${jevTiming.verifyWindowMs / 1000} s (Jev visual check ${noul.toFixed(2)}, minimum ${verifyThreshold}); ${params.steps.length - attempted} later step(s) were NOT attempted. Look at the returned screenshot: the input may have hit another item, the app may still be loading, or expect may describe the screen differently.`);
+          throw new Error(`Step ${i + 1} was attempted but its expect did not appear within ${jevTiming.verifyWindowMs / 1000} s (Jev visual check ${noul.toFixed(2)}, minimum ${verifyThreshold}); ${params.steps.length - attempted} later step(s) were NOT attempted. Look at the returned screenshot: the input may have hit another item, the app may still be loading, or expect may describe the screen differently.${step.action === 'click' ? ' If the item only shows as selected (highlighted), the app wants double_click to open or play it.' : ''}`);
         }
         confirmed++;
         Object.assign(item, { status: 'confirmed', confirmedBy: 'visual' });

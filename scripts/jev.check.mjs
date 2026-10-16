@@ -236,6 +236,8 @@ try {
     assert.equal(r.report.status, 'stopped'); assert.equal(r.report.confirmedSteps, 0); assert.equal(r.report.attemptedSteps, 1);
     assert.equal(r.report.steps[0].status, 'unverified'); assert.equal(r.report.steps[0].verify.met, false);
     assert(r.report.steps[0].verify.attempts > 1); assert.match(r.report.error, /expect did not appear/);
+    // 10-16 live: the model single-clicked a song row to play it, three times, then fell back to act_ui
+    assert.match(r.report.error, /only shows as selected.*double_click/);
     assert(r.last.content.some(c => c.type === 'image'), 'the latest screenshot goes back to the main model');
   });
   await test('a low knob never lowers the expect check below VERIFY_FLOOR', async () => {
