@@ -122,7 +122,14 @@ export async function launchFixture(app, statePath, { frame, page, play, sent, b
   if (behind) argv.push('--behind')
   argv.push(...args)
   await execFileP('open', ['-g', '-n', app, '--args', ...argv])
-  return waitForState(statePath, (s) => s.ready && s.windowNumber > 0 && alive(s.pid), { timeoutMs })
+  try {
+    return await waitForState(statePath, (s) => s.ready && s.windowNumber > 0 && alive(s.pid), { timeoutMs })
+  } catch (e) {
+    // open 已经起了进程、首帧没等到:按这次独有的 statePath 找到它结束掉(quitFixture 只认 *Fixture.app),别留孤儿
+    const { stdout } = await execFileP('pgrep', ['-f', statePath]).catch(() => ({ stdout: '' }))
+    for (const pid of stdout.split(/\s+/).filter(Boolean)) await quitFixture(Number(pid)).catch(() => {})
+    throw e
+  }
 }
 
 /** 按状态里的 pid 结束替身:先 SIGTERM,2 秒后还在就 SIGKILL。只认 *Fixture.app 里的进程,pid 被复用了也不会误杀。 */

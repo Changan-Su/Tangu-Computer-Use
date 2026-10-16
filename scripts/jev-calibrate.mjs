@@ -165,13 +165,16 @@ if (!froms.length) try {
     }
   }
 } finally {
-  for (const f of fixtures.values()) await quitFixture(f.state).catch(() => {});
-  await fs.writeFile(path.join(out, 'calibration.json'), JSON.stringify({ at: new Date().toISOString(), model: 'jev-1.14.0', rows, verifies }, null, 2));
-  if (helperStarted) {
-    const { stdout } = await exec('pgrep', ['-f', socket]).catch(() => ({ stdout: '' }));
-    for (const pid of stdout.split(/\s+/).filter(Boolean)) { try { process.kill(Number(pid)); } catch { /* gone */ } }
+  try {
+    for (const f of fixtures.values()) await quitFixture(f.state).catch(() => {});
+    await fs.writeFile(path.join(out, 'calibration.json'), JSON.stringify({ at: new Date().toISOString(), model: 'jev-1.14.0', rows, verifies }, null, 2));
+  } finally {
+    if (helperStarted) {
+      const { stdout } = await exec('pgrep', ['-f', socket]).catch(() => ({ stdout: '' }));
+      for (const pid of stdout.split(/\s+/).filter(Boolean)) { try { process.kill(Number(pid)); } catch { /* gone */ } }
+    }
+    await fs.rm(socket, { force: true });
   }
-  await fs.rm(socket, { force: true });
 }
 
 // ── 汇总:按插件现行规则,每档阈值下会点错 / 白停几次 ──
@@ -184,7 +187,8 @@ const lines = ['# Jev 阈值标定', '',
   `- 不在的目标:可见性 ${range(A, 'visibility')}(最高:${top(A, 'visibility')?.scene}「${top(A, 'visibility')?.target}」),框 ${range(A, 'confidence')}`,
   `- 确认:该过的 ${range(T, 'noul')},不该过的 ${range(F, 'noul')}(最高:${top(F, 'noul')?.after} 对「${top(F, 'noul')?.expect}」)`, '',
   '| 阈值 | 点对 | 点错(接受了但不是它) | 点了不存在的 | 白停(该点被拒) | 确认:误放行 | 确认:白等 | 旧规则(框也按阈值)白停 |', '|---|---|---|---|---|---|---|---|'];
-for (let t = 0.5; t <= 0.951; t += 0.05) {
+for (let step = 50; step <= 95; step += 5) {
+  const t = step / 100; // integer steps: 0.5 + 0.05×6 is 0.8000000000000003, which would reject an answer of exactly 0.8
   const ok = (r) => r.visibility >= t && r.confidence >= cu.BOX_FLOOR, vmin = Math.max(t, cu.VERIFY_FLOOR);
   const good = P.filter((r) => ok(r) && r.hit).length, wrong = P.filter((r) => ok(r) && !r.hit).length;
   const ghost = A.filter(ok).length, stall = P.filter((r) => !ok(r)).length, oldStall = P.filter((r) => !(r.visibility >= t && r.confidence >= t)).length;

@@ -5,12 +5,14 @@
 - Jev 改成「主模型布置、Jev 点和看」：`jev_ui` 一次收一串步骤（click / double_click / fill），每步写 `expect`；Jev 点完自己看新截图（最多等 4 秒加载），对上了才走下一步，对不上就停、把最新截图交回主模型。原生层确认不了的窗口（画布、CEF、网页）也能连着走完。报告按步给出耗时、可见性、框置信度和确认结果，坐标另给窗口比例 `pointFraction`。
 - 阈值按标定拆开：设置里的「Jev 最低置信度」只管可见性，缺省从 0.75 降到 0.55；每步结果确认至少按 0.8；框置信度只设 0.5 挡坏框；无障碍元素选择保持 0.75。之前存过的值照用。
 - 提示词和技能：目标被拒时先滚动 / 等加载 / 按画面上的样子重新描述，再考虑自己估坐标；画面上有近似项时 `expect` 写成「标题恰好是 Anna（不是 Anna Lee）」；发送、付款、删除这类不可逆的一步单独一次调用，先自己看截图。
-- `TANGU_JEV_EVIDENCE_DIR` 把每次 Jev 请求的图和回答留档（不含密钥）。
+- `TANGU_JEV_EVIDENCE_DIR` 把每次 Jev 请求的图和回答留档（不含密钥；截图和 `expect` 里有屏幕上的内容，只在测试时开）。
+- 确认请求本身失败（限流、网络、窗口变了）时，报告写明「这一步的输入已经发出、结果没确认」，不再沿用「这一步没执行」的说法，免得主模型重发一次。
 - 检查：自绘替身 App Melody（音乐播放器）/ Chatter（聊天，含 Saku、Sakura 樱花 等近似联系人），自己记录布局和状态当真值（`npm run check:vision-fixtures`）；`scripts/jev-calibrate.mjs` 只截图不发输入，对真 API 标定各档阈值的点错 / 白停。3 次、127 个目标、57 对前后截图：找对的目标可见性 0.59–0.97，不存在的 ≤ 0.08（画面别处长得像的约 0.8，阈值分不开）；写得松的 `expect` 会认近似名（0.99），写成「恰好是…不是…」降到 0.01。数字来自替身，不代表所有应用。
 - Jev now runs a whole on-screen sequence: the main model plans the steps (click, double_click, fill) with an `expect` each, and Jev clicks, checks the new screenshot itself (waiting up to 4 s for loads) and moves on, stopping with the latest screenshot when a step does not show its result. Windows that never confirm input natively (canvas, CEF, web) can be driven end to end. The report gives per-step timings, visibility, box confidence, the check result and `pointFraction`.
 - Thresholds follow calibration: *Jev minimum confidence* now only gates visibility and defaults to 0.55 (was 0.75); the per-step result check never goes below 0.8; box confidence only has a 0.5 floor; accessibility element choice keeps 0.75. Saved values are kept.
 - Prompt and skill: a rejected target is re-described (scroll, wait, describe what is drawn) before falling back to a coordinate estimate; with look-alikes on screen `expect` names what must not be there ("the header reads exactly Anna, not Anna Lee"); an irreversible step (send, pay, delete) goes in its own call after the main model checks the screenshot.
-- `TANGU_JEV_EVIDENCE_DIR` keeps every Jev request's images and answers (never the key).
+- `TANGU_JEV_EVIDENCE_DIR` keeps every Jev request's images and answers (never the key; screenshots and `expect` show what is on screen, so test runs only).
+- When the result check itself fails (rate limit, network, window change), the report says the step's input was sent and its result is unknown, instead of "no action was taken", so the main model does not send it again.
 - Checks: self-drawn Melody / Chatter fixture apps that record their own layout and state as ground truth, and `scripts/jev-calibrate.mjs` (screenshots only, no input) against the real API. Over 3 runs, 127 targets and 57 before/after pairs, right targets scored visibility 0.59–0.97 and absent ones ≤ 0.08, except a look-alike elsewhere on screen (~0.8); a loose `expect` accepted a longer look-alike name (0.99), an "exactly … not …" one scored 0.01. Fixture numbers, not a guarantee for every app.
 
 ## 0.7.2-jev.1 — 2026-10-15（开发实验 / development experiment）

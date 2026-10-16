@@ -246,6 +246,13 @@ try {
     assert.equal(r.report.steps[0].status, 'unverified'); assert.equal(r.report.attemptedSteps, 1, 'the next step is not attempted on an unconfirmed screen');
     assert.match(r.report.error, /visual check 0.70, minimum 0.8/);
   });
+  await test('a failed expect check after the input says the input was sent', async () => {
+    reset(); j.jevRuntime.act = unknownAct;
+    j.jevRuntime.request = async (_k, b) => { if (b.questions.done) throw new Error('Jev HTTP 429: rate limit reached. No action was taken for this step.'); return box(); };
+    const r = await run({ mode: 'vision', steps: [{ ...step, expect: 'Message sent' }, step] });
+    assert.equal(r.report.attemptedSteps, 1); assert.equal(r.report.steps[0].status, 'unverified');
+    assert.match(r.report.error, /input WAS sent.*429.*1 later step\(s\) were NOT attempted/); assert.doesNotMatch(r.report.error, /No action was taken/i);
+  });
   await test('expect is never checked with screenshots in Elements mode', async () => {
     reset(); j.jevRuntime.act = unknownAct;
     const r = await run({ mode: 'elements', steps: [{ ...step, expect: 'Next page' }] });

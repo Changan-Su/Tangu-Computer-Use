@@ -58,7 +58,8 @@ export function readJevConnection(settings: Record<string, unknown>): JevConnect
 }
 
 let evidenceSeq = 0;
-/** Test record (TANGU_JEV_EVIDENCE_DIR, set only by harnesses): every request with its images and the answer. Never the key. */
+/** Test record (TANGU_JEV_EVIDENCE_DIR, set only by harnesses): every request with its images and the answer. Never the key,
+ * but the screenshots and `expect` carry whatever is on screen, typed text included: point it at test runs only. */
 async function keepEvidence(body: Record<string, unknown>, result: unknown, ms: number): Promise<void> {
   const dir = process.env.TANGU_JEV_EVIDENCE_DIR;
   if (!dir) return;

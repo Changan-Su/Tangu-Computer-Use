@@ -177,12 +177,13 @@ Ask: **“Use Jev: open the daily recommendations and play the third song. Repor
   play the third daily song in Melody and send its hottest comment to *Sakura* in Chatter (look-alike
   contacts included), judged from the apps' own state files; each run keeps `recording.mp4` and a
   `过程.md` timeline with every Jev request.
-- `TANGU_JEV_EVIDENCE_DIR=<dir>` keeps every Jev request's images and answers (never the key).
+- `TANGU_JEV_EVIDENCE_DIR=<dir>` keeps every Jev request's images and answers (never the key; the screenshots and
+  `expect` show whatever is on screen, typed text included, so use it for test runs only).
 - `TANGU_ENGINE_ROOT=<built tangu-agent> npm run check:jev-feedback-live -- <output-dir>` checks GPT-6 Luna's
   reading of Jev reports in an isolated engine; archive it with `harness-runs/archive.mjs add`.
 - `npm run check:platform` — default-off and platform gates.
 
-标定脚本只截图、不发输入；真值来自替身 App 自己记录的布局，不靠人判。`TANGU_JEV_EVIDENCE_DIR` 会把每次请求 Jev 的图和回答留档（不含密钥）。
+标定脚本只截图、不发输入；真值来自替身 App 自己记录的布局，不靠人判。`TANGU_JEV_EVIDENCE_DIR` 会把每次请求 Jev 的图和回答留档（不含密钥；截图和 `expect` 里有屏幕上的一切、包括打进去的字，只在测试时开）。
 
 References: [Images](https://docs.typesafe.ai/images), [Box](https://docs.typesafe.ai/primitives/box),
 [Choice](https://docs.typesafe.ai/primitives/choice), [Noul](https://docs.typesafe.ai/primitives/noul).

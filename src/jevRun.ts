@@ -189,20 +189,30 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
         const verifyStart = performance.now();
         const before = prepared;
         let attempts = 0, noul = 0, tokens = 0;
-        for (;;) {
-          check();
-          const vd = await observe(true);
-          const shot = await screenshot(vd);
-          check();
-          const answer = await jevRuntime.request(connection, verifyRequest(shot, step, before), abort);
-          attempts++; tokens += Number(answer.usage?.input_tokens ?? 0);
-          noul = verifyAnswer(answer);
-          if (noul >= verifyThreshold) { carried = { details: vd, last: last! }; break; }
-          if (performance.now() - verifyStart + jevTiming.pollMs > jevTiming.verifyWindowMs) break;
-          await sleep(jevTiming.pollMs, abort);
+        const verified = (met: boolean) => ({ met, noul: +noul.toFixed(3), attempts, waitedMs: Math.round(performance.now() - verifyStart), inputTokens: tokens });
+        try {
+          for (;;) {
+            check();
+            const vd = await observe(true);
+            const shot = await screenshot(vd);
+            check();
+            const answer = await jevRuntime.request(connection, verifyRequest(shot, step, before), abort);
+            attempts++; tokens += Number(answer.usage?.input_tokens ?? 0);
+            noul = verifyAnswer(answer);
+            if (noul >= verifyThreshold) { carried = { details: vd, last: last! }; break; }
+            if (performance.now() - verifyStart + jevTiming.pollMs > jevTiming.verifyWindowMs) break;
+            await sleep(jevTiming.pollMs, abort);
+          }
+        } catch (e) {
+          if (abort.aborted) throw e;
+          // The input is already out: an error here (429, network, window change) must not read as "nothing happened",
+          // or the main model may send the step again (a second message, a second payment).
+          item.status = 'unverified'; item.verify = verified(false);
+          const why = (e instanceof Error ? e.message : String(e)).replace(/[;.]?\s*no action was taken for this step\.?/i, '.');
+          throw new Error(`Step ${i + 1}'s input WAS sent, but checking its expect failed: ${why} ${params.steps.length - attempted} later step(s) were NOT attempted. Look at the returned screenshot before continuing; do not repeat this step blindly.`);
         }
         const met = noul >= verifyThreshold;
-        item.verify = { met, noul: +noul.toFixed(3), attempts, waitedMs: Math.round(performance.now() - verifyStart), inputTokens: tokens };
+        item.verify = verified(met);
         item.elapsedMs = Math.round(performance.now() - stepStart);
         if (!met) {
           item.status = 'unverified';
