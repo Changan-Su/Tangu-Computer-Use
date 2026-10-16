@@ -236,6 +236,14 @@ try {
         if (v.popup) {
           assert.ok(s.popup?.visible && s.popup?.onScreen, `${label}: the results popup should be on screen: ${JSON.stringify(s.popup)}`)
           assert.equal(look.image.overlays, 1, `${label}: the helper should draw the results popup into the main window's screenshot (image.overlays)`)
+          // 叠窗那块识别出的字挂在根下当图片文字(不挂进被盖住的节点),中文读得出(OCR 语言)
+          const read = await ask('look', { windowId: s.windowNumber, maxDimension: 1600, readText: 'always', includeImage: false })
+          const pics = (read.outline?.children ?? []).filter((c) => c.pictureOnly).map((c) => c.title)
+          assert.ok(['粉丝群', '读书会'].every((w) => pics.some((t) => t.includes(w))), `${label}: the popup's text should hang at the outline root as picture-only text: ${pics.join(' | ')}`)
+          const deeper = []
+          const walkText = (n, depth) => { if (!n) return; if (depth > 0 && !n.pictureOnly && JSON.stringify(n.text ?? []).includes('粉丝群')) deeper.push(n.role); for (const c of n.children ?? []) walkText(c, depth + 1) }
+          walkText(read.outline, 0)
+          assert.equal(deeper.length, 0, `${label}: the popup's text must not attach to the nodes it covers (${deeper.join(', ')})`)
         } else {
           assert.equal(look.image.overlays, undefined, `${label}: nothing is drawn over the window`)
         }
