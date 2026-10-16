@@ -90,7 +90,7 @@ try {
   // A canvas has no semantic acknowledgement: native returns unknown even when the click landed.
   // The loop must stop after that attempt and hand the new screenshot back for verification.
   assert.equal(result.report.status, 'stopped', JSON.stringify(result.report));
-  assert.equal(result.report.executedSteps, 0);
+  assert.equal(result.report.confirmedSteps, 0);
   if (result.report.attemptedSteps || !liveSettings) {
   assert.equal(result.report.attemptedSteps, 1);
   assert.equal(result.report.foregroundTaken, true);
@@ -106,7 +106,7 @@ try {
   fieldsPid = (await until(async () => JSON.parse(await fs.readFile(fieldsState, 'utf8')))).pid;
   const fieldsRoot = (await cu.executeFind('', { bundleId: 'com.forsion.jev-fields' }, undefined, undefined, ctx)).content.filter(c => c.type === 'text').map(c => c.text).join('\n').match(/@r\d+/)?.[0]; assert(fieldsRoot);
   const semantic = await cu.runJev({ root: fieldsRoot, mode: 'elements', steps: [{ action: 'fill', target: 'Name', text: 'Jev fixture' }, step('Apply')] }, () => settings, () => true, ctx);
-  assert.equal(semantic.report.executedSteps, 1, JSON.stringify(semantic.report));
+  assert.equal(semantic.report.confirmedSteps, 1, JSON.stringify(semantic.report));
   assert.equal(semantic.report.attemptedSteps, 2);
   assert.equal(semantic.report.steps[1].status, 'uncertain');
   const fieldsFinal = JSON.parse(await fs.readFile(fieldsState, 'utf8')); assert.equal(fieldsFinal.value, 'Jev fixture'); assert.equal(fieldsFinal.clicks, 1);

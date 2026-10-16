@@ -1,5 +1,26 @@
 # 更新日志
 
+## 0.7.2-jev.2 — 2026-10-16（开发实验 / development experiment）
+
+- Jev 改成「主模型布置、Jev 点和看」：`jev_ui` 一次收一串步骤（click / double_click / fill），每步写 `expect`；Jev 点完自己看新截图（最多等 4 秒加载），对上了才走下一步，对不上就停、把最新截图交回主模型。原生层确认不了的窗口（画布、CEF、网页）也能连着走完。报告按步给出耗时、可见性、框置信度和确认结果，坐标另给窗口比例 `pointFraction`。
+- 阈值按标定拆开：设置里的「Jev 最低置信度」只管可见性，缺省从 0.75 降到 0.55；每步结果确认至少按 0.8；框置信度只设 0.5 挡坏框；无障碍元素选择保持 0.75。之前存过的值照用。
+- 提示词和技能：目标被拒时先滚动 / 等加载 / 按画面上的样子重新描述，再考虑自己估坐标；画面上有近似项时 `expect` 写成「标题恰好是 Anna（不是 Anna Lee）」；发送、付款、删除这类不可逆的一步单独一次调用，先自己看截图。
+- `TANGU_JEV_EVIDENCE_DIR` 把每次 Jev 请求的图和回答留档（不含密钥；截图和 `expect` 里有屏幕上的内容，只在测试时开）。
+- 用户点名的人、会话、文件按名字完全一致来找：比它长、包含它的名字（「Sakura 樱花」之于「Sakura」）是另一个人；没有完全一致的或不止一个就先问，确认时照屏幕原样写出收件人。认定「没有这个人」之前先让 Jev 预览定位一次。这条是通用规则，不开 Jev 也生效。
+- 你已经说清发给谁、发什么（原文，或「点赞最多的那条评论」这种在屏幕上只对得上一个的说法）时，不再在发送前问一遍：自己核对截图上的收件人和内容后直接发，发完照实报告发给了谁、发了什么。收件人或内容有歧义时仍然先问，并照屏幕原样列出候选。只管消息和帖子；付款、删除、安装、改设置、敏感个人信息照旧先确认。（10-16 用户定）
+- 自绘 / CEF / 网页界面上 `fill` 用不了：点进输入框作为这次调用的最后一步、不配 `expect`（光标太细看不出），再用 `act_ui` 打字。
+- 确认请求本身失败（限流、网络、窗口变了）时，报告写明「这一步的输入已经发出、结果没确认」，不再沿用「这一步没执行」的说法，免得主模型重发一次。
+- 检查：自绘替身 App Melody（音乐播放器）/ Chatter（聊天，含 Saku、Sakura 樱花 等近似联系人），自己记录布局和状态当真值（`npm run check:vision-fixtures`）；`scripts/jev-calibrate.mjs` 只截图不发输入，对真 API 标定各档阈值的点错 / 白停。3 次、127 个目标、57 对前后截图：找对的目标可见性 0.59–0.97，不存在的 ≤ 0.08（画面别处长得像的约 0.8，阈值分不开）；写得松的 `expect` 会认近似名（0.99），写成「恰好是…不是…」降到 0.01。数字来自替身，不代表所有应用。
+- Jev now runs a whole on-screen sequence: the main model plans the steps (click, double_click, fill) with an `expect` each, and Jev clicks, checks the new screenshot itself (waiting up to 4 s for loads) and moves on, stopping with the latest screenshot when a step does not show its result. Windows that never confirm input natively (canvas, CEF, web) can be driven end to end. The report gives per-step timings, visibility, box confidence, the check result and `pointFraction`.
+- Thresholds follow calibration: *Jev minimum confidence* now only gates visibility and defaults to 0.55 (was 0.75); the per-step result check never goes below 0.8; box confidence only has a 0.5 floor; accessibility element choice keeps 0.75. Saved values are kept.
+- Prompt and skill: a rejected target is re-described (scroll, wait, describe what is drawn) before falling back to a coordinate estimate; with look-alikes on screen `expect` names what must not be there ("the header reads exactly Anna, not Anna Lee"); an irreversible step (send, pay, delete) goes in its own call after the main model checks the screenshot.
+- `TANGU_JEV_EVIDENCE_DIR` keeps every Jev request's images and answers (never the key; screenshots and `expect` show what is on screen, so test runs only).
+- A person, chat or file the user names means the exact match on screen: a longer name that contains it ("Sakura 樱花" for "Sakura") is someone else; with no exact match, or more than one, ask first and name the recipient exactly as shown. Before saying a name is missing, ask Jev for it with `preview`. This is a general rule, with or without Jev.
+- When you already said what to send and to whom (word for word, or a description that fits exactly one thing on screen, such as "the most-liked comment"), the model no longer asks again before sending: it checks the recipient and the text on the screenshot, sends, and reports exactly whom it went to and what was sent. An ambiguous recipient or text is still asked about, with the candidates named as the screen shows them. Messages and posts only: payments, deletions, installs, settings and sensitive personal data are still confirmed first.
+- On canvas / CEF / web windows `fill` is refused: make the click into the field the last step of the call, without `expect` (a caret is too small to check), then type with `act_ui`.
+- When the result check itself fails (rate limit, network, window change), the report says the step's input was sent and its result is unknown, instead of "no action was taken", so the main model does not send it again.
+- Checks: self-drawn Melody / Chatter fixture apps that record their own layout and state as ground truth, and `scripts/jev-calibrate.mjs` (screenshots only, no input) against the real API. Over 3 runs, 127 targets and 57 before/after pairs, right targets scored visibility 0.59–0.97 and absent ones ≤ 0.08, except a look-alike elsewhere on screen (~0.8); a loose `expect` accepted a longer look-alike name (0.99), an "exactly … not …" one scored 0.01. Fixture numbers, not a guarantee for every app.
+
 ## 0.7.2-jev.1 — 2026-10-15（开发实验 / development experiment）
 
 - 新增默认关闭的 macOS Jev 定位工具：元素选择、视觉 Box 和自动切换，支持只定位预览及逐步耗时。API 地址和密钥在 Computer Use 设置手动填写，配套宿主改动提供密码框。原生文本填写使用 setText；网页/视觉填写继续走原工具。不确定、取消或窗口变化时停止，已尝试的动作不自动重放。

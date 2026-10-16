@@ -30,7 +30,7 @@ Object.assign(j.jevRuntime, {
 });
 const unknown = await j.runJev({root: '@r1', mode: 'elements', steps: [{action: 'click', target: 'Daily'}, {action: 'click', target: 'Third Song'}]}, () => ({jev_enabled: true}), () => true, {});
 assert.equal(unknown.report.attemptedSteps, 1, JSON.stringify(unknown.report));
-assert.equal(unknown.report.executedSteps, 0);
+assert.equal(unknown.report.confirmedSteps, 0);
 assert.equal(unknown.report.steps[0].status, 'uncertain');
 assert.equal(unknown.report.steps[0].execution.outcome, 'unknown');
 const report = JSON.stringify(unknown.report) + '\n' + j.render(unknown.last, {});
