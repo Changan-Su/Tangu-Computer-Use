@@ -8,6 +8,9 @@
 //   --page     直接开在某页(只给截图冒烟用):list | chat:<联系人> | search:<搜索词>
 //   --sent     开场就已经给打开的那个聊天发过这段话(绿色气泡、记进 sent);同样只给截图校准用
 //   --behind   窗口放到所有窗口后面:截图走 desktopIndependentWindow 不受遮挡,冒烟时不挡用户的屏幕
+//   --popup    搜索结果改在一扇单独的浮动窗口里(反馈 69651ff8 的微信):排在前面的是两个群(「Sakura 粉丝群」「Sakura 读书会」),
+//              回车打开第一条、↓ + 回车打开第二条,盲按都落在群上;
+//              Sakura 不在聊天列表里,只能搜出来。浮窗在 .floating 层、不抢键盘,配不上窗口号,和微信那扇一样
 //   --selftest 进程内直接调用输入处理函数把流程走一遍(不经系统、不发任何真实输入),结果打到 stdout、写进状态的 selftest;
 //              带 --hold 时跑完不退出、把窗口显示出来,给截图看交互之后的样子
 // 窗口用 fullSizeContentView:内容铺满整个窗口(红绿灯压在最左边那条图标栏上),所以 content == window 尺寸,
@@ -24,7 +27,7 @@ struct Options {
 	var frame: NSRect?
 	var page: String?
 	var sent: String?
-	var behind = false, selftest = false, hold = false
+	var behind = false, selftest = false, hold = false, popup = false
 }
 
 let options: Options = {
@@ -43,6 +46,7 @@ let options: Options = {
 		case "--behind": o.behind = true
 		case "--selftest": o.selftest = true
 		case "--hold": o.hold = true
+		case "--popup": o.popup = true
 		default: if i == 0 && !arg.hasPrefix("--") { o.statePath = arg }
 		}
 		i += 1
@@ -151,6 +155,7 @@ enum C {
 	static let text = rgb(25, 25, 25), text2 = rgb(150, 150, 150), text3 = rgb(178, 178, 178), icon = rgb(102, 102, 102)
 	static let green = rgb(7, 193, 96), bubbleOut = rgb(149, 236, 105), bubbleIn = rgb(255, 255, 255), red = rgb(250, 81, 81)
 	static let selection = rgb(178, 214, 255), link = rgb(87, 107, 149)
+	static let popupSel = rgb(198, 233, 210)
 }
 
 // MARK: - 内容(全部写死:没有随机、没有真实用户)
@@ -230,6 +235,15 @@ let initialContacts: [Contact] = [
 	]),
 ]
 let allNames = initialContacts.map(\.name)
+/// --popup 才有的两个群:名字里带 Sakura,搜 Sakura 时排在最前(那次微信 ↓ + 回车打开的就是一个群)
+let popupGroups = [
+	Contact(name: "Sakura 粉丝群", kind: .group, color: rgb(236, 120, 172), time: "星期三", unread: 0, messages: [
+		them("下周的签售会大家去吗?", from: "樱子", time: "星期三 20:11"), them("我去!", from: "Saku"),
+	]),
+	Contact(name: "Sakura 读书会", kind: .group, color: rgb(120, 170, 220), time: "星期一", unread: 0, messages: [
+		them("这个月读《雪国》", from: "佐藤樱", time: "星期一 21:30"),
+	]),
+]
 
 // MARK: - 画布
 
@@ -237,8 +251,8 @@ enum Field: String { case search, input }
 
 final class Canvas: NSView {
 	// 状态
-	var contacts: [String: Contact] = Dictionary(uniqueKeysWithValues: initialContacts.map { ($0.name, $0) })
-	var order: [String] = allNames
+	var contacts: [String: Contact] = Dictionary(uniqueKeysWithValues: (initialContacts + (options.popup ? popupGroups : [])).map { ($0.name, $0) })
+	var order: [String] = options.popup ? allNames.filter { $0 != "Sakura" } : allNames
 	var contact: String?
 	var focus: Field?
 	var search = "", input = "", selectAll = false
@@ -264,7 +278,7 @@ final class Canvas: NSView {
 	var searchRect: NSRect { NSRect(x: railW + 12, y: 32, width: listX1 - railW - 60, height: 28) }
 	var clearRect: NSRect { NSRect(x: searchRect.maxX - 24, y: searchRect.minY + 4, width: 20, height: 20) }
 	var plusRect: NSRect { NSRect(x: searchRect.maxX + 8, y: 32, width: 28, height: 28) }
-	var listTop: CGFloat { search.isEmpty ? 72 : 100 }
+	var listTop: CGFloat { search.isEmpty || options.popup ? 72 : 100 }
 	var listView: NSRect { NSRect(x: railW, y: listTop, width: listX1 - railW, height: H - listTop) }
 	func rowRect(_ i: Int) -> NSRect { NSRect(x: railW, y: listTop + CGFloat(i) * rowH - listOffset, width: listX1 - railW, height: rowH) }
 	func rowRect(_ name: String) -> NSRect? { listed.firstIndex(of: name).map { rowRect($0) } }
@@ -278,11 +292,83 @@ final class Canvas: NSView {
 	/// 搜索结果:名字完全一样的排最前,再是前缀匹配,再是包含;同一档里保持列表原来的顺序(不区分大小写)。
 	var listed: [String] {
 		let q = search.trimmingCharacters(in: .whitespaces).lowercased()
-		guard !q.isEmpty else { return order }
+		guard !q.isEmpty, !options.popup else { return order }
 		let hits = order.filter { $0.lowercased().contains(q) }
 		return hits.filter { $0.lowercased() == q } + hits.filter { $0.lowercased() != q && $0.lowercased().hasPrefix(q) } + hits.filter { !$0.lowercased().hasPrefix(q) }
 	}
 	var maxListOffset: CGFloat { max(0, CGFloat(listed.count) * rowH - listView.height) }
+
+	// MARK: 搜索结果浮窗(--popup)
+
+	var popupIndex = 0, popupShown = false
+	/// 群聊在前,再是联系人(名字完全一样的、前缀、包含);搜的是全部联系人,不只是聊天列表里的
+	var popupResults: [String] {
+		let q = search.trimmingCharacters(in: .whitespaces).lowercased()
+		guard options.popup, focus == .search, !q.isEmpty else { return [] }
+		let hits = (popupGroups.map(\.name) + allNames).filter { $0.lowercased().contains(q) }
+		let groups = hits.filter { contacts[$0]?.kind == .group }, people = hits.filter { contacts[$0]?.kind != .group }
+		return groups + people.filter { $0.lowercased() == q } + people.filter { $0.lowercased() != q && $0.lowercased().hasPrefix(q) } + people.filter { !$0.lowercased().hasPrefix(q) }
+	}
+	/// 浮窗在画布里的框(搜索框正下方)、分组标题和每一行;行的顺序 = popupResults
+	func popupLayout() -> (frame: NSRect, headers: [(String, NSRect)], rows: [(String, NSRect)]) {
+		let results = popupResults, x = railW + 6, top = searchRect.maxY + 6, w: CGFloat = 300
+		var y = top + 6, headers: [(String, NSRect)] = [], rows: [(String, NSRect)] = []
+		for (title, names) in [("群聊", results.filter { contacts[$0]?.kind == .group }), ("联系人", results.filter { contacts[$0]?.kind != .group })] where !names.isEmpty {
+			headers.append((title, NSRect(x: x, y: y, width: w, height: 26))); y += 26
+			for n in names { rows.append((n, NSRect(x: x, y: y, width: w, height: 52))); y += 52 }
+		}
+		return (NSRect(x: x, y: top, width: w, height: y + 6 - top), headers, rows)
+	}
+	lazy var resultsPanel: NSPanel = {
+		let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+		p.level = .floating
+		p.isFloatingPanel = true
+		p.hidesOnDeactivate = false
+		p.becomesKeyOnlyIfNeeded = true
+		p.isOpaque = false
+		p.backgroundColor = .clear
+		p.hasShadow = true
+		p.isReleasedWhenClosed = false
+		p.contentView = ResultsView(canvas: self)
+		return p
+	}()
+	/// 有结果就显示;主窗口不在屏幕上时(selftest、收起)只算逻辑上的 popupShown,不真的摆出来
+	func syncPopup() {
+		guard options.popup else { return }
+		let show = !popupResults.isEmpty
+		if show != popupShown { popupShown = show; log("popup", show ? "shown:\(popupResults.joined(separator: ","))" : "hidden") }
+		guard let window else { return }
+		if show && window.isVisible {
+			resultsPanel.setFrame(window.convertToScreen(convert(popupLayout().frame, to: nil)), display: false)
+			resultsPanel.contentView?.needsDisplay = true
+			if !resultsPanel.isVisible { resultsPanel.orderFrontRegardless() }
+		} else if resultsPanel.isVisible {
+			resultsPanel.orderOut(nil)
+		}
+	}
+	func drawPopup(in bounds: NSRect) {
+		let l = popupLayout(), o = l.frame.origin
+		func local(_ r: NSRect) -> NSRect { r.offsetBy(dx: -o.x, dy: -o.y) }
+		fill(bounds, .white, 8)
+		stroke(bounds.insetBy(dx: 0.5, dy: 0.5), C.line, 8)
+		for (title, r) in l.headers { label(title, local(r).insetBy(dx: 14, dy: 4), font(12), C.text2) }
+		for (i, (name, r)) in l.rows.enumerated() {
+			let row = local(r)
+			if i == popupIndex { fill(row.insetBy(dx: 4, dy: 1), C.popupSel, 6) }
+			let av = NSRect(x: row.minX + 12, y: row.minY + 8, width: 36, height: 36)
+			avatar(contacts[name], av)
+			drawName(name, NSRect(x: av.maxX + 10, y: row.minY + 16, width: row.maxX - av.maxX - 22, height: 20))
+		}
+	}
+	/// 浮窗里的点击(换算到画布坐标):点在哪一行就打开哪一个
+	func handlePopupClick(_ p: NSPoint, count: Int) {
+		clicks += 1
+		if count == 2 { doubleClicks += 1 }
+		let hit = popupLayout().rows.first { $0.1.contains(p) }?.0
+		log("click", "\(Int(p.x.rounded())),\(Int(p.y.rounded())) x\(count) → \(hit.map { "result \($0)" } ?? "popup")")
+		defer { changed() }
+		if let hit { open(hit) }
+	}
 
 	struct Placed { let msg: Msg, avatar: NSRect, bubble: NSRect, senderY: CGFloat?, timeY: CGFloat? }
 	/// 一个聊天里每条消息的位置(相对消息区内容顶端)。画、滚动上限都用它。
@@ -429,7 +515,7 @@ final class Canvas: NSView {
 		fill(plusRect, C.field, 6)
 		symbol("plus", NSPoint(x: plusRect.midX, y: plusRect.midY), 12, C.icon, .medium)
 		item("button", "+", plusRect)
-		if !search.isEmpty {
+		if !search.isEmpty && !options.popup {
 			item("text", "联系人", label("联系人", NSRect(x: railW + 16, y: 74, width: 120, height: 22), font(12), C.text2))
 		}
 		let names = listed
@@ -618,6 +704,8 @@ final class Canvas: NSView {
 		// 点在了哪儿:按点下去那一刻屏幕上的 layout 找(最小的那个包含这个点的条目)
 		log("click", "\(Int(p.x.rounded())),\(Int(p.y.rounded())) x\(count) → \(hitLabel(p))")
 		defer { changed() }
+		// 浮窗开着时点主窗口别处:和微信一样先收起搜索,这一下照常生效
+		if popupShown && !searchRect.contains(p) { setSearch("") }
 		if !search.isEmpty && clearRect.contains(p) { setSearch(""); setFocus(.search); return }
 		if searchRect.contains(p) { setFocus(.search); return }
 		// 命中按「当前列出来的」那份(搜索过滤 / 排序之后),不是全量联系人
@@ -660,7 +748,9 @@ final class Canvas: NSView {
 			case 36, 76: if f == .input && !flags.intersection([.shift, .option, .command, .control]).isEmpty { insert("\n") } else { submit() }
 			case 51: backspace()
 			case 117: if selectAll { backspace() }
-			case 53: setFocus(nil)
+			case 53: if options.popup { setSearch("") }; setFocus(nil)
+			case 125: if !popupResults.isEmpty { popupIndex = min(popupIndex + 1, popupResults.count - 1) }
+			case 126: if !popupResults.isEmpty { popupIndex = max(popupIndex - 1, 0) }
 			default: break
 			}
 			return
@@ -702,6 +792,7 @@ final class Canvas: NSView {
 		guard s != search else { return }
 		search = s
 		listOffset = 0
+		popupIndex = 0
 		log("text", "search=\(s)", coalesce: true, within: .max)
 	}
 	func insert(_ s: String) {
@@ -717,7 +808,10 @@ final class Canvas: NSView {
 		if selectAll { selectAll = false; setText(f, "") } else { setText(f, String(text(f).dropLast())) }
 	}
 	func submit() {
-		if focus == .search { if let first = listed.first { open(first) } } else if focus == .input { send() }
+		if focus == .search {
+			if options.popup { let r = popupResults; if r.indices.contains(popupIndex) { open(r[popupIndex]) } }
+			else if let first = listed.first { open(first) }
+		} else if focus == .input { send() }
 	}
 	func setFocus(_ f: Field?) {
 		selectAll = false
@@ -734,6 +828,7 @@ final class Canvas: NSView {
 			input = drafts[name] ?? ""
 			drafts[name] = nil
 			contacts[name]?.unread = 0
+			if !order.contains(name) { order.insert(name, at: 0) }
 			log("contact", name)
 		}
 		if !search.isEmpty { setSearch("") }
@@ -814,7 +909,7 @@ final class Canvas: NSView {
 		[(NSEvent.ModifierFlags.control, "Ctrl+"), (.option, "Option+"), (.shift, "Shift+"), (.command, "Cmd+")].filter { flags.contains($0.0) }.map(\.1).joined()
 	}
 
-	func changed() { needsDisplay = true; save() }
+	func changed() { needsDisplay = true; syncPopup(); save() }
 
 	func save() {
 		let ph = NSScreen.screens.first?.frame.height ?? 0
@@ -829,7 +924,7 @@ final class Canvas: NSView {
 			"drafts": drafts.filter { !$0.value.isEmpty },
 			"sent": sent,
 			"listed": listed,
-			"contacts": allNames,
+			"contacts": allNames + (options.popup ? popupGroups.map(\.name) : []),
 			"offsets": ["list": Double(listOffset), "messages": Double(msgOffset)],
 			"clicks": clicks, "doubleClicks": doubleClicks, "scrolls": scrolls, "keys": keys,
 			"window": ["x": Double(f.minX), "y": Double(ph - f.maxY), "w": Double(f.width), "h": Double(f.height)],
@@ -842,10 +937,30 @@ final class Canvas: NSView {
 			"fullSizeContent": true,
 			"events": events,
 		]
+		if options.popup {
+			let l = popupLayout()
+			state["popup"] = ["visible": popupShown, "onScreen": resultsPanel.isVisible, "windowNumber": resultsPanel.windowNumber, "results": popupResults,
+				"highlight": popupIndex, "frame": rectDict(l.frame),
+				"rows": l.rows.enumerated().map { ["kind": "result", "label": $0.element.0, "rect": rectDict($0.element.1), "selected": $0.offset == popupIndex] as [String: Any] }]
+		}
 		for (k, v) in extra { state[k] = v }
 		if let data = try? JSONSerialization.data(withJSONObject: state) {
 			try? data.write(to: URL(fileURLWithPath: options.statePath), options: .atomic)
 		}
+	}
+}
+
+/// 浮窗的内容:画和点都转给 Canvas(坐标换回画布的)
+final class ResultsView: NSView {
+	unowned let canvas: Canvas
+	init(canvas: Canvas) { self.canvas = canvas; super.init(frame: .zero) }
+	required init?(coder: NSCoder) { fatalError("unused") }
+	override var isFlipped: Bool { true }
+	override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+	override func draw(_ dirtyRect: NSRect) { canvas.drawPopup(in: bounds) }
+	override func mouseDown(with event: NSEvent) {
+		let p = convert(event.locationInWindow, from: nil), o = canvas.popupLayout().frame.origin
+		canvas.handlePopupClick(NSPoint(x: p.x + o.x, y: p.y + o.y), count: event.clickCount)
 	}
 }
 
@@ -873,6 +988,52 @@ final class SelfTest {
 	func typeKeys(_ s: String) { for ch in s { key(String(ch)) } }
 	func returnKey(_ flags: NSEvent.ModifierFlags = []) { key("\r", code: 36, flags: flags) }
 	func sentTexts() -> [String] { c.sent.compactMap { $0["text"] as? String } }
+	func popupClick(_ name: String) {
+		guard let r = c.popupLayout().rows.first(where: { $0.0 == name })?.1 else { failures.append("no popup row \(name)"); return }
+		c.handlePopupClick(NSPoint(x: r.midX, y: r.midY), count: 1)
+	}
+
+	/// --popup:结果在浮窗里、两个群排在前面、回车打开第一条、Sakura 不在聊天列表里
+	func runPopup() -> [String: Any] {
+		let chats = allNames.filter { $0 != "Sakura" }
+		expect(c.listed == chats, "popup mode: Sakura is not in the chat list")
+		click(c.searchRect)
+		typeKeys("Sakura")
+		expect(c.popupResults == ["Sakura 粉丝群", "Sakura 读书会", "Sakura", "Sakura 樱花"], "results, the groups first: \(c.popupResults)")
+		expect(c.listed == chats, "the chat list is not filtered while the popup is open")
+		expect(c.popupShown && c.popupIndex == 0, "popup shown, the first row highlighted")
+		key("", code: 125)
+		expect(c.popupIndex == 1, "down moves the highlight")
+		returnKey()
+		expect(c.contact == "Sakura 读书会" && c.search.isEmpty && !c.popupShown, "down + return opens the second result: the other group")
+		click(c.searchRect)
+		typeKeys("Sakura")
+		key("", code: 125); key("", code: 125); key("", code: 125); key("", code: 125)
+		expect(c.popupIndex == 3, "down stops at the last row")
+		key("", code: 126); key("", code: 126); key("", code: 126); key("", code: 126)
+		expect(c.popupIndex == 0, "up stops at the first row")
+		returnKey()
+		expect(c.contact == "Sakura 粉丝群" && c.search.isEmpty && !c.popupShown, "return opens the first result: the group")
+		expect(c.listed.prefix(2) == ["Sakura 粉丝群", "Sakura 读书会"], "an opened chat joins the list")
+		click(c.searchRect)
+		typeKeys("saku")
+		expect(c.popupResults == ["Sakura 粉丝群", "Sakura 读书会", "Saku", "Sakura 樱花", "Sakura"], "saku: \(c.popupResults)")
+		popupClick("Sakura")
+		expectHit("result Sakura")
+		expect(c.contact == "Sakura" && c.focus == .input && !c.popupShown, "a click on a result opens it")
+		key("周六见")
+		returnKey()
+		expect(sentTexts() == ["周六见"] && c.sent.first?["to"] as? String == "Sakura", "sent to Sakura")
+		click(c.searchRect)
+		typeKeys("sak")
+		key("\u{1B}", code: 53)
+		expect(c.search.isEmpty && !c.popupShown && c.focus == nil, "escape clears the search and closes the popup")
+		click(c.searchRect)
+		typeKeys("sak")
+		click(c.rowRect("妈妈"))
+		expect(c.search.isEmpty && !c.popupShown && c.contact == "妈妈", "a click outside closes the popup and still lands")
+		return ["pass": failures.isEmpty, "failures": failures]
+	}
 
 	func run() -> [String: Any] {
 		expect(c.contact == nil && c.focus == nil && c.listed == allNames && allNames.count == 14, "starts on the list")
@@ -999,11 +1160,11 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 		canvas.log("launch", (canvas.contact.map { "chat:\($0)" } ?? (canvas.search.isEmpty ? "list" : "search:\(canvas.search)")) + (options.sent != nil ? " sent" : ""))
 		signal(SIGUSR1, SIG_IGN)
 		hide = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
-		hide?.setEventHandler { [self] in window.orderOut(nil); canvas.log("window", "hidden"); canvas.save() }
+		hide?.setEventHandler { [self] in window.orderOut(nil); canvas.log("window", "hidden"); canvas.syncPopup(); canvas.save() }
 		hide?.resume()
 		if options.selftest {
 			if options.hold { show() }
-			let result = SelfTest(canvas).run()
+			let result = options.popup ? SelfTest(canvas).runPopup() : SelfTest(canvas).run()
 			canvas.extra["selftest"] = result
 			canvas.changed()
 			if let data = try? JSONSerialization.data(withJSONObject: result), let line = String(data: data, encoding: .utf8) { print(line) }
@@ -1016,9 +1177,10 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 	}
 	func show() {
 		if options.behind { window.orderBack(nil) } else { window.orderFrontRegardless() }
+		canvas.syncPopup()
 		canvas.save()
 	}
-	func windowDidMove(_ notification: Notification) { canvas.save() }
+	func windowDidMove(_ notification: Notification) { canvas.syncPopup(); canvas.save() }
 	func windowDidResize(_ notification: Notification) { canvas.save() }
 	func windowWillClose(_ notification: Notification) {
 		DispatchQueue.main.async { [self] in canvas.log("window", "closed"); canvas.save() }

@@ -99,6 +99,8 @@ private struct CapturedWindowImage {
 	let image: CGImage
 	let windowId: UInt32
 	let frame: CGRect
+	/// 一起画进这张图的、同一个 App 叠在上面的窗口(全局屏幕点),见 capture_overlays.swift
+	var overlays: [CGRect] = []
 }
 
 private struct LookRecord {
@@ -1637,7 +1639,9 @@ final class Bridge {
 				guard let jpeg = jpegData(image: outputImage, quality: 0.8) else {
 					throw BridgeFailure(message: "Failed to encode look image as JPEG", code: "encoding_failed")
 				}
-				imagePayload = ["jpegBase64": jpeg.base64EncodedString(), "width": outputImage.width, "height": outputImage.height]
+				var payload: [String: Any] = ["jpegBase64": jpeg.base64EncodedString(), "width": outputImage.width, "height": outputImage.height]
+				if !capture.overlays.isEmpty { payload["overlays"] = capture.overlays.count }
+				imagePayload = payload
 			} else {
 				imagePayload = nil
 			}
@@ -1657,7 +1661,7 @@ final class Bridge {
 			readTextExecuted = true
 			let textStart = Date()
 			let boxes = try recognizeText(in: capture.image, outputWidth: imageWidth, outputHeight: imageHeight)
-			attachOCR(boxes, to: outline)
+			attachOCR(boxes, to: outline, overlays: capture.overlays.map(transform))
 			readTextMs = elapsedMs(textStart)
 		}
 
@@ -1874,16 +1878,18 @@ final class Bridge {
 			let observations = (request.results as? [VNRecognizedTextObservation]) ?? []
 			recognized.value = observations.compactMap { observation in
 				guard let candidate = observation.topCandidates(1).first else { return nil }
+				let string = foldFullwidthASCII(candidate.string)
 				let box = observation.boundingBox
 				let x = box.origin.x * Double(outputWidth)
 				let y = (1.0 - box.origin.y - box.height) * Double(outputHeight)
 				let w = box.width * Double(outputWidth)
 				let h = box.height * Double(outputHeight)
-				return OCRBox(string: candidate.string, confidence: Double(candidate.confidence), rect: CGRect(x: x, y: y, width: w, height: h))
+				return OCRBox(string: string, confidence: Double(candidate.confidence), rect: CGRect(x: x, y: y, width: w, height: h))
 			}
 		}
 		request.recognitionLevel = .accurate
 		request.usesLanguageCorrection = false
+		request.recognitionLanguages = ocrRecognitionLanguages
 		try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
 		if semaphore.wait(timeout: .now() + .seconds(8)) == .timedOut {
 			throw BridgeFailure(message: "Text recognition timed out", code: "text_recognition_timeout")
@@ -1894,11 +1900,19 @@ final class Bridge {
 		return recognized.value
 	}
 
-	private func attachOCR(_ boxes: [OCRBox], to root: LookNode) {
+	/// overlays:叠在上面、一起画进截图的窗口(图上的框)。那里的字属于上面那扇窗口,不是它下面被盖住的控件:
+	/// 只当图上的字挂在根下(点它按坐标点,落到的是上面那扇),不挂进下面的节点、也不和下面的无障碍文字去重 ——
+	/// 否则被盖住的那一行会带上弹层里的名字,按 ref 点就点到了被盖住的那一行。
+	private func attachOCR(_ boxes: [OCRBox], to root: LookNode, overlays: [CGRect] = []) {
 		var pictureOnlyIndex = 0
 		for box in boxes {
-			if ocrBoxDuplicatesAXLabel(box, in: root) { continue }
 			let center = CGPoint(x: box.rect.midX, y: box.rect.midY)
+			if overlays.contains(where: { $0.contains(center) }) {
+				pictureOnlyIndex += 1
+				root.children.append(LookNode(element: nil, ref: "pic_\(pictureOnlyIndex)", role: "AXImage", subrole: "", identifier: "", title: box.string, description: "", value: "", actions: [], canPress: false, canFocus: false, canSetValue: false, canScroll: false, canIncrement: false, canDecrement: false, isTextInput: false, rect: box.rect, pictureOnly: true))
+				continue
+			}
+			if ocrBoxDuplicatesAXLabel(box, in: root) { continue }
 			if let node = deepestNode(containing: center, in: root) {
 				node.text.append(["string": box.string, "confidence": box.confidence, "rect": ["x": box.rect.origin.x, "y": box.rect.origin.y, "w": box.rect.width, "h": box.rect.height]])
 			} else {
@@ -3597,6 +3611,7 @@ final class Bridge {
 			let semaphore = DispatchSemaphore(value: 0)
 			let capturedImage = Box<CGImage?>(nil)
 			let capturedError = Box<Error?>(nil)
+			let capturedOverlays = Box<[CGRect]>([])
 
 			let task = Task {
 				defer { semaphore.signal() }
@@ -3609,14 +3624,31 @@ final class Bridge {
 						throw BridgeFailure(message: "Window \(windowId) is not available for capture", code: "window_not_found")
 					}
 
-					let filter = SCContentFilter(desktopIndependentWindow: window)
 					let config = SCStreamConfiguration()
 					// Avoid ScreenCaptureKit's default 1920x1080 canvas for window captures.
 					let scale = displayScaleFactor(for: window.frame)
 					config.width = max(1, Int((window.frame.width * scale).rounded()))
 					config.height = max(1, Int((window.frame.height * scale).rounded()))
 					config.showsCursor = false
-					config.ignoreShadowsSingleWindow = true
+					// 同一个 App 叠在上面的窗口(搜索下拉、浮层)一起画进来:按屏幕截、只留这几扇、裁成目标窗口那块,
+					// 图的大小和坐标与单窗口截图完全一样。窗口跨屏时没法这么裁,照旧只截它自己(overlays 为空)。
+					let candidate = { (w: SCWindow) in
+						OverlayCandidate(id: w.windowID, pid: w.owningApplication?.processID ?? -1, layer: w.windowLayer, frame: w.frame, onScreen: w.isOnScreen)
+					}
+					let overlayIds = overlayWindowIds(target: candidate(window), candidates: shareable.windows.map(candidate))
+					let overlays = shareable.windows.filter { overlayIds.contains($0.windowID) }
+					let filter: SCContentFilter
+					if !overlays.isEmpty, let display = shareable.displays.first(where: { $0.frame.contains(window.frame) }) {
+						filter = SCContentFilter(display: display, including: [window] + overlays)
+						config.sourceRect = window.frame.offsetBy(dx: -display.frame.minX, dy: -display.frame.minY)
+						config.ignoreShadowsDisplay = true
+						// 按屏幕截时系统缺省会把这几扇的子窗口也画进来(单窗口截图不会):只画挑出来的这几扇,OCR 分流才对得上
+						if #available(macOS 14.2, *) { config.includeChildWindows = false }
+						capturedOverlays.value = overlays.map(\.frame)
+					} else {
+						filter = SCContentFilter(desktopIndependentWindow: window)
+						config.ignoreShadowsSingleWindow = true
+					}
 
 					let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
 					capturedImage.value = image
@@ -3650,7 +3682,7 @@ final class Bridge {
 				throw BridgeFailure(message: "Capture failed", code: "capture_failed")
 			}
 
-			return CapturedWindowImage(image: image, windowId: windowId, frame: currentWindowBounds(windowId: windowId) ?? CGRect(x: 0, y: 0, width: image.width, height: image.height))
+			return CapturedWindowImage(image: image, windowId: windowId, frame: currentWindowBounds(windowId: windowId) ?? CGRect(x: 0, y: 0, width: image.width, height: image.height), overlays: capturedOverlays.value)
 		}
 		if let payload = try cgWindowScreenshotFallback(windowId: windowId) {
 			return payload

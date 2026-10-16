@@ -110,9 +110,12 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
   incomplete (`pictureOnly` nodes are coordinate-only).
 - **Act only on what you can see.** Never pick a search result, list row or chat that no screenshot or
   accessibility text shows you: arrow keys + Return into an unseen results list opens whatever comes
-  first, often a group chat. When `find_roots` marks the results window `no_screenshot`, find the person
-  or item in a list you can see (the contact list, the chat list), or open the candidate and read its
-  name in the window header before typing anything.
+  first, often a group chat. A popup of the app above the window (a search results list) shows in that
+  window's screenshot when its `[image]` note says so: read the names there and click the right row by
+  x / y, not by the ref of a row it covers. When no screenshot shows the results (`find_roots` marks the
+  results window `no_screenshot` and no `[image]` note mentions it), find the person or item in a list you
+  can see (the contact list, the chat list), or open the candidate and read its name in the window
+  header before typing anything.
 - `act_ui`'s `expect.text` / `expect.value` are matched in the accessibility tree. In a window drawn as
   pixels (no text in its outline) they can never be met and the call is refused: leave `expect` out and
   read the returned screenshot, or let `jev_ui` check an `expect` visually.

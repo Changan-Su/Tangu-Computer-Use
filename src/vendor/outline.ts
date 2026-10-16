@@ -57,6 +57,8 @@ export interface LookImage {
 	mimeType?: "image/jpeg" | "image/png";
 	width: number;
 	height: number;
+	/** windows of the same app drawn over the target in this image (a popup, a dropdown); macOS helper only */
+	overlays?: number;
 }
 
 export interface LookWindow {
@@ -235,6 +237,7 @@ export function parseLookResponse(raw: unknown): LookResponse {
 			mimeType: image.mimeType === "image/png" ? "image/png" : "image/jpeg",
 			width: Math.max(1, Math.trunc(toNumber(image.width, 1))),
 			height: Math.max(1, Math.trunc(toNumber(image.height, 1))),
+			...(toNumber(image.overlays) > 0 ? { overlays: Math.trunc(toNumber(image.overlays)) } : {}),
 		} : undefined,
 		outline: outline.root,
 		timings: isRecord(record.timings) ? Object.fromEntries(Object.entries(record.timings).map(([key, value]) => [key, toNumber(value)])) : {},
