@@ -371,5 +371,24 @@ try {
     r = await run({ steps: [scrollStep] });
     assert.deepEqual([r.report.steps[0].status, r.report.steps[0].stopReason, acts().length], ['failed', 'input_failed', 1]);
   });
+  await test('scroll (Codex review): stale frames, a resized window, a cancel and an executor problem all stop with the input accounted for', async () => {
+    reset(); scrolling(); const observe = j.jevRuntime.observe;
+    j.jevRuntime.observe = async (...a) => { const r = await observe(...a); if (observed === 2) r.details.capture.timestamp -= 6000; return r; };
+    let r = await run({ steps: [scrollStep] });
+    assert.deepEqual([r.report.steps[0].stopReason, r.report.steps[0].scrolls, r.report.steps[0].status, acts().length], ['stale', 1, 'unverified', 1]);
+    assert.match(r.report.error, /over 5 seconds old.*stopped before scrolling again/);
+    reset(); scrolling(); const observe2 = j.jevRuntime.observe;
+    j.jevRuntime.observe = async (...a) => { const r = await observe2(...a); if (observed >= 2) r.details.capture.width = 1200; return r; };
+    r = await run({ steps: [scrollStep] });
+    assert.deepEqual([r.report.steps[0].stopReason, r.report.steps[0].scrolls, acts().length], ['window_resized', 1, 1]);
+    reset(); scrolling(); const ac = new AbortController(); let looks = 0;
+    j.jevRuntime.request = async (_k, b) => { if (!b.questions.done) return tall(); if (++looks === 2) ac.abort(); return verdict(.1); };
+    r = await run({ steps: [scrollStep] }, ac.signal);
+    assert.equal(r.report.status, 'cancelled');
+    assert.deepEqual([r.report.steps[0].status, r.report.steps[0].scrolls, r.report.steps[0].stopReason, r.report.attemptedSteps], ['unverified', 1, 'cancelled', 1]);
+    reset(); scrolling({ act: async (stateId, actions) => { calls.push({ stateId, actions }); return { content: [], details: { status: 'target_closed', execution: { outcome: 'worked' } } }; } });
+    r = await run({ steps: [scrollStep] });
+    assert.equal(r.report.steps[0].status, 'failed'); assert.match(r.report.error, /was attempted, but the executor reported a problem/); assert.doesNotMatch(r.report.error, /not delivered/);
+  });
   console.log(`${passed} Jev checks passed (Jev responses are fixtures; no live API claim).`);
 } finally { Object.assign(j.jevRuntime, originals); await fs.rm(outfile, { force: true }); }
