@@ -23,8 +23,22 @@ export function jevMode(value: unknown): JevMode {
   return value === 'elements' || value === 'vision' ? value : 'auto';
 }
 
-/** One knob for every Jev gate: element choice, box confidence, target visibility and the expect check. */
-export const DEFAULT_THRESHOLD = 0.75;
+/**
+ * The settings knob: how sure Jev must be that the target is on screen. Calibrated 10-16 on the self-drawn
+ * Melody / Chatter apps (scripts/jev-calibrate.mjs, real API): right targets scored visibility 0.59–0.97 (the lowest
+ * is an icon-only back arrow, 0.59–0.66 across runs), absent ones ≤ 0.08. A look-alike elsewhere on screen can score
+ * ~0.8, which no threshold separates: the expect check is what catches it.
+ */
+export const DEFAULT_THRESHOLD = 0.55;
+/** Box confidence is how tightly the box fits, not whether it is the right element (10-16: right targets 0.57–0.97,
+ * a greyed-out button 0.91 at visibility 0.01). A floor against degenerate boxes only; not calibrated. */
+export const BOX_FLOOR = 0.5;
+/** A false "the step worked" lets the run carry on on the wrong screen (say, type into the wrong chat), so the
+ * expect check never drops below this whatever the knob says. 10-16: right 0.94–0.99, wrong ≤ 0.31, except a loose expect
+ * ("header is Sakura") on the chat with "Sakura 樱花" (0.97–0.99); worded "exactly Sakura (not …)" it scored 0.01. */
+export const VERIFY_FLOOR = 0.8;
+/** Element choice (Auto/Elements, accessibility candidates) has no calibration data yet: kept at its previous level. */
+export const CHOICE_FLOOR = 0.75;
 export function jevThreshold(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0.5, Math.min(0.99, value)) : DEFAULT_THRESHOLD;
 }
@@ -125,9 +139,9 @@ export function elementRequest(root: SerializedOutlineNode, step: JevStep): { bo
 const probability = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
 const meta = (r: any) => ({ model: r.model, inputTokens: Number.isFinite(r.usage?.input_tokens) ? r.usage.input_tokens : 0 });
 export function elementSelection(result: any, nodes: SerializedOutlineNode[], threshold: number): JevSelection {
-  const answer = result.answers?.target;
-  if (answer?.type !== 'choice' || !probability(answer.confidence) || answer.confidence < threshold ||
-      !nodes.some((n) => n.ref === answer.choice)) throw new Error(`Jev element rejected: confidence=${probability(answer?.confidence) ? answer.confidence : 'invalid'} (minimum ${threshold}); selection must match one current candidate. No action was taken for this step. Confidence is a model estimate, not proof of correctness.`);
+  const answer = result.answers?.target, min = Math.max(threshold, CHOICE_FLOOR);
+  if (answer?.type !== 'choice' || !probability(answer.confidence) || answer.confidence < min ||
+      !nodes.some((n) => n.ref === answer.choice)) throw new Error(`Jev element rejected: confidence=${probability(answer?.confidence) ? answer.confidence : 'invalid'} (minimum ${min}); selection must match one current candidate. No action was taken for this step. Confidence is a model estimate, not proof of correctness.`);
   return { ref: answer.choice, confidence: answer.confidence, ...meta(result) };
 }
 
@@ -161,7 +175,7 @@ export function visionRequest(image: PreparedImage, step: JevStep): Record<strin
 
 export function visionSelection(result: any, image: PreparedImage, threshold: number): JevSelection {
   const answer = result.answers?.target, visible = result.answers?.visible;
-  if (visible?.type !== 'noul' || !probability(visible.noul) || visible.noul < threshold || answer?.type !== 'box' || !probability(answer.confidence) || answer.confidence < threshold) throw new Error(`Jev target rejected: visibility=${probability(visible?.noul) ? visible.noul : 'invalid'}, box confidence=${probability(answer?.confidence) ? answer.confidence : 'invalid'} (minimum ${threshold} for both). No action was taken for this step. Confidence is a model estimate, not proof of correctness.`);
+  if (visible?.type !== 'noul' || !probability(visible.noul) || visible.noul < threshold || answer?.type !== 'box' || !probability(answer.confidence) || answer.confidence < BOX_FLOOR) throw new Error(`Jev target rejected: visibility=${probability(visible?.noul) ? visible.noul : 'invalid'} (minimum ${threshold}), box confidence=${probability(answer?.confidence) ? answer.confidence : 'invalid'} (minimum ${BOX_FLOOR}). No action was taken for this step. Confidence is a model estimate, not proof of correctness.`);
   const b = answer.box;
   if (!b || ![b.left, b.right, b.top, b.bottom].every(probability) || b.left >= b.right || b.top >= b.bottom) throw new Error('Jev returned an invalid target box.');
   const x = (((b.left + b.right) / 2) * image.width - image.left) * image.sourceWidth / image.contentWidth;

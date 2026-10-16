@@ -38,6 +38,8 @@ try {
     assert.deepEqual(r.nodes.map(n => n.ref), ['@e1']);
     for (const ref of ['@e99', 'not_found', 'ambiguous']) assert.throws(() => j.elementSelection(choice(ref), r.nodes, .85));
     assert.throws(() => j.elementSelection(choice('@e1', .4), r.nodes, .85), /confidence=0.4.*minimum 0.85/);
+    // Element choice has no calibration data: a low knob does not lower it below CHOICE_FLOOR.
+    assert.throws(() => j.elementSelection(choice('@e1', .7), r.nodes, .6), /confidence=0.7.*minimum 0.75/);
     assert.equal(j.elementSelection(choice(), r.nodes, .85).ref, '@e1');
     assert(!JSON.stringify(j.elementRequest(tree, { action: 'fill', target: 'Name', text: 'private-content' }).body).includes('private-content'));
     assert.throws(() => j.elementRequest(node('@e0', '', { children: Array.from({ length: 254 }, (_, i) => node(`@e${i+1}`, 'button')) }), step));
@@ -50,7 +52,12 @@ try {
   await test('box presence, finite geometry and original screenshot coordinates', () => {
     const point = j.visionSelection(box(), image, .85).point;
     assert(Math.abs(point.x - 400) < .001 && Math.abs(point.y - 300) < .001);
-    assert.throws(() => j.visionSelection(box(.1), image, .85), /visibility=0.1.*minimum 0.85 for both/);
+    assert.throws(() => j.visionSelection(box(.1), image, .85), /visibility=0.1 \(minimum 0.85\), box confidence=0.99 \(minimum 0.5\)/);
+    // 10-16 calibration: box confidence is box fit, not identity. Right targets came back as low as 0.57;
+    // a greyed-out button got 0.91 with visibility 0.01. Visibility decides; the box only has a sanity floor.
+    assert.equal(j.visionSelection(box(.9, .57), image, j.DEFAULT_THRESHOLD).confidence, .57);
+    assert.throws(() => j.visionSelection(box(.01, .91), image, j.DEFAULT_THRESHOLD), /visibility=0.01/);
+    assert.equal(j.DEFAULT_THRESHOLD, .55);
     // Visibility follows the configured threshold; it used to be floored at 0.9 whatever the setting said.
     assert.equal(j.visionSelection(box(.8, .8), image, .75).visibility, .8);
     assert.throws(() => j.visionSelection(box(.7, .99), image, .75), /visibility=0.7/);
@@ -230,6 +237,14 @@ try {
     assert.equal(r.report.steps[0].status, 'unverified'); assert.equal(r.report.steps[0].verify.met, false);
     assert(r.report.steps[0].verify.attempts > 1); assert.match(r.report.error, /expect did not appear/);
     assert(r.last.content.some(c => c.type === 'image'), 'the latest screenshot goes back to the main model');
+  });
+  await test('a low knob never lowers the expect check below VERIFY_FLOOR', async () => {
+    reset(); settings.jev_threshold = .6; j.jevRuntime.act = unknownAct;
+    j.jevRuntime.request = async (_k, b) => b.questions.done ? verdict(.7) : box(.9, .6);
+    const r = await run({ mode: 'vision', steps: [{ ...step, expect: 'Chat with Sakura is open' }, step] });
+    assert.equal(r.report.threshold, .6); assert.equal(r.report.verifyThreshold, j.VERIFY_FLOOR);
+    assert.equal(r.report.steps[0].status, 'unverified'); assert.equal(r.report.attemptedSteps, 1, 'the next step is not attempted on an unconfirmed screen');
+    assert.match(r.report.error, /visual check 0.70, minimum 0.8/);
   });
   await test('expect is never checked with screenshots in Elements mode', async () => {
     reset(); j.jevRuntime.act = unknownAct;

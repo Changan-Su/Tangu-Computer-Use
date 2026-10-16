@@ -2,7 +2,7 @@ import type { AgentToolResult, ExtensionContext } from './pi-compat.ts';
 import type { SerializedOutline, SerializedOutlineNode } from './vendor/outline.ts';
 import { executeObserve, executeAct, type UiAction } from './vendor/bridge.ts';
 import { executionSummary, foregroundNote } from './foregroundNote.ts';
-import { elementRequest, elementSelection, visionRequest, visionSelection, verifyRequest, verifyAnswer, prepareJevImage, readJevConnection, requestJev, jevMode, jevThreshold, JEV_MODEL, type JevMode, type JevStep, type JevSelection, type PreparedImage } from './jev.ts';
+import { elementRequest, elementSelection, visionRequest, visionSelection, verifyRequest, verifyAnswer, prepareJevImage, readJevConnection, requestJev, jevMode, jevThreshold, JEV_MODEL, type JevMode, type JevStep, type JevSelection, type PreparedImage, VERIFY_FLOOR } from './jev.ts';
 
 interface ObservationDetails {
   capture?: { stateId: string; width: number; height: number; timestamp: number };
@@ -70,7 +70,7 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
   const config = settings();
   if (!enabled() || config.jev_enabled !== true) throw new Error('Enable Jev experimental acceleration in Computer Use settings first.');
   const connection = jevRuntime.connection(config);
-  const mode = params.mode ?? jevMode(config.jev_mode), threshold = jevThreshold(config.jev_threshold);
+  const mode = params.mode ?? jevMode(config.jev_mode), threshold = jevThreshold(config.jev_threshold), verifyThreshold = Math.max(threshold, VERIFY_FLOOR);
   const limitMs = runLimitMs(params.steps.length);
   const controller = new AbortController();
   const timeout = AbortSignal.timeout(limitMs);
@@ -101,7 +101,7 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
     if (image?.type !== 'image') throw new Error('This observation has no screenshot for Jev.');
     return jevRuntime.prepare({ ...image, width: d.capture!.width, height: d.capture!.height }, abort);
   };
-  const report = (status: string, error?: string) => ({ status, model: JEV_MODEL, mode, threshold, preview: params.preview, executor: 'act_ui', confirmedSteps: confirmed, attemptedSteps: attempted, unattemptedSteps: params.steps.length - attempted, requestedSteps: params.steps.length, elapsedMs: Math.round(performance.now() - started), foregroundTaken: sentToForeground ? true : inputPending ? null : false, steps: trace, ...(error ? { error } : {}), note: NOTE });
+  const report = (status: string, error?: string) => ({ status, model: JEV_MODEL, mode, threshold, verifyThreshold, preview: params.preview, executor: 'act_ui', confirmedSteps: confirmed, attemptedSteps: attempted, unattemptedSteps: params.steps.length - attempted, requestedSteps: params.steps.length, elapsedMs: Math.round(performance.now() - started), foregroundTaken: sentToForeground ? true : inputPending ? null : false, steps: trace, ...(error ? { error } : {}), note: NOTE });
   try {
     for (let i = 0; i < params.steps.length; i++) {
       check();
@@ -197,16 +197,16 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
           const answer = await jevRuntime.request(connection, verifyRequest(shot, step, before), abort);
           attempts++; tokens += Number(answer.usage?.input_tokens ?? 0);
           noul = verifyAnswer(answer);
-          if (noul >= threshold) { carried = { details: vd, last: last! }; break; }
+          if (noul >= verifyThreshold) { carried = { details: vd, last: last! }; break; }
           if (performance.now() - verifyStart + jevTiming.pollMs > jevTiming.verifyWindowMs) break;
           await sleep(jevTiming.pollMs, abort);
         }
-        const met = noul >= threshold;
+        const met = noul >= verifyThreshold;
         item.verify = { met, noul: +noul.toFixed(3), attempts, waitedMs: Math.round(performance.now() - verifyStart), inputTokens: tokens };
         item.elapsedMs = Math.round(performance.now() - stepStart);
         if (!met) {
           item.status = 'unverified';
-          throw new Error(`Step ${i + 1} was attempted but its expect did not appear within ${jevTiming.verifyWindowMs / 1000} s (Jev visual check ${noul.toFixed(2)}, minimum ${threshold}); ${params.steps.length - attempted} later step(s) were NOT attempted. Look at the returned screenshot: the input may have hit another item, the app may still be loading, or expect may describe the screen differently.`);
+          throw new Error(`Step ${i + 1} was attempted but its expect did not appear within ${jevTiming.verifyWindowMs / 1000} s (Jev visual check ${noul.toFixed(2)}, minimum ${verifyThreshold}); ${params.steps.length - attempted} later step(s) were NOT attempted. Look at the returned screenshot: the input may have hit another item, the app may still be loading, or expect may describe the screen differently.`);
         }
         confirmed++;
         Object.assign(item, { status: 'confirmed', confirmedBy: 'visual' });

@@ -30,11 +30,17 @@ screenshots for up to 4 s (page loads included) before the next step — no main
 step. **Give every step that changes the screen an `expect`**: canvas, CEF and web windows never
 confirm input natively, so without `expect` the run stops after that step. Write `expect` as
 something visible: "the Daily picks song list is shown", "row 3 shows a playing icon and the bottom
-bar shows its title". Use `double_click` where the app needs it (playing a song row, opening a file).
+bar shows its title". When look-alikes are on screen, say which ones must not be there: "the chat
+header reads exactly Anna (not Anna Lee)". Use `double_click` where the app needs it (playing a song row, opening a file).
+End the call before an irreversible step (send, pay, delete, post): look at the returned screenshot
+yourself, then send that last step on its own.
 The report is the result: `confirmedSteps` (natively or visually confirmed), `attemptedSteps` (input
 sent), and per step the timings, `confidence`, `visibility` and `verify` (`met`, `noul`, attempts,
 wait). When it stops early it says why and returns the latest screenshot; continue only the
 unconfirmed steps — with `jev_ui` again, or `act_ui` for typing, scrolling, dragging and keys.
+A target rejected as not visible means Jev does not see it as described: scroll, wait for loading, or
+describe it by what is drawn (label, row number, position) and call `jev_ui` again before clicking
+your own coordinate estimate with `act_ui`.
 `point` is in Jev's own capture (`capture` size), which can differ from the screenshot you hold:
 compare `pointFraction` (fractions of the window) instead of judging the click from raw pixels.
 `mode:"elements"` sends only element labels and takes no screenshots (so `expect` is not checked and

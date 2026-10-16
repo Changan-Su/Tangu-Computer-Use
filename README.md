@@ -116,9 +116,18 @@ therefore still confirmed when the screen shows the expected result, and the run
 
 `jev_ui({root:"@r1", mode:"auto", steps:[{action:"click", target:"「每日推荐」 card", expect:"The daily songs list is open"}, {action:"double_click", target:"Song row 03", expect:"Row 03 shows the playing icon"}]})`
 
-- **Threshold:** one minimum (default 0.75, *Jev minimum confidence* in settings) applies to the
-  target's visibility, its Box confidence and the `expect` check. It is a model estimate, not a measured
-  reliability guarantee; `scripts/jev-calibrate.mjs` measures it against self-drawn apps (below).
+- **Thresholds:** *Jev minimum confidence* in settings (default 0.55) is how sure Jev must be that the
+  target is on screen (its visibility answer). The `expect` check never goes below 0.8, because a false
+  confirmation carries on on the wrong screen. Box confidence measures how tightly the box fits, not
+  whether it is the right element, so it only has a 0.5 floor against broken boxes; accessibility element
+  choice keeps 0.75. Calibration on the self-drawn apps (real API, 3 runs, 127 targets, 57 before/after
+  pairs; `scripts/jev-calibrate.mjs`): right targets scored visibility 0.59–0.97 (lowest: an icon-only back
+  arrow) and every accepted box landed on the right element; absent targets ≤ 0.08 — except a look-alike
+  elsewhere on the screen (the list header's cover when asked for the home page card), which scored ~0.8
+  and no threshold separates. Right results 0.94–0.99. A loose `expect` ("the header is Sakura") passed on
+  the chat with *Sakura 樱花* (0.99); worded "the header reads exactly Sakura (not Saku, not Sakura 樱花)"
+  it scored 0.01 while the right chat stayed at 0.97–0.98, so the skill tells the main model to word
+  `expect` that way. Fixture numbers, not a guarantee for every app.
 - **Step status:** `confirmed` (`confirmedBy: native | visual`), `uncertain` (no `expect` and the native
   outcome is unknown), `unverified` (`expect` not seen within 4 s), `failed`. The run stops at the first
   step that is not confirmed; later steps are reported as not attempted. Inputs are never retried.
@@ -132,8 +141,14 @@ therefore still confirmed when the screen shows the expected result, and the run
 - `preview:true` locates one step without input. Jev and `act_ui` share the executor and the foreground
   policy; `foregroundTaken:false` is not a Jev-only limitation.
 
-- **阈值：**一个下限（默认 0.75，设置里的「Jev 最低置信度」）同时管目标的可见性、Box 置信度和 `expect` 判断。
-  这是模型的估计，不是实测的可靠性保证；用下面的 `scripts/jev-calibrate.mjs` 在自绘替身 App 上标定。
+- **阈值：**设置里的「Jev 最低置信度」（默认 0.55）管 Jev 有多确定目标就在画面上。`expect` 的判断至少按 0.8 判，
+  因为确认错了会在错的画面上接着做。Box 置信度说的是框贴得紧不紧、不是找没找对，只设 0.5 的下限挡坏框；
+  无障碍元素选择保持 0.75。替身 App 上的标定（真 API，3 次、127 个目标、57 对前后截图，`scripts/jev-calibrate.mjs`）：
+  找对的目标可见性 0.59–0.97（最低的是纯图标的返回箭头），接受的框全部落在对的元素上；不存在的目标 ≤ 0.08 ——
+  只有画面别处的「长得像的」例外（在列表页要首页卡片，列表头的封面拿到 ~0.8），这种阈值分不开。结果对的 0.94–0.99。
+  写得松的 `expect`（「顶部标题是 Sakura」）在 *Sakura 樱花* 的聊天上也过了（0.99）；写成「标题恰好是 Sakura
+  （不是 Saku，也不是 Sakura 樱花）」就降到 0.01，对的那个仍是 0.97–0.98，所以技能里让主模型这样写。
+  这是替身上的数，不是对所有应用的保证。
 - **每步状态：**`confirmed`（`confirmedBy` 为 `native` 原生确认 / `visual` 画面确认）、`uncertain`（没写 `expect`
   且原生层不确定）、`unverified`（4 秒内没看到 `expect`）、`failed`。遇到第一个没确认的步骤就停，
   后面的步骤记为「未尝试」；输入从不自动重试。
@@ -156,6 +171,12 @@ Ask: **“Use Jev: open the daily recommendations and play the third song. Repor
   **no input**: asks the real API to locate present, near-duplicate and absent targets in the self-drawn
   Melody / Chatter apps and to judge before/after pairs, then tabulates wrong clicks and needless stops
   for each threshold from 0.50 to 0.95. Ground truth is the layout the apps record for themselves.
+  `--repeat 2` asks everything twice; `--from <run>/calibration.json` (repeatable) re-tabulates saved runs
+  under the current rules without calling the API.
+- Genesis live harness `--only cumusic,cusend --cu-plugin <bundle>` — the real engine, this plugin and Jev
+  play the third daily song in Melody and send its hottest comment to *Sakura* in Chatter (look-alike
+  contacts included), judged from the apps' own state files; each run keeps `recording.mp4` and a
+  `过程.md` timeline with every Jev request.
 - `TANGU_JEV_EVIDENCE_DIR=<dir>` keeps every Jev request's images and answers (never the key).
 - `TANGU_ENGINE_ROOT=<built tangu-agent> npm run check:jev-feedback-live -- <output-dir>` checks GPT-6 Luna's
   reading of Jev reports in an isolated engine; archive it with `harness-runs/archive.mjs add`.
