@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { deflateSync } from 'node:zlib';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outfile = path.join(root, 'tangu-plugins/computer-use/dist/jev-check.mjs');
-await build({ stdin: { contents: 'export * from "./src/jev.ts"; export * from "./src/jevRun.ts";', resolveDir: root }, outfile, bundle: true, platform: 'node', format: 'esm', target: 'node20', alias: { '@earendil-works/pi-coding-agent': path.join(root, 'src/pi-compat.ts') }, banner: { js: 'import {createRequire} from "node:module";const require=createRequire(import.meta.url);' } });
+await build({ stdin: { contents: 'export * from "./src/jev.ts"; export * from "./src/jevRun.ts"; export {render} from "./src/tools.ts";', resolveDir: root }, outfile, bundle: true, platform: 'node', format: 'esm', target: 'node20', alias: { '@earendil-works/pi-coding-agent': path.join(root, 'src/pi-compat.ts') }, banner: { js: 'import {createRequire} from "node:module";const require=createRequire(import.meta.url);' } });
 const j = await import(pathToFileURL(outfile));
 let passed = 0;
 const test = async (name, run) => { await run(); passed++; console.log(`PASS ${name}`); };
@@ -37,7 +37,7 @@ try {
     const r = j.elementRequest(tree, step);
     assert.deepEqual(r.nodes.map(n => n.ref), ['@e1']);
     for (const ref of ['@e99', 'not_found', 'ambiguous']) assert.throws(() => j.elementSelection(choice(ref), r.nodes, .85));
-    assert.throws(() => j.elementSelection(choice('@e1', .4), r.nodes, .85));
+    assert.throws(() => j.elementSelection(choice('@e1', .4), r.nodes, .85), /confidence=0.4.*minimum 0.85/);
     assert.equal(j.elementSelection(choice(), r.nodes, .85).ref, '@e1');
     assert(!JSON.stringify(j.elementRequest(tree, { action: 'fill', target: 'Name', text: 'private-content' }).body).includes('private-content'));
     assert.throws(() => j.elementRequest(node('@e0', '', { children: Array.from({ length: 254 }, (_, i) => node(`@e${i+1}`, 'button')) }), step));
@@ -50,7 +50,7 @@ try {
   await test('box presence, finite geometry and original screenshot coordinates', () => {
     const point = j.visionSelection(box(), image, .85).point;
     assert(Math.abs(point.x - 400) < .001 && Math.abs(point.y - 300) < .001);
-    assert.throws(() => j.visionSelection(box(.1), image, .85));
+    assert.throws(() => j.visionSelection(box(.1), image, .85), /visibility=0.1.*minimum 0.9/);
     assert.throws(() => j.visionSelection(box(.99, .3), image, .85));
     const malformed = box(); malformed.answers.target.box.left = NaN;
     assert.throws(() => j.visionSelection(malformed, image, .85));
@@ -113,10 +113,36 @@ try {
     j.jevRuntime.act = async () => ({ content: [], details: { capture: { stateId: 'after' }, execution: { outcome: 'worked', steps: [{ delivery: 'hid', deliveryPolicy: 'foreground' }] } } });
     let r = await run(); assert.equal(r.report.executedSteps, 1); assert.equal(r.report.foregroundTaken, true);
     reset(); j.jevRuntime.act = async () => ({ content: [], details: { status: 'target_closed', execution: { outcome: 'worked' } } });
-    assert.equal((await run()).report.executedSteps, 0);
+    r = await run({steps: [step, step]});
+    assert.equal(r.report.executedSteps, 1); assert.equal(r.report.attemptedSteps, 1);
+    assert.equal(r.report.status, 'stopped'); assert.equal(r.report.steps[0].status, 'executed');
     reset(); const ac = new AbortController();
     j.jevRuntime.act = async () => { ac.abort(); throw new Error('native input interrupted'); };
     r = await run({}, ac.signal); assert.equal(r.report.attemptedSteps, 1); assert.equal(r.last, undefined); assert.equal(r.report.foregroundTaken, null);
+  });
+  await test('feedback regression: unknown is not zero inputs or a Jev-only background restriction', async () => {
+    reset();
+    const after = { content: [{type: 'text', text: 'Attempted 1 UI action. Returned state after.'}], details: {
+      capture: {stateId: 'after'}, config: {headless: true, jev_api_key: 'must-not-leak'},
+      execution: {outcome: 'unknown', steps: [{outcome: 'unknown', delivery: 'pid', deliveryPolicy: 'ax_only', performed: {grounding: 'coordinates', verification: 'caller_required', text: 'private-value'}}]},
+    }};
+    j.jevRuntime.act = async () => after;
+    const r = await run({steps: [step, step], mode: 'vision'});
+    assert.equal(r.report.executedSteps, 0); assert.equal(r.report.attemptedSteps, 1); assert.equal(r.report.unattemptedSteps, 1);
+    assert.equal(r.report.executor, 'act_ui'); assert.equal(r.report.steps[0].execution.strictBackground, true);
+    assert.equal(r.report.steps[0].execution.steps[0].delivery, 'pid');
+    const text = JSON.stringify(r.report) + j.render(after, {});
+    for (const fact of ['not failed', 'SAME executor', 'Strict background is ON', 'Do not bypass', 'Preview only locates']) assert(text.includes(fact), fact);
+    assert(!text.includes('must-not-leak')); assert(!text.includes('private-value'));
+    assert.equal(calls.filter(c => c === 'box').length, 1);
+  });
+  await test('native failure is distinct from uncertainty and preserves the reason', async () => {
+    reset(); j.jevRuntime.act = async () => ({content: [], details: {capture: {stateId: 'after'}, execution: {outcome: 'didnt', error: {code: 'foreground_required', message: 'Input requires foreground'}}}});
+    const r = await run({steps: [step, step]});
+    assert.equal(r.report.steps[0].status, 'failed');
+    assert.equal(r.report.steps[0].execution.error.code, 'foreground_required');
+    assert.match(j.render(r.last, {}), /executor reported a failure/);
+    assert.equal(r.report.attemptedSteps, 1);
   });
   await test('old captures and changed windows fail closed', async () => {
     reset(); const observe = j.jevRuntime.observe;

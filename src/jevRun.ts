@@ -1,7 +1,7 @@
 import type { AgentToolResult, ExtensionContext } from './pi-compat.ts';
 import type { SerializedOutline, SerializedOutlineNode } from './vendor/outline.ts';
 import { executeObserve, executeAct, type UiAction } from './vendor/bridge.ts';
-import { foregroundNote } from './foregroundNote.ts';
+import { executionSummary, foregroundNote } from './foregroundNote.ts';
 import { elementRequest, elementSelection, visionRequest, visionSelection, prepareJevImage, readJevConnection, requestJev, jevMode, jevThreshold, JEV_MODEL, type JevMode, type JevStep, type JevSelection } from './jev.ts';
 
 interface ObservationDetails {
@@ -75,7 +75,7 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
     target = { pid: d.target.pid, windowId: d.target.windowId };
     return d;
   };
-  const report = (status: string, error?: string) => ({ status, model: JEV_MODEL, mode, preview: params.preview, executedSteps: executed, attemptedSteps: attempted, requestedSteps: params.steps.length, elapsedMs: Math.round(performance.now() - started), foregroundTaken: sentToForeground ? true : inputPending ? null : false, steps: trace, ...(error ? { error } : {}), note: 'Executed means the input was delivered, not that the overall goal was verified. Inspect the returned state, or observe again if none was returned. Never replay completed or uncertain steps automatically.' });
+  const report = (status: string, error?: string) => ({ status, model: JEV_MODEL, mode, preview: params.preview, executor: 'act_ui', executedSteps: executed, attemptedSteps: attempted, unattemptedSteps: params.steps.length - attempted, requestedSteps: params.steps.length, elapsedMs: Math.round(performance.now() - started), foregroundTaken: sentToForeground ? true : inputPending ? null : false, steps: trace, ...(error ? { error } : {}), note: 'attemptedSteps counts input attempts; executedSteps counts native-confirmed actions. Zero executedSteps does NOT mean no input was sent. Unknown is unverified, not failed. Inspect the returned state (or observe the same root if none) before deciding whether the attempted step succeeded; continue only the remaining steps if it did. Do not repeat an uncertain step with either jev_ui or act_ui without checking. Jev uses the SAME executor and foreground policy as act_ui; foregroundTaken describes this run, not Jev capability. Preview only locates and cannot test input delivery.' });
   try {
     for (let i = 0; i < params.steps.length; i++) {
       check();
@@ -134,17 +134,20 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
       item.actionMs = Math.round(performance.now() - actStart);
       const after = last.details as ObservationDetails;
       sentToForeground ||= Boolean(foregroundNote(after.execution));
+      item.execution = executionSummary(after);
       item.outcome = after.execution?.outcome ?? 'unknown';
       item.elapsedMs = Math.round(performance.now() - stepStart);
+      const confirmed = after.execution?.outcome === 'worked' && !after.execution.error;
+      if (confirmed) executed++;
       if (!after.capture?.stateId || (after.status && after.status !== 'ok') || after.execution?.error || after.execution?.outcome !== 'worked') {
-        item.status = 'uncertain';
-        throw new Error('The action was attempted but could not be confirmed. Inspect the returned state before continuing; do not replay this step blindly.');
+        item.status = confirmed ? 'executed' : after.execution?.error || after.execution?.outcome === 'didnt' ? 'failed' : 'uncertain';
+        throw new Error(`Step ${i + 1} was attempted; ${params.steps.length - attempted} later step(s) were NOT attempted. Check its execution facts and returned state before continuing. Do not replay this step blindly or assume switching to act_ui changes the input policy.`);
       }
-      executed++;
       item.status = 'executed';
     }
     return { report: report('executed'), last };
   } catch (e) {
+    if (inputPending && trace.length) trace.at(-1)!.status = 'uncertain';
     if (trace.length && trace.at(-1)!.status === 'locating') trace.at(-1)!.status = 'stopped';
     return { report: report(abort.aborted ? 'cancelled' : 'stopped', abort.aborted ? 'Jev run cancelled or reached its 60-second limit. Inspect any attempted step before resuming.' : e instanceof Error ? e.message : 'Jev run failed.'), last };
   } finally { active.delete(controller); }

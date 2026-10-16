@@ -99,7 +99,7 @@ const meta = (r: any) => ({ model: r.model, inputTokens: Number.isFinite(r.usage
 export function elementSelection(result: any, nodes: SerializedOutlineNode[], threshold: number): JevSelection {
   const answer = result.answers?.target;
   if (answer?.type !== 'choice' || !probability(answer.confidence) || answer.confidence < threshold ||
-      !nodes.some((n) => n.ref === answer.choice)) throw new Error('Jev could not identify one element confidently; no action was taken for this step.');
+      !nodes.some((n) => n.ref === answer.choice)) throw new Error(`Jev element rejected: confidence=${probability(answer?.confidence) ? answer.confidence : 'invalid'} (minimum ${threshold}); selection must match one current candidate. No action was taken for this step. Confidence is a model estimate, not proof of correctness.`);
   return { ref: answer.choice, confidence: answer.confidence, ...meta(result) };
 }
 
@@ -133,7 +133,7 @@ export function visionRequest(image: PreparedImage, step: JevStep): Record<strin
 
 export function visionSelection(result: any, image: PreparedImage, threshold: number): JevSelection {
   const answer = result.answers?.target, visible = result.answers?.visible;
-  if (visible?.type !== 'noul' || !probability(visible.noul) || visible.noul < Math.max(0.9, threshold) || answer?.type !== 'box' || !probability(answer.confidence) || answer.confidence < threshold) throw new Error('Jev did not find a visible, unique target confidently; no action was taken for this step.');
+  if (visible?.type !== 'noul' || !probability(visible.noul) || visible.noul < Math.max(0.9, threshold) || answer?.type !== 'box' || !probability(answer.confidence) || answer.confidence < threshold) throw new Error(`Jev target rejected: visibility=${probability(visible?.noul) ? visible.noul : 'invalid'} (minimum ${Math.max(0.9, threshold)}), box confidence=${probability(answer?.confidence) ? answer.confidence : 'invalid'} (minimum ${threshold}). No action was taken for this step. Confidence is a model estimate, not proof of correctness.`);
   const b = answer.box;
   if (!b || ![b.left, b.right, b.top, b.bottom].every(probability) || b.left >= b.right || b.top >= b.bottom) throw new Error('Jev returned an invalid target box.');
   const x = (((b.left + b.right) / 2) * image.width - image.left) * image.sourceWidth / image.contentWidth;

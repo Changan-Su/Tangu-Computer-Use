@@ -87,7 +87,7 @@ Dependabot 提 PR 升级内置版本。首个版本需按上面两条命令人�
 
 ### Jev experimental acceleration / Jev 实验加速（macOS）
 
-In **Settings → Plugins → Computer Use**, enable **Jev experimental acceleration**.
+In **Settings → Computer Use**, enable **Jev experimental acceleration**.
 Enter the **Jev API URL** and **Jev API key** there. The default URL is
 `https://api.typesafe.ai/v1/systemone`; a service origin or `/v1` base is also accepted.
 Use a TypeSafe-compatible endpoint, not an OpenAI chat endpoint. The key is stored in the local
@@ -95,7 +95,7 @@ plugin configuration; hosts supporting `secret:true` mask the input. Never paste
 Target-window element labels are sent to the configured service; Auto and Visual Box modes can also send screenshots. Fill text is not sent
 in its target-selection request, but can appear in a later screenshot.
 
-在**设置 → 插件 → 电脑操作**开启「Jev 实验加速」，手动填写「Jev API 地址」和「Jev API 密钥」。
+在**设置 → 电脑操作**开启「Jev 实验加速」，手动填写「Jev API 地址」和「Jev API 密钥」。
 默认地址为 `https://api.typesafe.ai/v1/systemone`，也接受服务根地址或 `/v1` 基址；需兼容
 TypeSafe 协议，不是 OpenAI 聊天接口。密钥随本机插件配置保存，支持 `secret:true` 的宿主以密码框显示。
 不要把密钥填进聊天。开启后元素标签会发送到配置的服务；自动和视觉模式还可能发送截图。待填文字不加入本次定位请求，
@@ -118,7 +118,10 @@ The visual presence answer must also reach at least 0.9.
 
 Runs stop on ambiguity, stale observations, window changes, failed/uncertain input, cancellation,
 or after 60 seconds. Normal action approval and strict-background settings remain in effect.
-Reports distinguish attempted from executed steps, with observation/decision/action timings.
+Reports distinguish attempted input from native-confirmed actions, with observation/decision/action timings.
+Jev and `act_ui` share the same executor and foreground policy; `foregroundTaken:false` is not a Jev-only limitation.
+Unknown means unverified, not failed. Inspect the successor state before repeating an attempt with any tool.
+Rejected visual targets report their visibility/confidence scores and thresholds.
 Executed input does **not** prove the goal succeeded: inspect the returned state before resuming.
 Inputs are never retried automatically. Scroll, drag, keyboard-only commands and cross-window
 transitions use existing tools. Image tiling and autonomous task planning are not implemented.
@@ -128,7 +131,9 @@ Auto falls back to vision for clicks requiring physical input. Fill supports nat
 web/visual fill stays on the ordinary tools, so this experiment never sends unverified select-all/typing sequences.
 
 一次最多八步点击或填写；每步重新观察。歧义、旧画面、窗口变化、操作失败或结果不确定时停止。
-保留原审批和严格后台设置，可随对话取消，最多运行六十秒。报告区分「尝试过」与「已执行」，并列出
+保留原审批和严格后台设置，可随对话取消，最多运行六十秒。Jev 与 `act_ui` 共用执行器和前后台策略；
+`foregroundTaken:false` 不代表 Jev 只能后台操作。`unknown` 是未确认，不是失败，换工具重试前也必须检查新状态。
+视觉定位被拒时会报告可见性、置信度和对应阈值。报告区分「尝试过」与「原生已确认」，并列出
 观察、决策、操作耗时。已执行不代表整个任务完成，继续前应检查返回状态。滚动、拖动、纯快捷键和跨窗口
 操作走原工具。本版没有实现画面切块或自主任务规划。
 自绘窗口的视觉点击即使送达，也可能无法由原生层确认；此时停止后续步骤，返回新截图让主模型检查。
@@ -137,7 +142,13 @@ web/visual fill stays on the ordinary tools, so this experiment never sends unve
 `npm run check:jev` covers API/geometry/cancellation/progress using fixture responses;
 `PI_COMPUTER_USE_HELPER_APP_PATH=<authorized.app> PI_CU_SOCKET_PATH=<isolated.sock> node scripts/jev-native.check.mjs`
 checks real macOS capture/input against a local HTTP oracle, without replacing the installed helper.
-`npm run check:platform` checks default-off and platform gates. Neither measures Jev accuracy or speed.
+`npm run check:platform` checks default-off and platform gates. These checks do not measure Jev accuracy or speed.
+For the native check, `JEV_SETTINGS_FILE=<Forsion config.json>` opts into the configured real API;
+only synthetic fixture screenshots/labels are sent, and rejected low-confidence targets are recorded without clicking.
+`TANGU_ENGINE_ROOT=<built tangu-agent> npm run check:jev-feedback-live -- <output-dir>` uses GPT-6 Luna
+in an isolated engine to check report interpretation (not autonomous execution); archive the output with `harness-runs/archive.mjs add`.
+原生台架可通过 `JEV_SETTINGS_FILE` 读取本机配置，调用真实 API；只上传测试窗口，低置信度会停止且记录原因。
+真模型台架检查结果理解，不代表自主操作端到端通过。
 References: [Images](https://docs.typesafe.ai/images), [Box](https://docs.typesafe.ai/primitives/box),
 [Choice](https://docs.typesafe.ai/primitives/choice), [Noul](https://docs.typesafe.ai/primitives/noul).
 

@@ -16,6 +16,10 @@ import { resolveMacosHelperAppPath } from '../src/vendor/platform/macos/helper-p
 import { runtimeProtocolVersion } from './helper-protocol.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'), exec = promisify(execFile);
 const socket = process.env.PI_CU_SOCKET_PATH;
+// Optional real API; credentials stay in memory and only the synthetic fixture is uploaded.
+const liveSettings = process.env.JEV_SETTINGS_FILE
+  ? JSON.parse(await fs.readFile(process.env.JEV_SETTINGS_FILE, 'utf8')).plugins.global['computer-use'] : undefined;
+process.env.PI_COMPUTER_USE_HEADLESS = 'false';
 assert(process.platform === 'darwin' && socket, 'Use macOS and an isolated PI_CU_SOCKET_PATH');
 const ask = cmd => new Promise((resolve, reject) => {
   const s = net.connect(socket); let text = '';
@@ -72,22 +76,28 @@ try {
   await cu.ensureComputerUseSetup(ctx);
   const found = await cu.executeFind('', { bundleId }, undefined, undefined, ctx);
   const ref = found.content.filter(c => c.type === 'text').map(c => c.text).join('\n').match(/@r\d+/)?.[0]; assert(ref);
-  const prepare = cu.jevRuntime.prepare; cu.jevRuntime.prepare = async (...a) => prepared = await prepare(...a);
+  const prepare = cu.jevRuntime.prepare; cu.jevRuntime.prepare = async (...a) => { prepared = await prepare(...a); if (process.env.JEV_EVIDENCE_DIR) await fs.writeFile(path.join(process.env.JEV_EVIDENCE_DIR, `fixture-${requests}.jpg`), Buffer.from(prepared.data, 'base64')); return prepared; };
   await new Promise(r => server.listen(0, '127.0.0.1', r));
-  const settings = { jev_enabled: true, jev_api_key: 'fixture-key', jev_api_url: `http://127.0.0.1:${server.address().port}/v1` };
+  const settings = liveSettings ?? { jev_enabled: true, jev_api_key: 'fixture-key', jev_api_url: `http://127.0.0.1:${server.address().port}/v1` };
+  if (liveSettings) { const request = cu.jevRuntime.request; cu.jevRuntime.request = async (...args) => { requests++; const result = await request(...args); console.log(JSON.stringify({ request: requests, answers: result.answers })); return result; }; }
   const run = (steps, preview = false) => cu.runJev({ root: ref, steps, preview, mode: 'vision' }, () => settings, () => true, ctx);
   const step = target => ({ action: 'click', target });
-  const preview = await run([step('Page 3 button')], true);
-  assert.equal(preview.report.status, 'preview', JSON.stringify(preview.report)); assert.equal((await state()).clicks, 0);
-  const result = await run([step('Page 3 button'), step('Page 2 button')]);
+  const orange = liveSettings ? 'The orange square button in the left sidebar' : 'Page 3 button';
+  const preview = await run([step(orange)], true);
+  if (!liveSettings) assert.equal(preview.report.status, 'preview', JSON.stringify(preview.report));
+  assert.equal(preview.report.attemptedSteps, 0); assert.equal((await state()).clicks, 0);
+  const result = await run([step(orange), step('Page 2 button')]);
   // A canvas has no semantic acknowledgement: native returns unknown even when the click landed.
   // The loop must stop after that attempt and hand the new screenshot back for verification.
   assert.equal(result.report.status, 'stopped', JSON.stringify(result.report));
-  assert.equal(result.report.attemptedSteps, 1); assert.equal(result.report.executedSteps, 0);
+  assert.equal(result.report.executedSteps, 0);
+  if (result.report.attemptedSteps || !liveSettings) {
+  assert.equal(result.report.attemptedSteps, 1);
   assert.equal(result.report.foregroundTaken, true);
   assert(result.last.content.some(c => c.type === 'image'));
-  const final = await until(async () => { const s = await state(); return s.page === 2 && s.clicks === 1 && s; });
-  assert.equal(requests, 2);
+  await until(async () => { const s = await state(); return s.page === 2 && s.clicks === 1 && s; });
+  } else { assert.equal((await state()).clicks, 0); assert.match(result.report.error, /target rejected/); }
+  const final = await state(); assert.equal(requests, 2);
   const fieldsApp = path.join(dir, 'JevFields.app'), fieldsExe = path.join(fieldsApp, 'Contents/MacOS/JevFields'), fieldsState = path.join(dir, 'fields.json');
   await fs.mkdir(path.dirname(fieldsExe), { recursive: true });
   await fs.writeFile(path.join(fieldsApp, 'Contents/Info.plist'), `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.forsion.jev-fields</string><key>CFBundleName</key><string>JevFields</string><key>CFBundleExecutable</key><string>JevFields</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`);
@@ -101,7 +111,20 @@ try {
   assert.equal(semantic.report.steps[1].status, 'uncertain');
   const fieldsFinal = JSON.parse(await fs.readFile(fieldsState, 'utf8')); assert.equal(fieldsFinal.value, 'Jev fixture'); assert.equal(fieldsFinal.clicks, 1);
   assert.equal(requests, 4);
-  console.log(JSON.stringify({ status: 'PASS', evidence: 'Real native capture/input with fixture Jev HTTP answers; no live Jev accuracy/speed claim', protocol: d.protocolVersion, page: final.page, clicks: final.clicks, report: result.report, semantic: semantic.report, fields: { clicks: fieldsFinal.clicks, value: fieldsFinal.value } }, null, 2));
+  // Put a different fixture in front so this checks real background behavior, not only metadata.
+  await exec('open', [fieldsApp]);
+  await until(async () => (await ask('getFrontmost'))?.pid === fieldsPid);
+  process.env.PI_COMPUTER_USE_HEADLESS = 'true';
+  const strict = await run([step(liveSettings ? 'The green square button in the left sidebar' : 'Page 2 button')]);
+  if (strict.report.attemptedSteps || !liveSettings) {
+  assert.equal(strict.report.attemptedSteps, 1, JSON.stringify(strict.report));
+  assert.equal(strict.report.foregroundTaken, false);
+  assert.equal(strict.report.steps[0].execution.strictBackground, true);
+  assert.equal(strict.report.steps[0].execution.steps[0].policy, 'ax_only');
+  assert.equal(strict.report.steps[0].execution.steps[0].delivery, 'pid');
+  } else assert.match(strict.report.error, /target rejected/);
+  assert.equal((await ask('getFrontmost')).pid, fieldsPid, 'strict action must preserve the other fixture foreground');
+  console.log(JSON.stringify({ status: 'PASS', evidence: liveSettings ? 'Live Jev API + real native capture/input; synthetic fixture only' : 'Real native capture/input with fixture Jev HTTP answers; no live Jev accuracy/speed claim', protocol: d.protocolVersion, page: final.page, clicks: final.clicks, preview: preview.report, report: result.report, semantic: semantic.report, strict: strict.report, fields: { clicks: fieldsFinal.clicks, value: fieldsFinal.value } }, null, 2));
 } finally {
   await cu?.shutdownComputerUseSession().catch(() => {});
   server.closeAllConnections(); server.close();
