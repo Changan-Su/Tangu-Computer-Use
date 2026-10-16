@@ -7,12 +7,14 @@
   - `type`：先点目标（给了的话）再在光标处输入，自绘 / CEF / 网页输入框也能用；不清空输入框。
   - `key`：发 `["return"]`、`["cmd","a"]` 这类键，给了目标就先点它。
   - 这三种都要截图，只在自动 / 视觉模式下可用；含滚动的调用，时限里滚动那步按两步算。`act_ui` 只剩拖动，或同一个目标换着说法被拒两次之后。
+- 单击之后 `expect` 没出现时,报错里提示「只是被选中(高亮)的话,这个 App 要双击」:live 里主模型想播歌常先单击,没有这句时它连单击三次后退回了 `act_ui`。
 - 提示词、工具说明和技能：目标按画面上画的写（标签、行标题文字），不写像素坐标；列表里的行瞄标题文字，不瞄整行；`expect` 只写肯定会出现的东西，没看到过的标题别猜；目标被拒或 `expect` 没出现，是换个说法再交给 Jev，不是「Jev 做不了」；消息框里按回车就是发送，照不可撤回的步骤处理。
 - `jev_ui` now scrolls, types and presses keys (feedback d995c9a2: Jev could only locate, so scrolling and typing went back to `act_ui`):
   - `scroll` names the list and an `until`; Jev scrolls half the list at a time (at least a tenth of the window), at most 8 times, checking every frame, and stops once `until` is fully in view or the frame stops changing. The report adds `scrolls` and `stopReason`.
   - `type` clicks its target (when given), then types at the caret; it works on canvas, CEF and web fields and never clears the field.
   - `key` sends keys such as `["return"]` or `["cmd","a"]`, after clicking its target when given.
   - All three need screenshots (Auto or Vision mode); a scroll step counts twice in the run limit. `act_ui` is left for dragging, or for a target Jev rejected twice under different descriptions.
+- When a click's `expect` never appears, the error now adds that an item which only shows as selected wants `double_click` (live: the model single-clicked a song row three times, then fell back to `act_ui`).
 - Prompt, tool description and skill: describe targets by what is drawn (labels, a row's title text), never pixel coordinates; target a list row by its title text, not the whole row; write `expect` only from what will certainly appear and never guess an unseen title; a rejected target or a missing `expect` means re-describe and call Jev again, not "Jev cannot do it"; return in a message field sends.
 
 ## 0.7.2-jev.2 — 2026-10-16（开发实验 / development experiment）
