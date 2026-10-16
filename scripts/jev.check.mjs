@@ -267,5 +267,109 @@ try {
     assert.equal(Object.keys(v.assets).length, 1); assert.equal(v.questions.done.type, 'noul'); assert.equal(v.state.expected, 'Done');
     assert.throws(() => j.verifyAnswer({ answers: { done: { type: 'noul', noul: 2 } } }));
   });
+
+  // ── 10-16 feedback d995c9a2: Jev also scrolls, types and presses keys, so act_ui is left with drag only ──
+  const tall = (visible = .99) => ({ model: j.JEV_MODEL, answers: { visible: { type: 'noul', noul: visible }, target: { type: 'box', confidence: .9, box: { left: .1, right: .3, top: .1, bottom: .9 } } }, usage: { input_tokens: 80 } });
+  /** Frames differ per observation unless `same` says otherwise; until shows up at look number `seenAt` (0 = before any scroll). */
+  const scrolling = ({ seenAt = Infinity, same = () => false, act } = {}) => {
+    let looks = 0, data = '';
+    j.jevRuntime.observe = async (_r, visual) => {
+      observed++; calls.push(`observe:${visual}`);
+      if (!same(observed)) data = `frame${observed}`;
+      return { content: [{ type: 'image', data }], details: { capture: { stateId: `s${observed}`, timestamp: Date.now(), width: 1000, height: 500 }, target: { pid: 1, windowId: 2 }, outline: { root: tree } } };
+    };
+    j.jevRuntime.request = async (_k, b) => {
+      if (b.questions.done) { calls.push(`look:${Object.keys(b.assets).length}`); return verdict(looks++ >= seenAt ? .95 : .1); }
+      calls.push('box'); return tall();
+    };
+    j.jevRuntime.act = act ?? unknownAct;
+  };
+  const scrollStep = { action: 'scroll', target: 'the song list', until: 'the row titled Blue Skies' };
+  const acts = () => calls.filter(c => typeof c === 'object');
+  await test('new step types: arguments are validated before anything runs', () => {
+    for (const bad of [
+      { action: 'scroll', target: 'list' }, { ...scrollStep, expect: 'Blue Skies is shown' }, { ...scrollStep, direction: 'left' },
+      { action: 'scroll', until: 'x' }, { action: 'type' }, { action: 'type', text: '' }, { action: 'type', target: '', text: 'hi' },
+      { action: 'key' }, { action: 'key', keys: [] }, { action: 'key', keys: Array(17).fill('a') }, { action: 'key', keys: [1] }, { action: 'click' },
+    ]) assert.throws(() => j.parseJevArgs({ root: '@r1', steps: [bad] }), undefined, JSON.stringify(bad));
+    assert.throws(() => j.parseJevArgs({ root: '@r1', steps: [{ action: 'key', keys: ['return'] }], preview: true }), /Preview locates a target/);
+    assert.deepEqual(j.parseJevArgs({ root: '@r1', steps: [scrollStep] }).steps[0], { ...scrollStep, direction: 'down' });
+    assert.deepEqual(j.parseJevArgs({ root: '@r1', steps: [{ action: 'type', text: 'hi', keys: ['x'], until: 'y' }] }).steps[0], { action: 'type', text: 'hi' });
+    assert.deepEqual(j.parseJevArgs({ root: '@r1', steps: [{ action: 'key', target: ' Search ', keys: ['cmd', 'a'], text: 'dropped' }] }).steps[0], { action: 'key', target: 'Search', keys: ['cmd', 'a'] });
+  });
+  await test('type and key: one input call, a click first only when there is a target', async () => {
+    assert.deepEqual(j.selectedActions({ action: 'type', target: 'Message', text: 'hi' }, { point: { x: 5, y: 6 } }, []), [{ action: 'click', x: 5, y: 6 }, { action: 'typeText', text: 'hi' }]);
+    assert.deepEqual(j.selectedActions({ action: 'key', keys: ['return'] }, undefined, []), [{ action: 'keypress', keys: ['return'] }]);
+    reset(); j.jevRuntime.act = unknownAct;
+    j.jevRuntime.request = async (_k, b) => { calls.push(b.questions.done ? `verify:${Object.keys(b.assets).length}` : 'box'); return b.questions.done ? verdict(.97) : box(); };
+    const r = await run({ steps: [{ action: 'type', target: 'the message field', text: 'private-text', expect: 'the field shows the message' }, { action: 'key', keys: ['return'], expect: 'the message is in the chat' }] });
+    assert.equal(r.report.status, 'completed', JSON.stringify(r.report)); assert.equal(r.report.confirmedSteps, 2);
+    assert.deepEqual(acts().map(c => c.actions.map(a => a.action)), [['click', 'typeText'], ['keypress']]);
+    assert.deepEqual(acts()[1].actions[0].keys, ['return']);
+    // The key step has no target: no locate request, the check still compares with a before frame.
+    assert.deepEqual(calls.filter(c => typeof c === 'string'), ['observe:true', 'box', 'observe:true', 'verify:2', 'observe:true', 'verify:2']);
+    assert(!JSON.stringify(r.report).includes('private-text'), 'typed text never lands in the report');
+    const v = j.verifyRequest(image, { action: 'type', target: 'Message', text: 'private-text', expect: 'sent' });
+    assert(!JSON.stringify(v.state).includes('private-text')); assert.equal(j.verifyRequest(image, { action: 'key', keys: ['cmd', 'a'], expect: 'x' }).state.action, 'key ["cmd","a"]');
+  });
+  await test('scroll, type and key need screenshots: Elements mode refuses them before any request', async () => {
+    for (const s of [scrollStep, { action: 'type', text: 'hi' }, { action: 'key', keys: ['return'] }]) {
+      reset(); const r = await run({ mode: 'elements', steps: [s] });
+      assert.equal(r.report.attemptedSteps, 0); assert.match(r.report.error, new RegExp(`${s.action} needs Auto or Vision`)); assert.deepEqual(calls, []);
+    }
+  });
+  await test('scroll: until already in view sends no input', async () => {
+    reset(); scrolling({ seenAt: 0 });
+    const r = await run({ steps: [scrollStep] });
+    assert.equal(r.report.status, 'completed', JSON.stringify(r.report)); assert.equal(acts().length, 0);
+    assert.deepEqual([r.report.steps[0].scrolls, r.report.steps[0].stopReason, r.report.confirmedSteps, r.report.attemptedSteps], [0, 'until_seen', 1, 1]);
+    const locate = j.visionRequest(image, scrollStep);
+    assert.match(locate.questions.target.instructions, /scrollable list or panel/);
+  });
+  await test('scroll: half the list per wheel at its centre, until checked on every new frame', async () => {
+    reset(); scrolling({ seenAt: 3 });
+    let r = await run({ steps: [scrollStep, { action: 'double_click', target: 'the row titled Blue Skies', expect: 'Blue Skies is playing' }] });
+    assert.equal(r.report.status, 'completed', JSON.stringify(r.report));
+    const wheel = acts().filter(c => c.actions[0].action === 'scroll').map(c => c.actions[0]);
+    assert.equal(wheel.length, 3); assert.deepEqual(wheel[0], { action: 'scroll', x: 200, y: 250, scrollY: 200 });
+    assert.deepEqual(acts().slice(0, 3).map(c => c.stateId), ['s1', 's2', 's3'], 'each scroll goes out on the latest observation');
+    assert.deepEqual([r.report.steps[0].scrolls, r.report.steps[0].stopReason, r.report.steps[0].confirmedBy], [3, 'until_seen', 'visual']);
+    assert.deepEqual(calls.filter(c => typeof c === 'string' && c.startsWith('look')), ['look:1', 'look:2', 'look:2', 'look:2', 'look:2'], 'later frames are compared with the one before (the fifth is the double_click expect)');
+    assert.equal(r.report.steps[1].observation, 'reused_from_previous_check');
+    reset(); scrolling({ seenAt: 1 });
+    r = await run({ steps: [{ ...scrollStep, direction: 'up' }] });
+    assert.equal(acts()[0].actions[0].scrollY, -200);
+    // A box that is only a row tall still moves a tenth of the window, so eight scrolls cover real ground.
+    assert.equal(j.scrollAction({ point: { x: 1, y: 2 }, box: { top: .5, bottom: .52 } }, 500, 'down').scrollY, 50);
+  });
+  await test('scroll: never seen stops at MAX_SCROLLS; later steps are not attempted', async () => {
+    reset(); scrolling();
+    const r = await run({ steps: [scrollStep, step] });
+    assert.equal(acts().length, j.MAX_SCROLLS); assert.equal(r.report.status, 'stopped');
+    assert.deepEqual([r.report.steps[0].status, r.report.steps[0].stopReason, r.report.attemptedSteps, r.report.confirmedSteps], ['unverified', 'max_scrolls', 1, 0]);
+    assert.match(r.report.error, /scrolled 8 times without until.*1 later step\(s\) were NOT attempted/);
+    assert(r.last.content.some(c => c.type === 'image'), 'the latest frame goes back to the main model');
+  });
+  await test('scroll: a frame that stops changing ends it early (the end of the list)', async () => {
+    reset(); scrolling({ same: (n) => n > 3 });
+    const r = await run({ steps: [scrollStep] });
+    assert.deepEqual([r.report.steps[0].stopReason, r.report.steps[0].scrolls, r.report.steps[0].status], ['no_change', 3, 'unverified']);
+    assert.equal(observed, 5, 'one extra look before calling it unchanged');
+    assert.match(r.report.error, /stopped moving after 3 scroll/);
+  });
+  await test('scroll: a failure after the first wheel says input went out; before it, nothing was sent', async () => {
+    reset(); scrolling(); let looks = 0;
+    j.jevRuntime.request = async (_k, b) => { if (!b.questions.done) return tall(); if (++looks === 2) throw new Error('Jev HTTP 429: rate limit reached. No action was taken for this step.'); return verdict(.1); };
+    let r = await run({ steps: [scrollStep] });
+    assert.equal(r.report.attemptedSteps, 1); assert.equal(r.report.steps[0].status, 'unverified');
+    assert.match(r.report.error, /scrolled 1 time\(s\) and then stopped.*429/); assert.doesNotMatch(r.report.error, /No action was taken/i);
+    reset(); scrolling();
+    j.jevRuntime.request = async (_k, b) => { if (b.questions.done) throw new Error('Jev HTTP 429: rate limit reached. No action was taken for this step.'); return tall(); };
+    r = await run({ steps: [scrollStep] });
+    assert.equal(r.report.attemptedSteps, 0); assert.equal(acts().length, 0); assert.match(r.report.error, /No action was taken/);
+    reset(); scrolling({ act: async (stateId, actions) => { calls.push({ stateId, actions }); return { content: [], details: { capture: { stateId: 'after' }, execution: { outcome: 'didnt', error: { code: 'foreground_required', message: 'Input requires foreground' } } } }; } });
+    r = await run({ steps: [scrollStep] });
+    assert.deepEqual([r.report.steps[0].status, r.report.steps[0].stopReason, acts().length], ['failed', 'input_failed', 1]);
+  });
   console.log(`${passed} Jev checks passed (Jev responses are fixtures; no live API claim).`);
 } finally { Object.assign(j.jevRuntime, originals); await fs.rm(outfile, { force: true }); }

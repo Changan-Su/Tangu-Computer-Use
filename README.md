@@ -103,18 +103,25 @@ a later screenshot).
 自动和视觉模式还会发送截图（待填文字不进定位请求，但可能出现在之后的截图里）。
 
 **Division of labour.** The main model plans; Jev executes and judges. The model passes up to eight
-steps (`click`, `double_click`, `fill`), each with the `target` and an `expect` — what the window shows
-once that step worked. For every step Jev locates the target on a fresh observation (accessibility
+steps (`click`, `double_click`, `fill`, `type`, `key`, `scroll`), each with the `target` and an `expect`
+— what the window shows once that step worked. `type` clicks its target (when given) and types at the
+caret, so it works on canvas, CEF and web fields where `fill` is refused; `key` sends keys such as
+`["return"]`; `scroll` names the list and an `until`, and Jev scrolls it (at most 8 times, half the
+list each) until `until` is fully in view, checking every frame itself. For every step Jev locates the target on a fresh observation (accessibility
 candidates first in Auto, a visual Box otherwise), the shared `act_ui` executor sends the input, and Jev
 compares before/after screenshots against `expect`. A canvas click the native layer cannot confirm is
 therefore still confirmed when the screen shows the expected result, and the run moves on.
 
-**分工：**主模型布置任务，Jev 负责点和看。一次最多八步（单击、双击、填写），每步写清目标和
-`expect`（这一步成功后窗口应当是什么样）。每一步 Jev 在新截图上定位（自动模式先试无障碍元素，否则视觉 Box），
+**分工：**主模型布置任务，Jev 负责点和看。一次最多八步（单击、双击、填写、打字、按键、滚动），每步写清目标和
+`expect`（这一步成功后窗口应当是什么样）。打字先点目标（给了的话）再在光标处输入，自绘 / CEF / 网页输入框也能用；
+按键发 `["return"]` 这类键；滚动写明是哪个列表和 `until`（要滚到能看见什么），Jev 每次滚半个列表、最多 8 次，
+每滚一次自己看一眼，看全了就停。每一步 Jev 在新截图上定位（自动模式先试无障碍元素，否则视觉 Box），
 由与 `act_ui` 同一个执行器发出输入，再拿前后两张截图对照 `expect` 判断成没成。自绘界面的点击原生层确认不了，
 只要画面出现了预期结果就算确认，接着做下一步。
 
 `jev_ui({root:"@r1", mode:"auto", steps:[{action:"click", target:"「每日推荐」 card", expect:"The daily songs list is open"}, {action:"double_click", target:"Song row 03", expect:"Row 03 shows the playing icon"}]})`
+
+`jev_ui({root:"@r1", steps:[{action:"scroll", target:"the liked songs list", until:"the row numbered 18"}, {action:"double_click", target:"the title text of row 18", expect:"Row 18 shows the playing icon"}]})`
 
 - **Thresholds:** *Jev minimum confidence* in settings (default 0.55) is how sure Jev must be that the
   target is on screen (its visibility answer). The `expect` check never goes below 0.8, because a false
@@ -129,15 +136,16 @@ therefore still confirmed when the screen shows the expected result, and the run
   it scored 0.01 while the right chat stayed at 0.97–0.98, so the skill tells the main model to word
   `expect` that way. Fixture numbers, not a guarantee for every app.
 - **Step status:** `confirmed` (`confirmedBy: native | visual`), `uncertain` (no `expect` and the native
-  outcome is unknown), `unverified` (`expect` not seen within 4 s), `failed`. The run stops at the first
+  outcome is unknown), `unverified` (`expect` not seen within 4 s, or a scroll that never brought `until`
+  into view: `stopReason` `max_scrolls` / `no_change`), `failed`. The run stops at the first
   step that is not confirmed; later steps are reported as not attempted. Inputs are never retried.
 - **Coordinates:** `point` is in Jev's own capture (`capture` gives its size); `pointFraction` and `box`
   are fractions of the window, comparable with any other screenshot of it.
-- **Limits:** 20 s plus 20 s per step (at most 170 s); stale observations (>5 s), window changes,
-  ambiguity and cancellation stop the run. `double_click` needs Auto or Vision mode. `fill` supports
-  native editable elements only — web/visual text fields stay on `act_ui` (click, then type), so this
-  experiment never sends unverified select-all/typing sequences. Scroll, drag, keyboard-only commands
-  and cross-window transitions use the existing tools. Normal approval and strict background apply.
+- **Limits:** 20 s plus 20 s per step, a scroll step counting twice (at most 170 s); stale observations
+  (>5 s), window changes, ambiguity and cancellation stop the run. `double_click`, `type`, `key` and
+  `scroll` need Auto or Vision mode. `fill` stays an atomic setText on native editable elements; `type`
+  never clears a field, it only types at the caret. Drag and cross-window transitions use the existing
+  tools. Normal approval and strict background apply.
 - `preview:true` locates one step without input. Jev and `act_ui` share the executor and the foreground
   policy; `foregroundTaken:false` is not a Jev-only limitation.
 
@@ -150,12 +158,14 @@ therefore still confirmed when the screen shows the expected result, and the run
   （不是 Saku，也不是 Sakura 樱花）」就降到 0.01，对的那个仍是 0.97–0.98，所以技能里让主模型这样写。
   这是替身上的数，不是对所有应用的保证。
 - **每步状态：**`confirmed`（`confirmedBy` 为 `native` 原生确认 / `visual` 画面确认）、`uncertain`（没写 `expect`
-  且原生层不确定）、`unverified`（4 秒内没看到 `expect`）、`failed`。遇到第一个没确认的步骤就停，
+  且原生层不确定）、`unverified`（4 秒内没看到 `expect`，或滚动没把 `until` 滚出来：`stopReason` 为
+  `max_scrolls` / `no_change`）、`failed`。遇到第一个没确认的步骤就停，
   后面的步骤记为「未尝试」；输入从不自动重试。
 - **坐标：**`point` 是 Jev 那张截图里的像素（尺寸见 `capture`）；`pointFraction` 与 `box` 是占窗口的比例，
   可以和这扇窗口的任何截图对照。
-- **限制：**20 秒加每步 20 秒（最多 170 秒）；画面超过 5 秒、窗口变化、有歧义、被取消都会停。双击需要自动或视觉模式。
-  填写只支持原生可编辑控件，网页和自绘输入框仍走 `act_ui`（先点、再打字）。滚动、拖动、纯快捷键、跨窗口走原工具。
+- **限制：**20 秒加每步 20 秒，滚动那步算两步（最多 170 秒）；画面超过 5 秒、窗口变化、有歧义、被取消都会停。
+  双击、打字、按键、滚动需要自动或视觉模式。填写仍只对原生可编辑控件整段写入；打字只在光标处输入、不会清空输入框。
+  拖动、跨窗口走原工具。
   原有审批和严格后台照常生效。`preview:true` 只定位一步、不发输入。
 
 Ask: **“Use Jev: open the daily recommendations and play the third song. Report each step.”**
