@@ -1,5 +1,5 @@
 /** TypeSafe is a separate decision endpoint, not an OpenAI chat provider. */
-import { readFile, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { readFile, mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import os from 'node:os';
@@ -43,7 +43,30 @@ export function readJevConnection(settings: Record<string, unknown>): JevConnect
   return { apiUrl: url.toString(), key };
 }
 
+let evidenceSeq = 0;
+/** Test record (TANGU_JEV_EVIDENCE_DIR, set only by harnesses): every request with its images and the answer. Never the key. */
+async function keepEvidence(body: Record<string, unknown>, result: unknown, ms: number): Promise<void> {
+  const dir = process.env.TANGU_JEV_EVIDENCE_DIR;
+  if (!dir) return;
+  await mkdir(dir, { recursive: true });
+  const id = `${Date.now()}-${String(++evidenceSeq).padStart(3, '0')}`;
+  const assets: Record<string, string> = {};
+  for (const [key, a] of Object.entries((body.assets ?? {}) as Record<string, { format?: string; data_base64?: string }>)) {
+    const file = `${id}-${key.slice(0, 8)}.${a.format === 'png' ? 'png' : 'jpg'}`;
+    await writeFile(path.join(dir, file), Buffer.from(a.data_base64 ?? '', 'base64'));
+    assets[key] = file;
+  }
+  await writeFile(path.join(dir, `${id}.json`), JSON.stringify({ at: new Date().toISOString(), ms, state: body.state, questions: body.questions, assets, result }, null, 2));
+}
+
 export async function requestJev(connection: JevConnection, body: Record<string, unknown>, signal?: AbortSignal): Promise<any> {
+  const started = Date.now();
+  const result = await postJev(connection, body, signal);
+  await keepEvidence(body, result, Date.now() - started).catch(() => { /* the record must never break a run */ });
+  return result;
+}
+
+async function postJev(connection: JevConnection, body: Record<string, unknown>, signal?: AbortSignal): Promise<any> {
   const timeout = AbortSignal.timeout(12_000);
   const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
   let response: Response;

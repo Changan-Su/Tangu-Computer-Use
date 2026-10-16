@@ -87,68 +87,82 @@ Dependabot 提 PR 升级内置版本。首个版本需按上面两条命令人�
 
 ### Jev experimental acceleration / Jev 实验加速（macOS）
 
-In **Settings → Computer Use**, enable **Jev experimental acceleration**.
-Enter the **Jev API URL** and **Jev API key** there. The default URL is
-`https://api.typesafe.ai/v1/systemone`; a service origin or `/v1` base is also accepted.
-Use a TypeSafe-compatible endpoint, not an OpenAI chat endpoint. The key is stored in the local
-plugin configuration; hosts supporting `secret:true` mask the input. Never paste it into chat.
-Target-window element labels are sent to the configured service; Auto and Visual Box modes can also send screenshots. Fill text is not sent
-in its target-selection request, but can appear in a later screenshot.
+**Where:** Settings → **Computer Use** (AI group, right after Browser control). Searching settings for
+"Jev" or "strict background" lands there too. Enable **Jev experimental acceleration** and enter the
+**Jev API URL** and **Jev API key**. The default URL is `https://api.typesafe.ai/v1/systemone`; a service
+origin or `/v1` base is also accepted. Use a TypeSafe-compatible endpoint, not an OpenAI chat endpoint.
+The key is stored in the local plugin configuration; hosts supporting `secret:true` mask the input.
+Never paste it into chat. Target-window element labels are sent to the configured service; Auto and
+Visual Box modes also send screenshots (fill text is not part of a targeting request, but can appear in
+a later screenshot).
 
-在**设置 → 电脑操作**开启「Jev 实验加速」，手动填写「Jev API 地址」和「Jev API 密钥」。
-默认地址为 `https://api.typesafe.ai/v1/systemone`，也接受服务根地址或 `/v1` 基址；需兼容
-TypeSafe 协议，不是 OpenAI 聊天接口。密钥随本机插件配置保存，支持 `secret:true` 的宿主以密码框显示。
-不要把密钥填进聊天。开启后元素标签会发送到配置的服务；自动和视觉模式还可能发送截图。待填文字不加入本次定位请求，
-但可能出现在后续截图中。
+**位置：**设置 → **电脑操作**（AI 分组，紧挨「浏览器控制」）；在设置里搜「Jev」或「严格后台」也能直达。
+开启「Jev 实验加速」，填写「Jev API 地址」和「Jev API 密钥」。默认地址 `https://api.typesafe.ai/v1/systemone`，
+也接受服务根地址或 `/v1` 基址；需兼容 TypeSafe 协议，不是 OpenAI 聊天接口。密钥随本机插件配置保存，
+支持 `secret:true` 的宿主以密码框显示，不要把密钥填进聊天。开启后元素标签会发送到配置的服务；
+自动和视觉模式还会发送截图（待填文字不进定位请求，但可能出现在之后的截图里）。
 
-Ask: **“Use Jev to fill the search field with test, then click Search. Report each step's timing.”**
-Compare **Elements only** and **Visual Box only** in settings, or request either mode in chat.
-“Preview the target with Jev without clicking” measures one target without input.
+**Division of labour.** The main model plans; Jev executes and judges. The model passes up to eight
+steps (`click`, `double_click`, `fill`), each with the `target` and an `expect` — what the window shows
+once that step worked. For every step Jev locates the target on a fresh observation (accessibility
+candidates first in Auto, a visual Box otherwise), the shared `act_ui` executor sends the input, and Jev
+compares before/after screenshots against `expect`. A canvas click the native layer cannot confirm is
+therefore still confirmed when the screen shows the expected result, and the run moves on.
 
-可以对 Agent 说：**「用 Jev 在这个窗口的搜索框填入 test，再点搜索，告诉我每步耗时。」**
-在设置切换「仅元素选择」和「仅视觉 Box」进行对比，也可在对话里指定。
-说「用 Jev 预览定位，不要点击」可以只测一个目标。
+**分工：**主模型布置任务，Jev 负责点和看。一次最多八步（单击、双击、填写），每步写清目标和
+`expect`（这一步成功后窗口应当是什么样）。每一步 Jev 在新截图上定位（自动模式先试无障碍元素，否则视觉 Box），
+由与 `act_ui` 同一个执行器发出输入，再拿前后两张截图对照 `expect` 判断成没成。自绘界面的点击原生层确认不了，
+只要画面出现了预期结果就算确认，接着做下一步。
 
-`jev_ui({root:"@r1", mode:"auto", steps:[{action:"fill",target:"Search field",text:"test"},{action:"click",target:"Search button"}]})`
-executes up to eight explicit click/fill steps with fresh observations. `preview:true` accepts one step.
-Auto tries accessibility candidates before Box; Elements never sends images. Box includes a separate
-presence/uniqueness check in the same request. Model: `jev-1.14.0`, with `TypeSafe-Danger-Zone-Images`.
-Minimum confidence defaults to 0.85; this is experimental, not a measured reliability guarantee.
-The visual presence answer must also reach at least 0.9.
+`jev_ui({root:"@r1", mode:"auto", steps:[{action:"click", target:"「每日推荐」 card", expect:"The daily songs list is open"}, {action:"double_click", target:"Song row 03", expect:"Row 03 shows the playing icon"}]})`
 
-Runs stop on ambiguity, stale observations, window changes, failed/uncertain input, cancellation,
-or after 60 seconds. Normal action approval and strict-background settings remain in effect.
-Reports distinguish attempted input from native-confirmed actions, with observation/decision/action timings.
-Jev and `act_ui` share the same executor and foreground policy; `foregroundTaken:false` is not a Jev-only limitation.
-Unknown means unverified, not failed. Inspect the successor state before repeating an attempt with any tool.
-Rejected visual targets report their visibility/confidence scores and thresholds.
-Executed input does **not** prove the goal succeeded: inspect the returned state before resuming.
-Inputs are never retried automatically. Scroll, drag, keyboard-only commands and cross-window
-transitions use existing tools. Image tiling and autonomous task planning are not implemented.
-Canvas/visual inputs can return `unknown` even when they landed; the sequence then stops and returns
-the successor screenshot to the main model. Elements mode only offers semantic press/setText targets;
-Auto falls back to vision for clicks requiring physical input. Fill supports native editable elements only;
-web/visual fill stays on the ordinary tools, so this experiment never sends unverified select-all/typing sequences.
+- **Threshold:** one minimum (default 0.75, *Jev minimum confidence* in settings) applies to the
+  target's visibility, its Box confidence and the `expect` check. It is a model estimate, not a measured
+  reliability guarantee; `scripts/jev-calibrate.mjs` measures it against self-drawn apps (below).
+- **Step status:** `confirmed` (`confirmedBy: native | visual`), `uncertain` (no `expect` and the native
+  outcome is unknown), `unverified` (`expect` not seen within 4 s), `failed`. The run stops at the first
+  step that is not confirmed; later steps are reported as not attempted. Inputs are never retried.
+- **Coordinates:** `point` is in Jev's own capture (`capture` gives its size); `pointFraction` and `box`
+  are fractions of the window, comparable with any other screenshot of it.
+- **Limits:** 20 s plus 20 s per step (at most 170 s); stale observations (>5 s), window changes,
+  ambiguity and cancellation stop the run. `double_click` needs Auto or Vision mode. `fill` supports
+  native editable elements only — web/visual text fields stay on `act_ui` (click, then type), so this
+  experiment never sends unverified select-all/typing sequences. Scroll, drag, keyboard-only commands
+  and cross-window transitions use the existing tools. Normal approval and strict background apply.
+- `preview:true` locates one step without input. Jev and `act_ui` share the executor and the foreground
+  policy; `foregroundTaken:false` is not a Jev-only limitation.
 
-一次最多八步点击或填写；每步重新观察。歧义、旧画面、窗口变化、操作失败或结果不确定时停止。
-保留原审批和严格后台设置，可随对话取消，最多运行六十秒。Jev 与 `act_ui` 共用执行器和前后台策略；
-`foregroundTaken:false` 不代表 Jev 只能后台操作。`unknown` 是未确认，不是失败，换工具重试前也必须检查新状态。
-视觉定位被拒时会报告可见性、置信度和对应阈值。报告区分「尝试过」与「原生已确认」，并列出
-观察、决策、操作耗时。已执行不代表整个任务完成，继续前应检查返回状态。滚动、拖动、纯快捷键和跨窗口
-操作走原工具。本版没有实现画面切块或自主任务规划。
-自绘窗口的视觉点击即使送达，也可能无法由原生层确认；此时停止后续步骤，返回新截图让主模型检查。
-元素模式只选择支持语义按压或设置文本的控件；需要物理点击的控件由自动模式转视觉定位。填写仅支持原生可编辑控件；网页和视觉输入框使用原工具，不发送未经确认的全选加逐字输入序列。
+- **阈值：**一个下限（默认 0.75，设置里的「Jev 最低置信度」）同时管目标的可见性、Box 置信度和 `expect` 判断。
+  这是模型的估计，不是实测的可靠性保证；用下面的 `scripts/jev-calibrate.mjs` 在自绘替身 App 上标定。
+- **每步状态：**`confirmed`（`confirmedBy` 为 `native` 原生确认 / `visual` 画面确认）、`uncertain`（没写 `expect`
+  且原生层不确定）、`unverified`（4 秒内没看到 `expect`）、`failed`。遇到第一个没确认的步骤就停，
+  后面的步骤记为「未尝试」；输入从不自动重试。
+- **坐标：**`point` 是 Jev 那张截图里的像素（尺寸见 `capture`）；`pointFraction` 与 `box` 是占窗口的比例，
+  可以和这扇窗口的任何截图对照。
+- **限制：**20 秒加每步 20 秒（最多 170 秒）；画面超过 5 秒、窗口变化、有歧义、被取消都会停。双击需要自动或视觉模式。
+  填写只支持原生可编辑控件，网页和自绘输入框仍走 `act_ui`（先点、再打字）。滚动、拖动、纯快捷键、跨窗口走原工具。
+  原有审批和严格后台照常生效。`preview:true` 只定位一步、不发输入。
 
-`npm run check:jev` covers API/geometry/cancellation/progress using fixture responses;
-`PI_COMPUTER_USE_HELPER_APP_PATH=<authorized.app> PI_CU_SOCKET_PATH=<isolated.sock> node scripts/jev-native.check.mjs`
-checks real macOS capture/input against a local HTTP oracle, without replacing the installed helper.
-`npm run check:platform` checks default-off and platform gates. These checks do not measure Jev accuracy or speed.
-For the native check, `JEV_SETTINGS_FILE=<Forsion config.json>` opts into the configured real API;
-only synthetic fixture screenshots/labels are sent, and rejected low-confidence targets are recorded without clicking.
-`TANGU_ENGINE_ROOT=<built tangu-agent> npm run check:jev-feedback-live -- <output-dir>` uses GPT-6 Luna
-in an isolated engine to check report interpretation (not autonomous execution); archive the output with `harness-runs/archive.mjs add`.
-原生台架可通过 `JEV_SETTINGS_FILE` 读取本机配置，调用真实 API；只上传测试窗口，低置信度会停止且记录原因。
-真模型台架检查结果理解，不代表自主操作端到端通过。
+Ask: **“Use Jev: open the daily recommendations and play the third song. Report each step.”**
+可以对 Agent 说：**「用 Jev 打开每日推荐，播放第三首，逐步告诉我结果。」**说「用 Jev 预览定位，不要点击」只测一个目标。
+
+**Checks / 台架**
+- `npm run check:jev` — API, geometry, verification, cancellation and progress against fixture responses.
+- `PI_COMPUTER_USE_HELPER_APP_PATH=<authorized.app> PI_CU_SOCKET_PATH=<isolated.sock> node scripts/jev-native.check.mjs`
+  — real macOS capture/input against a local HTTP oracle, without replacing the installed helper.
+  `JEV_SETTINGS_FILE=<Forsion config.json>` opts into the configured real API (only synthetic fixture
+  screenshots/labels are sent).
+- `JEV_SETTINGS_FILE=<Forsion config.json> node scripts/jev-calibrate.mjs <out-dir>` — screenshots only,
+  **no input**: asks the real API to locate present, near-duplicate and absent targets in the self-drawn
+  Melody / Chatter apps and to judge before/after pairs, then tabulates wrong clicks and needless stops
+  for each threshold from 0.50 to 0.95. Ground truth is the layout the apps record for themselves.
+- `TANGU_JEV_EVIDENCE_DIR=<dir>` keeps every Jev request's images and answers (never the key).
+- `TANGU_ENGINE_ROOT=<built tangu-agent> npm run check:jev-feedback-live -- <output-dir>` checks GPT-6 Luna's
+  reading of Jev reports in an isolated engine; archive it with `harness-runs/archive.mjs add`.
+- `npm run check:platform` — default-off and platform gates.
+
+标定脚本只截图、不发输入；真值来自替身 App 自己记录的布局，不靠人判。`TANGU_JEV_EVIDENCE_DIR` 会把每次请求 Jev 的图和回答留档（不含密钥）。
+
 References: [Images](https://docs.typesafe.ai/images), [Box](https://docs.typesafe.ai/primitives/box),
 [Choice](https://docs.typesafe.ai/primitives/choice), [Noul](https://docs.typesafe.ai/primitives/noul).
 
