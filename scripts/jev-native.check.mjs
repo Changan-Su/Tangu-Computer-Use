@@ -111,6 +111,9 @@ try {
   assert.equal(semantic.report.steps[1].status, 'uncertain');
   const fieldsFinal = JSON.parse(await fs.readFile(fieldsState, 'utf8')); assert.equal(fieldsFinal.value, 'Jev fixture'); assert.equal(fieldsFinal.clicks, 1);
   assert.equal(requests, 4);
+  // Put a different fixture in front so this checks real background behavior, not only metadata.
+  await exec('open', [fieldsApp]);
+  await until(async () => (await ask('getFrontmost'))?.pid === fieldsPid);
   process.env.PI_COMPUTER_USE_HEADLESS = 'true';
   const strict = await run([step(liveSettings ? 'The green square button in the left sidebar' : 'Page 2 button')]);
   if (strict.report.attemptedSteps || !liveSettings) {
@@ -120,6 +123,7 @@ try {
   assert.equal(strict.report.steps[0].execution.steps[0].policy, 'ax_only');
   assert.equal(strict.report.steps[0].execution.steps[0].delivery, 'pid');
   } else assert.match(strict.report.error, /target rejected/);
+  assert.equal((await ask('getFrontmost')).pid, fieldsPid, 'strict action must preserve the other fixture foreground');
   console.log(JSON.stringify({ status: 'PASS', evidence: liveSettings ? 'Live Jev API + real native capture/input; synthetic fixture only' : 'Real native capture/input with fixture Jev HTTP answers; no live Jev accuracy/speed claim', protocol: d.protocolVersion, page: final.page, clicks: final.clicks, preview: preview.report, report: result.report, semantic: semantic.report, strict: strict.report, fields: { clicks: fieldsFinal.clicks, value: fieldsFinal.value } }, null, 2));
 } finally {
   await cu?.shutdownComputerUseSession().catch(() => {});

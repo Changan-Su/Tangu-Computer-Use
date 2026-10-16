@@ -113,7 +113,9 @@ try {
     j.jevRuntime.act = async () => ({ content: [], details: { capture: { stateId: 'after' }, execution: { outcome: 'worked', steps: [{ delivery: 'hid', deliveryPolicy: 'foreground' }] } } });
     let r = await run(); assert.equal(r.report.executedSteps, 1); assert.equal(r.report.foregroundTaken, true);
     reset(); j.jevRuntime.act = async () => ({ content: [], details: { status: 'target_closed', execution: { outcome: 'worked' } } });
-    assert.equal((await run()).report.executedSteps, 0);
+    r = await run({steps: [step, step]});
+    assert.equal(r.report.executedSteps, 1); assert.equal(r.report.attemptedSteps, 1);
+    assert.equal(r.report.status, 'stopped'); assert.equal(r.report.steps[0].status, 'executed');
     reset(); const ac = new AbortController();
     j.jevRuntime.act = async () => { ac.abort(); throw new Error('native input interrupted'); };
     r = await run({}, ac.signal); assert.equal(r.report.attemptedSteps, 1); assert.equal(r.last, undefined); assert.equal(r.report.foregroundTaken, null);

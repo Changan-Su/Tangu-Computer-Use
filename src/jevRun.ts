@@ -137,11 +137,12 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
       item.execution = executionSummary(after);
       item.outcome = after.execution?.outcome ?? 'unknown';
       item.elapsedMs = Math.round(performance.now() - stepStart);
+      const confirmed = after.execution?.outcome === 'worked' && !after.execution.error;
+      if (confirmed) executed++;
       if (!after.capture?.stateId || (after.status && after.status !== 'ok') || after.execution?.error || after.execution?.outcome !== 'worked') {
-        item.status = after.execution?.error || after.execution?.outcome === 'didnt' ? 'failed' : 'uncertain';
+        item.status = confirmed ? 'executed' : after.execution?.error || after.execution?.outcome === 'didnt' ? 'failed' : 'uncertain';
         throw new Error(`Step ${i + 1} was attempted; ${params.steps.length - attempted} later step(s) were NOT attempted. Check its execution facts and returned state before continuing. Do not replay this step blindly or assume switching to act_ui changes the input policy.`);
       }
-      executed++;
       item.status = 'executed';
     }
     return { report: report('executed'), last };
