@@ -1,5 +1,25 @@
 # 更新日志
 
+## 0.7.2-jev.4 — 2026-10-16（开发实验 / development experiment）
+
+- 反馈 69651ff8：微信里找不到 Sakura。这一版是插件这一侧能修的部分；搜索结果下拉本身截不到，要等 helper 一起改（截图带上叠在上面的窗口）：
+  - `type` 可以带 `keys`，打完字在同一次输入里紧接着按（打 Sakura 再回车）；只给搜索框和表单用，发消息仍单独一步、先看截图。
+  - 没给目标的 `key` / `type` 照旧只在目标窗口在最前面时发（不然可能打进同一个 App 的别的窗口，比如另一个聊天）；被拒时报告写明「这一步没发出去」，并提示给它一个目标（要输入的那个框）或把按键并进 `type`。之前报的是「已尝试、结果未知」。
+  - 滚动每次滚四分之三个列表（原来一半）；Jev 看到目标露出一部分后改小步（列表的 0.3），不会从下边被截一半直接跳到上边被截一半。上限 `maxScrolls` 缺省 12、最多 30（原来固定 8 次），报告里带上这次的上限；时限按滚动次数加（每次约 3 秒）。之前 260 个联系人的列表滚满 8 次、23 秒还没到 S。
+  - 滚动区域的框置信度门槛降到 0.3（点击仍是 0.5）：滚动不改数据，框歪了只会滚错地方，由 `until` 兜住。之前联系人列表 0.48 被拒。
+  - `act_ui` 的 `expect.text` / `expect.value` 只在无障碍树里找；窗口里除了标题什么文字都没有、也没有能填值的框和网页区域时直接拒绝、什么都不发，免得白等 8 秒再报失败（网易云那次评论区其实打开了）。要找的就是窗口标题、带了 `scopeRef`、或者是 `gone` 时照旧等。
+  - `find_roots` 给没有窗口号的根标 `no_screenshot`（只在 macOS）：它自己截不到，下面那个窗口的截图里也没有它。
+  - 提示词和技能：只按看得见的东西操作；看不见的搜索结果别用方向键 + 回车盲选（这次打开的是一个群），改去看得见的列表里找，或者先打开、看清窗口标题里的名字再输入。
+  - Codex 评审后改的：没给目标的输入原本打算带一个窗口内的点让它跟随焦点，评审指出那样会发到 App 当前的关键窗口（可能是另一个聊天），已撤回；`act_ui` 的拦截收窄到上面那种确定看不见的情况；滚动的小步就是评审指出的「高的行被截在两边」问题。
+- Feedback 69651ff8 (Sakura not found in WeChat), the plugin-side part; the search popup itself stays invisible until the helper captures overlapping windows:
+  - `type` takes `keys`, pressed right after the text in the same input: for search boxes and forms, never to send a message.
+  - A target-less `key` / `type` still follows the focus only while the target window is in front (anything else could type into another window of the app). When refused, the report now says the step was NOT sent and to give it a target, or to put the keys on the `type` step.
+  - Scrolling moves three quarters of the list per wheel (was half) and switches to short wheels (0.3 of the list) once part of the item shows, so a row clipped at one edge does not jump to being clipped at the other. At most `maxScrolls` times: 12 by default, up to 30 (was a fixed 8); the report carries the cap; the run limit grows by about 3 s per allowed scroll.
+  - Scroll areas take a box confidence of 0.3 (clicks keep 0.5): scrolling changes no data, and `until` catches a wrong pane.
+  - `act_ui` refuses `expect.text` / `expect.value` before sending anything when the window has no accessibility text but its title, no field that can take a value and no web area; the title itself, scoped and `gone` conditions still wait.
+  - `find_roots` marks a macOS root without a window id `no_screenshot`.
+  - Prompt and skill: act only on what you can see; never arrow-key + Return into a results list you cannot see; find the item in a visible list, or open the candidate and read its name in the window header before typing.
+
 ## 0.7.2-jev.3 — 2026-10-16（开发实验 / development experiment）
 
 - `jev_ui` 补上滚动、打字、按键（反馈 d995c9a2：Jev 只能定位，滚动和打字还得回到 `act_ui`，传统模式仍占主导）：

@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { deflateSync } from 'node:zlib';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outfile = path.join(root, 'tangu-plugins/computer-use/dist/jev-check.mjs');
-await build({ stdin: { contents: 'export * from "./src/jev.ts"; export * from "./src/jevRun.ts"; export {render} from "./src/tools.ts";', resolveDir: root }, outfile, bundle: true, platform: 'node', format: 'esm', target: 'node20', alias: { '@earendil-works/pi-coding-agent': path.join(root, 'src/pi-compat.ts') }, banner: { js: 'import {createRequire} from "node:module";const require=createRequire(import.meta.url);' } });
+await build({ stdin: { contents: 'export * from "./src/jev.ts"; export * from "./src/jevRun.ts"; export {render} from "./src/tools.ts"; export {expectCannotMatch, formatWindowLine} from "./src/vendor/bridge.ts";', resolveDir: root }, outfile, bundle: true, platform: 'node', format: 'esm', target: 'node20', alias: { '@earendil-works/pi-coding-agent': path.join(root, 'src/pi-compat.ts') }, banner: { js: 'import {createRequire} from "node:module";const require=createRequire(import.meta.url);' } });
 const j = await import(pathToFileURL(outfile));
 let passed = 0;
 const test = async (name, run) => { await run(); passed++; console.log(`PASS ${name}`); };
@@ -198,7 +198,7 @@ try {
   });
 
   // ── 10-16: you plan, Jev clicks and checks (feedback 0c0cd24f: canvas apps stopped after every step) ──
-  const verdict = (noul) => ({ model: j.JEV_MODEL, answers: { done: { type: 'noul', noul } }, usage: { input_tokens: 50 } });
+  const verdict = (noul, near = 0) => ({ model: j.JEV_MODEL, answers: { done: { type: 'noul', noul }, near: { type: 'noul', noul: near } }, usage: { input_tokens: 50 } });
   const unknownAct = async (stateId, actions) => { calls.push({ stateId, actions }); return { content: [], details: { capture: { stateId: `after-${stateId}` }, execution: { outcome: 'unknown' } } }; };
   j.jevTiming.verifyWindowMs = 300; j.jevTiming.pollMs = 50;
   await test('double_click is a two-count physical click and needs a screenshot', async () => {
@@ -271,7 +271,7 @@ try {
   });
 
   // ── 10-16 feedback d995c9a2: Jev also scrolls, types and presses keys, so act_ui is left with drag only ──
-  const tall = (visible = .99) => ({ model: j.JEV_MODEL, answers: { visible: { type: 'noul', noul: visible }, target: { type: 'box', confidence: .9, box: { left: .1, right: .3, top: .1, bottom: .9 } } }, usage: { input_tokens: 80 } });
+  const tall = (visible = .99, confidence = .9) => ({ model: j.JEV_MODEL, answers: { visible: { type: 'noul', noul: visible }, target: { type: 'box', confidence, box: { left: .1, right: .3, top: .1, bottom: .9 } } }, usage: { input_tokens: 80 } });
   /** Frames differ per observation unless `same` says otherwise; until shows up at look number `seenAt` (0 = before any scroll). */
   const scrolling = ({ seenAt = Infinity, same = () => false, act } = {}) => {
     let looks = 0, data = '';
@@ -293,21 +293,29 @@ try {
       { action: 'scroll', target: 'list' }, { ...scrollStep, expect: 'Blue Skies is shown' }, { ...scrollStep, direction: 'left' },
       { action: 'scroll', until: 'x' }, { action: 'type' }, { action: 'type', text: '' }, { action: 'type', target: '', text: 'hi' },
       { action: 'key' }, { action: 'key', keys: [] }, { action: 'key', keys: Array(17).fill('a') }, { action: 'key', keys: [1] }, { action: 'click' },
+      { action: 'type', text: 'hi', keys: [] }, { ...scrollStep, maxScrolls: 0 }, { ...scrollStep, maxScrolls: 31 }, { ...scrollStep, maxScrolls: 2.5 }, { action: 'click', target: 'x', maxScrolls: 3 },
     ]) assert.throws(() => j.parseJevArgs({ root: '@r1', steps: [bad] }), undefined, JSON.stringify(bad));
     assert.throws(() => j.parseJevArgs({ root: '@r1', steps: [{ action: 'key', keys: ['return'] }], preview: true }), /Preview locates a target/);
-    assert.deepEqual(j.parseJevArgs({ root: '@r1', steps: [scrollStep] }).steps[0], { ...scrollStep, direction: 'down' });
-    assert.deepEqual(j.parseJevArgs({ root: '@r1', steps: [{ action: 'type', text: 'hi', keys: ['x'], until: 'y' }] }).steps[0], { action: 'type', text: 'hi' });
+    assert.deepEqual(j.parseJevArgs({ root: '@r1', steps: [scrollStep] }).steps[0], { ...scrollStep, direction: 'down', maxScrolls: 12 });
+    assert.equal(j.parseJevArgs({ root: '@r1', steps: [{ ...scrollStep, maxScrolls: 30 }] }).steps[0].maxScrolls, 30);
+    // type keeps its keys now (pressed after the text); fields of other actions are still dropped.
+    assert.deepEqual(j.parseJevArgs({ root: '@r1', steps: [{ action: 'type', text: 'hi', keys: ['x'], until: 'y' }] }).steps[0], { action: 'type', text: 'hi', keys: ['x'] });
     assert.deepEqual(j.parseJevArgs({ root: '@r1', steps: [{ action: 'key', target: ' Search ', keys: ['cmd', 'a'], text: 'dropped' }] }).steps[0], { action: 'key', target: 'Search', keys: ['cmd', 'a'] });
   });
   await test('type and key: one input call, a click first only when there is a target', async () => {
     assert.deepEqual(j.selectedActions({ action: 'type', target: 'Message', text: 'hi' }, { point: { x: 5, y: 6 } }, []), [{ action: 'click', x: 5, y: 6 }, { action: 'typeText', text: 'hi' }]);
     assert.deepEqual(j.selectedActions({ action: 'key', keys: ['return'] }, undefined, []), [{ action: 'keypress', keys: ['return'] }]);
+    // type may end with keys in the same input; after the click the focus carries. Without a target nothing names a point:
+    // the executor follows the focus only while the target window is in front (Codex review: a point would post to the
+    // app's key window, which can be another chat).
+    assert.deepEqual(j.selectedActions({ action: 'type', text: 'Sakura', keys: ['return'] }, undefined, []), [{ action: 'typeText', text: 'Sakura' }, { action: 'keypress', keys: ['return'] }]);
+    assert.deepEqual(j.selectedActions({ action: 'type', target: 'Search', text: 'Sakura', keys: ['return'] }, { point: { x: 5, y: 6 } }, []), [{ action: 'click', x: 5, y: 6 }, { action: 'typeText', text: 'Sakura' }, { action: 'keypress', keys: ['return'] }]);
     reset(); j.jevRuntime.act = unknownAct;
     j.jevRuntime.request = async (_k, b) => { calls.push(b.questions.done ? `verify:${Object.keys(b.assets).length}` : 'box'); return b.questions.done ? verdict(.97) : box(); };
     const r = await run({ steps: [{ action: 'type', target: 'the message field', text: 'private-text', expect: 'the field shows the message' }, { action: 'key', keys: ['return'], expect: 'the message is in the chat' }] });
     assert.equal(r.report.status, 'completed', JSON.stringify(r.report)); assert.equal(r.report.confirmedSteps, 2);
     assert.deepEqual(acts().map(c => c.actions.map(a => a.action)), [['click', 'typeText'], ['keypress']]);
-    assert.deepEqual(acts()[1].actions[0].keys, ['return']);
+    assert.deepEqual(acts()[1].actions[0], { action: 'keypress', keys: ['return'] }, 'a target-less key names no point');
     // The key step has no target: no locate request, the check still compares with a before frame.
     assert.deepEqual(calls.filter(c => typeof c === 'string'), ['observe:true', 'box', 'observe:true', 'verify:2', 'observe:true', 'verify:2']);
     assert(!JSON.stringify(r.report).includes('private-text'), 'typed text never lands in the report');
@@ -328,29 +336,35 @@ try {
     const locate = j.visionRequest(image, scrollStep);
     assert.match(locate.questions.target.instructions, /scrollable list or panel/);
   });
-  await test('scroll: half the list per wheel at its centre, until checked on every new frame', async () => {
+  await test('scroll: three quarters of the list per wheel at its centre, until checked on every new frame', async () => {
     reset(); scrolling({ seenAt: 3 });
     let r = await run({ steps: [scrollStep, { action: 'double_click', target: 'the row titled Blue Skies', expect: 'Blue Skies is playing' }] });
     assert.equal(r.report.status, 'completed', JSON.stringify(r.report));
     const wheel = acts().filter(c => c.actions[0].action === 'scroll').map(c => c.actions[0]);
-    assert.equal(wheel.length, 3); assert.deepEqual(wheel[0], { action: 'scroll', x: 200, y: 250, scrollY: 200 });
+    assert.equal(wheel.length, 3); assert.deepEqual(wheel[0], { action: 'scroll', x: 200, y: 250, scrollY: 300 });
     assert.deepEqual(acts().slice(0, 3).map(c => c.stateId), ['s1', 's2', 's3'], 'each scroll goes out on the latest observation');
     assert.deepEqual([r.report.steps[0].scrolls, r.report.steps[0].stopReason, r.report.steps[0].confirmedBy], [3, 'until_seen', 'visual']);
     assert.deepEqual(calls.filter(c => typeof c === 'string' && c.startsWith('look')), ['look:1', 'look:2', 'look:2', 'look:2', 'look:2'], 'later frames are compared with the one before (the fifth is the double_click expect)');
     assert.equal(r.report.steps[1].observation, 'reused_from_previous_check');
     reset(); scrolling({ seenAt: 1 });
     r = await run({ steps: [{ ...scrollStep, direction: 'up' }] });
-    assert.equal(acts()[0].actions[0].scrollY, -200);
-    // A box that is only a row tall still moves a tenth of the window, so eight scrolls cover real ground.
+    assert.equal(acts()[0].actions[0].scrollY, -300);
+    // A box that is only a row tall still moves a tenth of the window, so the scrolls cover real ground.
     assert.equal(j.scrollAction({ point: { x: 1, y: 2 }, box: { top: .5, bottom: .52 } }, 500, 'down').scrollY, 50);
   });
-  await test('scroll: never seen stops at MAX_SCROLLS; later steps are not attempted', async () => {
+  await test('scroll: never seen stops at maxScrolls (default 12, or what the step asks); later steps are not attempted', async () => {
     reset(); scrolling();
     const r = await run({ steps: [scrollStep, step] });
     assert.equal(acts().length, j.MAX_SCROLLS); assert.equal(r.report.status, 'stopped');
     assert.deepEqual([r.report.steps[0].status, r.report.steps[0].stopReason, r.report.attemptedSteps, r.report.confirmedSteps], ['unverified', 'max_scrolls', 1, 0]);
-    assert.match(r.report.error, /scrolled 8 times without until.*1 later step\(s\) were NOT attempted/);
+    assert.equal(j.MAX_SCROLLS, 12); assert.equal(r.report.steps[0].maxScrolls, 12);
+    assert.match(r.report.error, /scrolled 12 times without until.*1 later step\(s\) were NOT attempted.*larger maxScrolls of up to 30/);
     assert(r.last.content.some(c => c.type === 'image'), 'the latest frame goes back to the main model');
+    reset(); scrolling();
+    const three = await run({ steps: [{ ...scrollStep, maxScrolls: 3 }] });
+    assert.deepEqual([acts().length, three.report.steps[0].maxScrolls, three.report.steps[0].stopReason], [3, 3, 'max_scrolls']);
+    // The run budget grows with the scrolls the steps may take (about 3 s a round), still under the tool's 180 s.
+    assert.equal(j.runLimitMs(1, 12), 76_000); assert.equal(j.runLimitMs(2, 30), 150_000); assert.equal(j.runLimitMs(3, 60), 170_000);
   });
   await test('scroll: a frame that stops changing ends it early (the end of the list)', async () => {
     reset(); scrolling({ same: (n) => n > 3 });
@@ -391,6 +405,67 @@ try {
     reset(); scrolling({ act: async (stateId, actions) => { calls.push({ stateId, actions }); return { content: [], details: { status: 'target_closed', execution: { outcome: 'worked' } } }; } });
     r = await run({ steps: [scrollStep] });
     assert.equal(r.report.steps[0].status, 'failed'); assert.match(r.report.error, /was attempted, but the executor reported a problem/); assert.doesNotMatch(r.report.error, /not delivered/);
+  });
+  await test('scroll areas take a looser box (0.3) than click targets (0.5): scrolling changes no data', async () => {
+    assert.throws(() => j.visionSelection(box(.99, .48), image, .55), /box confidence=0.48 \(minimum 0.5\)/);
+    assert.equal(j.visionSelection(box(.99, .48), image, .55, j.SCROLL_BOX_FLOOR).confidence, .48);
+    assert.throws(() => j.visionSelection(box(.99, .2), image, .55, j.SCROLL_BOX_FLOOR), /minimum 0.3/);
+    reset(); scrolling({ seenAt: 1 }); const request = j.jevRuntime.request;
+    j.jevRuntime.request = async (k, b) => b.questions.done ? request(k, b) : (calls.push('box'), tall(.9, .48));
+    const r = await run({ steps: [scrollStep] });
+    assert.deepEqual([r.report.status, r.report.steps[0].scrolls], ['completed', 1], '69651ff8: the contact list at 0.48 is scrolled, not refused');
+    reset(); j.jevRuntime.request = async () => box(.99, .48);
+    const click = await run();
+    assert.match(click.report.error, /minimum 0.5/); assert.equal(acts().length, 0);
+  });
+  await test('find_roots marks a macOS root without a window id; act_ui expect needs accessibility text', () => {
+    const row = (extra) => j.formatWindowLine({ windowRef: '@r31', kind: 'dialog', app: 'WeChat', pid: 6769, windowTitle: '', zOrder: 0, framePoints: { x: 48, y: 79, w: 368, h: 282 }, isOnscreen: true, isModal: true, ...extra });
+    assert.equal(row().includes('no_screenshot'), process.platform === 'darwin', 'macOS captures by window id; elsewhere a root may lack one and still be captured');
+    assert(!row({ windowId: 994 }).includes('no_screenshot'));
+    assert(!row({ kind: 'menu' }).includes('no_screenshot'), 'menus are read from the accessibility tree');
+    const n = (role, title, extra = {}) => ({ role, title, value: '', description: '', pictureOnly: false, canSetValue: false, isTextInput: false, children: [], ...extra });
+    const win = n('AXWindow', 'Weixin'), chrome = [n('AXButton', ''), n('AXButton', ''), n('AXGroup', '')];
+    const canvas = (...more) => ({ root: win, nodes: [win, ...chrome, ...more] });
+    const text = (t, extra = {}) => ({ text: t, gone: false, ...extra });
+    assert.equal(j.expectCannotMatch(canvas(), text('评论')), true, 'WeChat / NetEase: nothing but the title');
+    assert.equal(j.expectCannotMatch(canvas(n('AXImage', 'Sakura', { pictureOnly: true })), text('Sakura')), true, 'OCR text is not in the accessibility tree');
+    assert.equal(j.expectCannotMatch(canvas(n('AXStaticText', '', { value: 'Sakura' })), text('Sakura')), false);
+    // Codex review: an empty native field can take the expected value; the root itself is searched; web areas fill in late.
+    assert.equal(j.expectCannotMatch(canvas(n('AXTextField', '', { canSetValue: true, isTextInput: true })), { value: 'Sakura', gone: false }), false);
+    assert.equal(j.expectCannotMatch(canvas(), text('weixin')), false, 'the window title is matched too');
+    assert.equal(j.expectCannotMatch(canvas(n('AXWebArea', '')), text('Done')), false);
+    assert.equal(j.expectCannotMatch(canvas(), text('评论', { gone: true })), false, 'gone is met at once there, not refused');
+    assert.equal(j.expectCannotMatch(canvas(), text('评论', { scopeRef: '@e5' })), false);
+  });
+  await test('a target-less key or type refused for want of focus was NOT sent, and says how to give it a target', async () => {
+    reset(); j.jevRuntime.act = async () => { throw new Error('keypress has no focus to follow: nothing earlier in this act_ui call clicked a coordinate or an editable control, and the target window is not known to be frontmost.'); };
+    const r = await run({ steps: [{ action: 'key', keys: ['return'] }, step] });
+    assert.deepEqual([r.report.status, r.report.attemptedSteps, r.report.unattemptedSteps, r.report.steps[0].status], ['stopped', 0, 2, 'stopped']);
+    assert.match(r.report.error, /Step 1 was NOT sent: the target window is not in front.*Give the step a target.*add these keys to the type step.*1 later step\(s\) were NOT attempted/);
+    reset(); j.jevRuntime.act = async () => { throw new Error('Input requires foreground'); };
+    const other = await run({ steps: [{ action: 'key', keys: ['return'] }] });
+    assert.equal(other.report.steps[0].status, 'uncertain', 'any other failure during the input stays unverified, not "not sent"');
+  });
+  await test('scroll (Codex review): a tall row clipped at an edge gets short wheels until it is fully in view', async () => {
+    // The list is 400 px (box .1–.9 of a 500 px capture); the row is 120 px tall at content position rowTop.
+    const H = 400, rowHeight = 120;
+    for (const rowTop of [290, 330, 395, 700, 1010]) {
+      reset(); let offset = 0;
+      j.jevRuntime.observe = async (_r, visual) => { observed++; calls.push(`observe:${visual}`); return { content: [{ type: 'image', data: `at${offset}` }], details: { capture: { stateId: `s${observed}`, timestamp: Date.now(), width: 1000, height: 500 }, target: { pid: 1, windowId: 2 }, outline: { root: tree } } }; };
+      j.jevRuntime.request = async (_k, b) => {
+        if (!b.questions.done) return tall();
+        const top = rowTop - offset;
+        return verdict(top >= 0 && top + rowHeight <= H ? .95 : .05, top < H && top + rowHeight > 0 ? .9 : .05);
+      };
+      j.jevRuntime.act = async (stateId, actions) => { calls.push({ stateId, actions }); offset += actions[0].scrollY; return { content: [], details: { capture: { stateId: `after-${stateId}` }, execution: { outcome: 'unknown' } } }; };
+      const r = await run({ steps: [{ ...scrollStep, maxScrolls: 30 }] });
+      assert.equal(r.report.steps[0].stopReason, 'until_seen', `row at ${rowTop}: ${JSON.stringify(r.report.steps[0])}`);
+    }
+    // Without the short wheel the row at 290 would go from clipped at the bottom (290–410) to clipped at the top (−10–110).
+    const list = { point: { x: 1, y: 2 }, box: { top: .1, bottom: .9 } };
+    assert.equal(j.scrollAction(list, 500, 'down').scrollY, 300); assert.equal(j.scrollAction(list, 500, 'down', true).scrollY, 120);
+    assert.equal(j.untilRequest(image, scrollStep).state.item, 'the row titled Blue Skies');
+    assert.match(j.untilRequest(image, scrollStep).questions.done.instructions, /Does state.after show the result described in state.expected/, 'the fully-in-view check is the live-tested expect check');
   });
   console.log(`${passed} Jev checks passed (Jev responses are fixtures; no live API claim).`);
 } finally { Object.assign(j.jevRuntime, originals); await fs.rm(outfile, { force: true }); }

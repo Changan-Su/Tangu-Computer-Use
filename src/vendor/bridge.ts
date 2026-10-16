@@ -601,9 +601,13 @@ function platformRootPairing(window: Pick<HelperWindow, "metadata">): { confiden
 	return { confidence: pairing.confidence, score: typeof pairing.score === "number" && Number.isFinite(pairing.score) ? pairing.score : Number.NEGATIVE_INFINITY };
 }
 
-function formatWindowLine(window: ListWindowsDetails["windows"][number]): string {
+export function formatWindowLine(window: ListWindowsDetails["windows"][number]): string {
 	if (window.kind === "browser_page") return `- ${window.windowRef} browser_page ${JSON.stringify(window.windowTitle)}${window.url ? ` — ${window.url}` : ""}`;
 	const flags = [
+		// 69651ff8: WeChat's search results open in a window of their own that pairs with no window id. The macOS helper
+		// captures by window id ("Window 0 is not available for capture"), and the screenshot of the window under it
+		// leaves it out. Windows / Linux roots may lack an id and still be captured, so this is macOS only.
+		process.platform === "darwin" && !window.windowId && window.kind !== "menu" ? "no_screenshot (a window of its own without a window id: it cannot be captured, and screenshots of the window under it leave it out; observe_ui semantic may still read it)" : undefined,
 		window.isFocused ? "focused" : undefined,
 		window.isMain ? "main" : undefined,
 		window.isModal ? "modal" : undefined,
@@ -1527,6 +1531,19 @@ function outlineConditionPresent(outline: Outline, condition: ReturnType<typeof 
 		.some((match) => (!condition.role || normalizedRole(match.node.role) === normalizedRole(condition.role)) && nodeWithinScope(match.node, condition.scopeRef, condition.scopeExact) && (!condition.value || normalizeText(match.node.value) === normalizeText(condition.value)));
 }
 
+/** act_ui's expect is matched in the accessibility tree only (the helper's axWaitFor). A window drawn as pixels (WeChat,
+ * NetEase Cloud Music) exposes nothing there but its own title and title-bar buttons, so expect.text could never match: the
+ * call would wait out timeoutMs and report a failure for an input that may well have worked (69651ff8: the comments did
+ * open). Only that clear case is refused. Any text, any field that can take a value, any web area (built lazily), a scoped
+ * condition or an expected text that is the window's own title still waits as before (Codex review). */
+export function expectCannotMatch(outline: Pick<Outline, "root" | "nodes">, condition: { text?: string; value?: string; gone: boolean; scopeRef?: string }): boolean {
+	if (condition.gone || condition.scopeRef || !(condition.text || condition.value)) return false;
+	const root = outline.root;
+	if (condition.text && [root.title, root.value, root.description].some((s) => normalizeText(s).includes(normalizeText(condition.text)))) return false;
+	return !outline.nodes.some((node) => !node.pictureOnly && (node.canSetValue || node.isTextInput || /^(AX)?WebArea$/i.test(node.role)
+		|| (node !== root && [node.title, node.value, node.description].some((s) => s?.trim()))));
+}
+
 function conditionScopeNode(outline: Outline, condition: ReturnType<typeof validateCondition>): OutlineNode | undefined {
 	const scopeNode = condition.scopeRef ? nodeByRef(outline, condition.scopeRef) : undefined;
 	if (condition.scopeRef && !scopeNode) throw new Error(`Condition scope ref '${condition.scopeRef}' is unavailable in this state.`);
@@ -1990,6 +2007,9 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 	const look = currentLookOrThrow();
 	const baseView = { stateId: state.currentCapture!.stateId, outline: state.currentOutline! };
 	const condition = params.expect ? validateCondition(params.expect) : undefined;
+	if (condition && expectCannotMatch(look.parsedOutline!, condition)) {
+		throw new Error("expect.text and expect.value are matched in the accessibility tree, and this window exposes nothing there but its own title (it is drawn as pixels), so they could never be met. Nothing was sent. Leave expect out and check the returned screenshot, or use jev_ui with an expect, which Jev checks on a screenshot. If this app builds its accessibility tree late, observe_ui again first.");
+	}
 	const scopeNode = condition ? conditionScopeNode(look.parsedOutline!, condition) : undefined;
 	const target = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 	const noteBefore = state.currentNote;

@@ -2,7 +2,7 @@ import type { AgentToolResult, ExtensionContext } from './pi-compat.ts';
 import type { SerializedOutline, SerializedOutlineNode } from './vendor/outline.ts';
 import { executeObserve, executeAct, type UiAction } from './vendor/bridge.ts';
 import { executionSummary, foregroundNote } from './foregroundNote.ts';
-import { elementRequest, elementSelection, visionRequest, visionSelection, verifyRequest, verifyAnswer, prepareJevImage, readJevConnection, requestJev, jevMode, jevThreshold, JEV_MODEL, type JevMode, type JevStep, type JevSelection, type PreparedImage, VERIFY_FLOOR } from './jev.ts';
+import { elementRequest, elementSelection, visionRequest, visionSelection, verifyRequest, verifyAnswer, untilRequest, untilAnswer, prepareJevImage, readJevConnection, requestJev, jevMode, jevThreshold, JEV_MODEL, type JevMode, type JevStep, type JevSelection, type PreparedImage, VERIFY_FLOOR, BOX_FLOOR, SCROLL_BOX_FLOOR } from './jev.ts';
 
 interface ObservationDetails {
   capture?: { stateId: string; width: number; height: number; timestamp: number };
@@ -18,8 +18,10 @@ export function stopJevRuns(): void { for (const run of active) run.abort(); }
 
 /** How long Jev keeps looking for a step's `expect` (page loads, animations) before handing back; the checks shorten it. */
 export const jevTiming = { verifyWindowMs: 4000, pollMs: 400 };
-/** Whole-run limit grows with the steps (each may wait for its expect); the tool itself times out at 180 s. */
-export const runLimitMs = (steps: number): number => Math.min(170_000, 20_000 + steps * 20_000);
+/** Whole-run limit grows with the steps (each may wait for its expect) and the scrolls they may take (one wheel, wait,
+ * screenshot and check took 2.7–2.9 s live); the tool itself times out at 180 s. */
+export const SCROLL_ROUND_MS = 3000;
+export const runLimitMs = (steps: number, scrolls = 0): number => Math.min(170_000, 20_000 + steps * 20_000 + scrolls * SCROLL_ROUND_MS);
 const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
   const timer = setTimeout(resolve, ms);
   signal.addEventListener('abort', () => { clearTimeout(timer); reject(signal.reason); }, { once: true });
@@ -35,16 +37,19 @@ export function parseJevArgs(args: Record<string, unknown>): JevArgs {
     if (!(focusInput && step.target === undefined) && !phrase(step.target)) throw new Error(`A ${step.action} step needs a target of 1–512 characters${focusInput ? ', or no target to use the current focus' : ''}.`);
     if (step.action === 'fill' && (typeof step.text !== 'string' || step.text.length > 10_000)) throw new Error('A fill step needs text of at most 10,000 characters.');
     if (step.action === 'type' && (typeof step.text !== 'string' || !step.text || step.text.length > 10_000)) throw new Error('A type step needs text of 1–10,000 characters.');
-    if (step.action === 'key' && !(Array.isArray(step.keys) && step.keys.length >= 1 && step.keys.length <= 16 && step.keys.every((k: unknown) => typeof k === 'string' && k.trim() !== '' && k.length <= 32))) throw new Error('A key step needs keys: 1–16 key names, e.g. ["cmd","a"] or ["return"].');
+    // key presses keys; type may end with keys pressed in the same input (type "Sakura", then ["return"]).
+    const keys = step.action === 'key' || (step.action === 'type' && step.keys !== undefined);
+    if (keys && !(Array.isArray(step.keys) && step.keys.length >= 1 && step.keys.length <= 16 && step.keys.every((k: unknown) => typeof k === 'string' && k.trim() !== '' && k.length <= 32))) throw new Error(`A ${step.action} step needs keys: 1–16 key names, e.g. ["cmd","a"] or ["return"]${step.action === 'type' ? ', or no keys' : ''}.`);
     if (step.action === 'scroll') {
       if (!phrase(step.until)) throw new Error('A scroll step needs until: what must come into view, in 1–512 characters.');
       if (step.direction !== undefined && step.direction !== 'down' && step.direction !== 'up') throw new Error('direction must be down or up.');
       if (step.expect !== undefined) throw new Error('A scroll step is checked by until; leave expect out.');
-    }
+      if (step.maxScrolls !== undefined && !(Number.isInteger(step.maxScrolls) && step.maxScrolls >= 1 && step.maxScrolls <= MAX_SCROLLS_LIMIT)) throw new Error(`maxScrolls must be a whole number from 1 to ${MAX_SCROLLS_LIMIT}.`);
+    } else if (step.maxScrolls !== undefined) throw new Error('maxScrolls only applies to a scroll step.');
     if (step.expect !== undefined && !phrase(step.expect)) throw new Error('expect must describe the expected screen in 1–512 characters.');
     return { action: step.action, ...(step.target !== undefined ? { target: step.target.trim() } : {}),
-      ...(step.action === 'fill' || step.action === 'type' ? { text: step.text } : {}), ...(step.action === 'key' ? { keys: [...step.keys] } : {}),
-      ...(step.action === 'scroll' ? { until: step.until.trim(), direction: step.direction ?? 'down' } : {}), ...(step.expect ? { expect: step.expect.trim() } : {}) };
+      ...(step.action === 'fill' || step.action === 'type' ? { text: step.text } : {}), ...(keys ? { keys: [...step.keys] } : {}),
+      ...(step.action === 'scroll' ? { until: step.until.trim(), direction: step.direction ?? 'down', maxScrolls: step.maxScrolls ?? MAX_SCROLLS } : {}), ...(step.expect ? { expect: step.expect.trim() } : {}) };
   });
   if (args.mode !== undefined && !['auto', 'elements', 'vision'].includes(String(args.mode))) throw new Error('Unknown Jev mode.');
   if (args.preview !== undefined && typeof args.preview !== 'boolean') throw new Error('preview must be boolean.');
@@ -55,9 +60,12 @@ export function parseJevArgs(args: Record<string, unknown>): JevArgs {
 
 export function selectedActions(step: JevStep, selection: JevSelection | undefined, nodes: SerializedOutlineNode[]): UiAction[] {
   if (step.action === 'type' || step.action === 'key') {
-    const input: UiAction = step.action === 'type' ? { action: 'typeText', text: step.text } : { action: 'keypress', keys: step.keys };
-    // The click in the same call is what puts the focus there; with no target the input follows the current focus.
-    return selection?.point ? [{ action: 'click', ...selection.point }, input] : [input];
+    const inputs: UiAction[] = step.action === 'type' ? [{ action: 'typeText', text: step.text }] : [];
+    if (step.keys) inputs.push({ action: 'keypress', keys: step.keys });
+    // The click in the same call puts the focus there and the rest follows it. With no target the input follows the current
+    // focus, which the executor only allows while the target window itself is in front: anything else could type into
+    // another window of the app (Codex review: naming a point instead would post to the app's key window, maybe another chat).
+    return selection?.point ? [{ action: 'click', ...selection.point }, ...inputs] : inputs;
   }
   if (!selection) throw new Error('This step needs a located target.');
   const node = nodes.find((n) => n.ref === selection.ref);
@@ -69,12 +77,16 @@ export function selectedActions(step: JevStep, selection: JevSelection | undefin
   throw new Error('Jev fill requires a native editable element supporting setText. Visual/keyboard fill is not supported; use the ordinary tools to inspect and fill this field.');
 }
 
-/** A scroll step scrolls at most this often. Each scroll moves half the list's height (at least a tenth of the window),
- * so nothing slides past between two checked frames even when the wheel travels further than asked. */
-export const MAX_SCROLLS = 8;
-export function scrollAction(selection: JevSelection, captureHeight: number, direction: JevStep['direction']): UiAction {
+/** A scroll step scrolls at most maxScrolls times: this many unless the step asks for more, up to the limit (estimate:
+ * the S names in a 260-contact list sit about 20 scrolls down). Each scroll moves three quarters of the list's height (at least a tenth of the window):
+ * a quarter overlaps between two checked frames, so a row cannot slide past unseen even when the wheel travels a
+ * quarter further than asked. 69651ff8: half a list per wheel took 8 scrolls and 23 s to cover 4 screens of contacts. */
+export const MAX_SCROLLS = 12, MAX_SCROLLS_LIMIT = 30;
+/** near = Jev sees part of the until item at an edge: then a short wheel (0.3 of the list), so a row up to 0.7 of the list
+ * tall comes fully into view instead of jumping from clipped at one edge to clipped at the other. */
+export function scrollAction(selection: JevSelection, captureHeight: number, direction: JevStep['direction'], near = false): UiAction {
   const { top, bottom } = selection.box!;
-  const distance = Math.round(Math.max(0.5 * (bottom - top), 0.1) * captureHeight);
+  const distance = Math.round(Math.max((near ? 0.3 : 0.75) * (bottom - top), 0.1) * captureHeight);
   return { action: 'scroll', ...selection.point!, scrollY: direction === 'up' ? -distance : distance };
 }
 
@@ -100,8 +112,7 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
   if (!enabled() || config.jev_enabled !== true) throw new Error('Enable Jev experimental acceleration in Computer Use settings first.');
   const connection = jevRuntime.connection(config);
   const mode = params.mode ?? jevMode(config.jev_mode), threshold = jevThreshold(config.jev_threshold), verifyThreshold = Math.max(threshold, VERIFY_FLOOR);
-  // A scroll step can take up to MAX_SCROLLS rounds, so it counts twice.
-  const limitMs = runLimitMs(params.steps.length + params.steps.filter((s) => s.action === 'scroll').length);
+  const limitMs = runLimitMs(params.steps.length, params.steps.reduce((n, s) => n + (s.maxScrolls ?? 0), 0));
   const controller = new AbortController();
   const timeout = AbortSignal.timeout(limitMs);
   const abort = AbortSignal.any([controller.signal, timeout, ...(signal ? [signal] : [])]);
@@ -181,7 +192,7 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
         const answer = await jevRuntime.request(connection, visionRequest(prepared, step), abort);
         item.decisionMs = Number(item.decisionMs) + Math.round(performance.now() - decisionStart);
         item.inputTokens = Number(item.inputTokens ?? 0) + Number(answer.usage?.input_tokens ?? 0);
-        selection = visionSelection(answer, prepared, threshold);
+        selection = visionSelection(answer, prepared, threshold, step.action === 'scroll' ? SCROLL_BOX_FLOOR : BOX_FLOOR);
         nodes = [];
       }
       // type / key without a target go to the current focus: nothing to locate, but the check compares with this frame.
@@ -198,21 +209,21 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
       if (params.preview) { item.status = 'preview'; item.elapsedMs = Math.round(performance.now() - stepStart); return { report: report('preview'), last }; }
       if (step.action === 'scroll') {
         // Jev scrolls the area it located until `until` is fully in view, checking every new frame itself.
-        const goal: JevStep = { ...step, expect: `${step.until} (fully in view, not cut off at an edge)` };
         const scrollStart = performance.now();
-        let frame = prepared!, scrolls = 0, seen = 0, tokens = 0, stopReason = '';
+        let frame = prepared!, scrolls = 0, seen = 0, near = false, tokens = 0, stopReason = '';
         const area = { width: d.capture!.width, height: d.capture!.height };
         const look = async (before?: PreparedImage) => {
           check();
-          const answer = await jevRuntime.request(connection, verifyRequest(frame, goal, before), abort);
+          const answer = await jevRuntime.request(connection, untilRequest(frame, step, before), abort);
           tokens += Number(answer.usage?.input_tokens ?? 0);
-          seen = verifyAnswer(answer);
+          const looked = untilAnswer(answer);
+          seen = looked.seen; near = looked.near >= 0.5;
           return seen >= verifyThreshold;
         };
         try {
           if (await look()) stopReason = 'until_seen';
           while (!stopReason) {
-            if (scrolls === MAX_SCROLLS) { stopReason = 'max_scrolls'; break; }
+            if (scrolls === step.maxScrolls) { stopReason = 'max_scrolls'; break; }
             // The list was located once. Its point holds while the window keeps its size, so a frame left old by a slow
             // answer is just observed again; a window that changed size no longer vouches for that point.
             if (Date.now() - d.capture!.timestamp > 5000) d = await observe(true);
@@ -221,7 +232,7 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
             if (!scrolls) { attempted++; item.status = 'attempted'; }
             last = undefined;
             inputPending = true;
-            last = await jevRuntime.act(d.capture!.stateId, [scrollAction(selection!, d.capture!.height, step.direction)], ctx, abort);
+            last = await jevRuntime.act(d.capture!.stateId, [scrollAction(selection!, d.capture!.height, step.direction, near)], ctx, abort);
             inputPending = false;
             scrolls++;
             const after = last.details as ObservationDetails;
@@ -248,14 +259,14 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
           const why = (e instanceof Error ? e.message : String(e)).replace(/[;.]?\s*no action was taken for this step\.?/i, '.');
           throw new Error(`Step ${i + 1} scrolled ${scrolls} time(s) and then stopped: ${why} ${params.steps.length - attempted} later step(s) were NOT attempted. Look at the returned screenshot before continuing.`);
         }
-        Object.assign(item, { scrolls, stopReason, seen: +seen.toFixed(3), scrollMs: Math.round(performance.now() - scrollStart), inputTokens: Number(item.inputTokens ?? 0) + tokens, elapsedMs: Math.round(performance.now() - stepStart) });
+        Object.assign(item, { scrolls, maxScrolls: step.maxScrolls, stopReason, seen: +seen.toFixed(3), scrollMs: Math.round(performance.now() - scrollStart), inputTokens: Number(item.inputTokens ?? 0) + tokens, elapsedMs: Math.round(performance.now() - stepStart) });
         if (stopReason !== 'until_seen') {
           item.status = stopReason === 'input_failed' ? 'failed' : scrolls ? 'unverified' : 'stopped';
           const later = `${params.steps.length - attempted} later step(s) were NOT attempted. Look at the returned screenshot`;
           throw new Error(stopReason === 'input_failed' ? `Step ${i + 1}'s scroll #${scrolls} was attempted, but the executor reported a problem; ${later} and its execution facts before continuing, and do not replay it blindly.`
             : stopReason === 'window_resized' ? `Step ${i + 1}: the window changed size after ${scrolls} scroll(s), so the located list may have moved; ${later}, then locate it again with a new jev_ui call.`
             : stopReason === 'no_change' ? `Step ${i + 1}: the area stopped moving after ${scrolls} scroll(s) (the end of the list, or nothing scrolls at that point) and until is not in view; ${later}: it may be in the other direction or worded differently from what is drawn.`
-            : `Step ${i + 1} scrolled ${MAX_SCROLLS} times without until coming fully into view (Jev visual check ${seen.toFixed(2)}, minimum ${verifyThreshold}); ${later}: it may be further away (call again to keep scrolling), in the other direction, or worded differently from what is drawn.`);
+            : `Step ${i + 1} scrolled ${step.maxScrolls} times without until coming fully into view (Jev visual check ${seen.toFixed(2)}, minimum ${verifyThreshold}); ${later}: it may be further away (call again to keep scrolling, with a larger maxScrolls of up to ${MAX_SCROLLS_LIMIT} for a long list), in the other direction, or worded differently from what is drawn.`);
         }
         if (!scrolls) attempted++;
         confirmed++;
@@ -270,7 +281,14 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
       // If native input is interrupted, the pre-action observation is stale and must not be returned.
       last = undefined;
       inputPending = true;
-      last = await jevRuntime.act(d.capture!.stateId, actions, ctx, abort);
+      try {
+        last = await jevRuntime.act(d.capture!.stateId, actions, ctx, abort);
+      } catch (e) {
+        // Refused before any input went out: the target window is not in front (69651ff8: WeChat's own search popup was).
+        if (step.target !== undefined || !/has no focus to follow/.test(e instanceof Error ? e.message : String(e))) throw e;
+        inputPending = false; attempted--; item.status = 'stopped';
+        throw new Error(`Step ${i + 1} was NOT sent: the target window is not in front (another window, such as the app's own popup, is), so ${step.action} without a target has no focus to follow. Give the step a target, the field the input is for, so Jev clicks it first${step.action === 'key' ? ', or add these keys to the type step that fills that field' : ''}. ${params.steps.length - i - 1} later step(s) were NOT attempted.`);
+      }
       inputPending = false;
       item.actionMs = Math.round(performance.now() - actStart);
       const after = last.details as ObservationDetails;

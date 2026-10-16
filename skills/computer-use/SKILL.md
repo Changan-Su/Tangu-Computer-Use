@@ -28,13 +28,17 @@ from `find_roots` and 1–8 steps:
 - `{action:"click"|"double_click", target, expect}`: use `double_click` where the app needs it
   (playing a song row, opening a file).
 - `{action:"fill", target, text, expect}`: native text fields only (atomic setText).
-- `{action:"type", target?, text, expect}`: clicks the target when given, then types at the caret.
-  Use it on canvas, CEF and web windows, where `fill` is refused. It does not clear the field.
+- `{action:"type", target?, text, keys?, expect}`: clicks the target when given, then types at the caret.
+  Use it on canvas, CEF and web windows, where `fill` is refused. It does not clear the field. `keys`
+  (e.g. `["return"]`) are pressed right after the text, in the same input: for a search box or a form,
+  never to send a message (that Return is an irreversible step of its own, after you checked the screenshot).
 - `{action:"key", target?, keys, expect}`: `["return"]`, `["cmd","a"]` (one chord, modifiers first)
-  or `["cmd+a","delete"]` (in turn); after clicking the target when given, else to the current focus.
-- `{action:"scroll", target, until, direction?}`: the target is the list or panel. Jev scrolls it (at
-  most 8 times, down unless `direction:"up"`) until `until` is fully in view, checking every frame
-  itself. Put the click on that item right after it, in the same call.
+  or `["cmd+a","delete"]` (in turn); after clicking the target when given, else to the current focus,
+  which only works while that window is in front: otherwise give it the field as `target`.
+- `{action:"scroll", target, until, direction?, maxScrolls?}`: the target is the list or panel. Jev
+  scrolls it (down unless `direction:"up"`; three quarters of the list per wheel, short wheels once part of
+  the item shows; at most `maxScrolls` times: 12 by default, up to 30 for a long list such as all contacts) until `until` is fully in view, checking every frame itself. Put the
+  click on that item right after it, in the same call.
 
 Jev locates each target on a fresh observation, sends the input, then checks `expect` on new
 screenshots for up to 4 s (page loads included) before the next step, with no main-model round trip
@@ -104,6 +108,14 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
   with `find_roots`; do not omit the root and switch to the frontmost app by accident.
 - **Prefer the accessibility text** over the screenshot. Fall back to the image only when the tree is
   incomplete (`pictureOnly` nodes are coordinate-only).
+- **Act only on what you can see.** Never pick a search result, list row or chat that no screenshot or
+  accessibility text shows you: arrow keys + Return into an unseen results list opens whatever comes
+  first, often a group chat. When `find_roots` marks the results window `no_screenshot`, find the person
+  or item in a list you can see (the contact list, the chat list), or open the candidate and read its
+  name in the window header before typing anything.
+- `act_ui`'s `expect.text` / `expect.value` are matched in the accessibility tree. In a window drawn as
+  pixels (no text in its outline) they can never be met and the call is refused: leave `expect` out and
+  read the returned screenshot, or let `jev_ui` check an `expect` visually.
 - **Coordinates are pixels in the attached screenshot.** A result that attaches a screenshot states its
   size on an `[image]` line. The screenshot is the target window only, scaled down; `x`/`y` and `drag`
   paths are read straight off it, origin top-left. Never convert them to screen points or to the window

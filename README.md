@@ -105,16 +105,19 @@ a later screenshot).
 **Division of labour.** The main model plans; Jev executes and judges. The model passes up to eight
 steps (`click`, `double_click`, `fill`, `type`, `key`, `scroll`), each with the `target` and an `expect`
 — what the window shows once that step worked. `type` clicks its target (when given) and types at the
-caret, so it works on canvas, CEF and web fields where `fill` is refused; `key` sends keys such as
-`["return"]`; `scroll` names the list and an `until`, and Jev scrolls it (at most 8 times, half the
-list each) until `until` is fully in view, checking every frame itself. For every step Jev locates the target on a fresh observation (accessibility
+caret, so it works on canvas, CEF and web fields where `fill` is refused, and may press keys such as
+`["return"]` right after the text; `key` sends keys such as `["return"]` (after clicking its target when given); `scroll` names the list and an `until`, and Jev scrolls it (three quarters of the
+list per wheel, short wheels once part of the item shows, at most `maxScrolls` times: 12 by default,
+up to 30) until `until` is fully in view,
+checking every frame itself. For every step Jev locates the target on a fresh observation (accessibility
 candidates first in Auto, a visual Box otherwise), the shared `act_ui` executor sends the input, and Jev
 compares before/after screenshots against `expect`. A canvas click the native layer cannot confirm is
 therefore still confirmed when the screen shows the expected result, and the run moves on.
 
 **分工：**主模型布置任务，Jev 负责点和看。一次最多八步（单击、双击、填写、打字、按键、滚动），每步写清目标和
 `expect`（这一步成功后窗口应当是什么样）。打字先点目标（给了的话）再在光标处输入，自绘 / CEF / 网页输入框也能用；
-按键发 `["return"]` 这类键；滚动写明是哪个列表和 `until`（要滚到能看见什么），Jev 每次滚半个列表、最多 8 次，
+打完字可以紧接着按键（比如 `["return"]`）；按键发 `["return"]` 这类键，给了目标就先点它；
+滚动写明是哪个列表和 `until`（要滚到能看见什么），Jev 每次滚四分之三个列表、露出一部分后改小步，最多 `maxScrolls` 次（缺省 12，最多 30），
 每滚一次自己看一眼，看全了就停。每一步 Jev 在新截图上定位（自动模式先试无障碍元素，否则视觉 Box），
 由与 `act_ui` 同一个执行器发出输入，再拿前后两张截图对照 `expect` 判断成没成。自绘界面的点击原生层确认不了，
 只要画面出现了预期结果就算确认，接着做下一步。
