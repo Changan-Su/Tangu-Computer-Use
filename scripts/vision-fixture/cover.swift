@@ -1,5 +1,5 @@
 // pid-window 探针的「盖窗」:一个普通窗口,起来就把自己激活、盖在 --frame 指定的位置上(就是被测窗口的位置)。
-// 它收到的鼠标 / 滚轮事件、自己被激活 / 失活都记进状态文件:投给别的进程的事件如果误落到最前面的窗口上,这里会看到。
+// 它收到的鼠标 / 滚轮事件、自己被激活 / 失活、真鼠标挪没挪都记进状态文件:投给别的进程的事件如果误落到最前面的窗口上,这里会看到。
 // 命令行:<exe> <statePath> --frame x,y,w,h(整个窗口,全局屏幕点、左上角原点,与 CGWindowList bounds 同一约定)
 import AppKit
 
@@ -58,6 +58,15 @@ final class Delegate: NSObject, NSApplicationDelegate {
 			}
 		}
 		let screenHeight = NSScreen.screens.first?.frame.height ?? frame.maxY
+		// 真鼠标动没动:每 250ms 看一眼光标(不要授权),变了就记一条 cursorMoved(全局点、左上角原点)。
+		// 后台投递不该动它;升到前台的物理点击会把它挪到目标上。
+		var cursor = NSEvent.mouseLocation
+		Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+			let now = NSEvent.mouseLocation
+			guard now != cursor else { return }
+			cursor = now
+			log("cursorMoved", "\(Int(now.x)),\(Int(screenHeight - now.y))")
+		}
 		window.setFrame(NSRect(x: frame.minX, y: screenHeight - frame.maxY, width: frame.width, height: frame.height), display: false)
 		window.title = "Probe cover"
 		window.contentView = Pad()

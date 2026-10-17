@@ -190,7 +190,7 @@ try {
   const mouseAt = async (p) => { const m = await ask({ cmd: 'getMousePosition' }); const g = global(p); return Math.abs(m.x - g.x) < 2 && Math.abs(m.y - g.y) < 2 }
   const stillCovered = async (what) => {
     assert.equal((await frontmost()).pid, cover.pid, `${what}:前台应还是盖窗(没被抢)`)
-    assert.equal(waitForStateNow(coverState).events.filter((e) => /mouse|scroll/i.test(e.kind)).length, 0, `${what}:事件落到了盖窗上`)
+    assert.equal(waitForStateNow(coverState).events.filter((e) => /mouse|scroll|cursor/i.test(e.kind)).length, 0, `${what}:事件落到了盖窗上,或真鼠标动了`)
   }
 
   // ── ③a 对这个窗口的第一次滚动 ──(放在任何点击 / 滚动之前)
