@@ -1,11 +1,5 @@
 # 更新日志
 
-## 0.7.2-jev.7 — 2026-10-17（开发实验 / development experiment）
-
-- 「后台窗口的第一下点击被焦点吞掉」（Tangu 10-17 自己记进 HARNESS.md 的那条）：物理点击前 helper 叫目标 App 激活，激活是异步的（替身实测 66–221ms），原来只等 20ms，点击常赶在激活之前到；视图不接受首击的 App（AppKit 缺省）把这一下只当激活用掉，什么也没点上，结果 unknown，模型只好再点一次。现在物理点击前等目标自己报在最前（AXFrontmost），每次动作最多等 0.5s；系统不让它到前台就和以前一样照发。这类视图在 App 不在前台时连投给 pid 的点击也一下都不收（截图没变 → 升前台），所以升前台那一下是唯一能点上的。helper 协议 19。
-- 新检查 `check:first-click`（会动真鼠标）：替身 FirstClickFixture 的视图不接受首击，后台点击必须判 didnt、前台点击每一下都要在 App 到前台后落到视图上。
-- Before a physical click the helper now waits (at most 0.5s per action) until the target app reports itself frontmost, instead of 20ms; the click used to arrive before activation finished and views that do not accept first mouse used it only to activate the window. Helper protocol 19. New real-mouse check `check:first-click`.
-
 ## 0.7.2-jev.6 — 2026-10-17（开发实验 / development experiment）
 
 - 后台操作的可见反馈（用户 10-17 在 dev 里试 2d040aa 报的两条）：

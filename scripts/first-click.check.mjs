@@ -1,16 +1,14 @@
 #!/usr/bin/env node
 /**
- * 「第一下点击被焦点吞掉」(真 helper,会动真鼠标):App 不在前台时,一下物理点击能不能真的点到视图上。
- * 10-17 dev 里 Tangu 自己记进 HARNESS:「后台窗口第一次点击常只用于获取焦点,需再点一次」。查下来:
- * - 视图不接受首击(acceptsFirstMouse = NO,AppKit 缺省)时,App 不在前台,投给 pid 的点击一下都不交给视图(不只第一下)。
- *   截图没变 → 判 didnt → 插件升前台用物理点击重来。
- * - 物理点击前 helper 叫 App 激活,激活是异步的(替身实测 66–221ms),原来只等 20ms:点击常赶在激活之前到,
- *   App 把它只当激活用掉,视图什么也没收到,结果 unknown —— 模型只好再点一次。
- * 修法(协议 19):物理点击前等目标自己报在最前(AXFrontmost),最多 0.5s。
- *
- * 做法:替身 FirstClickFixture(acceptsFirstMouse 缺省)在后台起 TRIALS 次,每次一下前台策略的点击,替身必须在前台时收到
- * mouseDown;另有一次后台策略的点击,helper 必须判 didnt(这是升前台的前提)且视图没收到。负对照:jev.6(协议 18)的 helper
- * 加 --any-protocol 跑,前台那几下会有被吞的。
+ * 视图不接受首击的 App 在后台时,一下坐标点击能不能点上(真 helper,会动真鼠标)。
+ * 10-17 dev 里 Tangu 自己记进 HARNESS:「后台窗口第一次点击常只用于获取焦点,需再点一次」(真微信朋友圈那场)。
+ * 核查(10-17):那场里前两下后台点击都落下了;没落下的那次后台 + 前台重放两下都没点上(微信 4.1 是 Qt,acceptsFirstMouse 恒 YES,
+ * 不是首击规则)。替身上量到的是:
+ * - 视图不接受首击(acceptsFirstMouse = NO,AppKit 缺省)时,App 不在前台,投给 pid 的点击一下都不交给视图(不只第一下),
+ *   helper 截图判 didnt,插件升前台用物理点击重来 —— 这一下要真点上。Chatter / Melody 都返回 YES,台架测不到这条路。
+ * - 旧 helper(jev.5 / main)前台那下 10/10 都在 App 到前台后才到视图,没有被激活吞掉。
+ * 本检查钉这两条:后台那一下必须判 didnt(升前台的前提;0.7.1 / 协议 16 的 helper 不带窗口号、判不了,这里红),
+ * 前台那几下每一下都要在 App 到前台后落到视图上。
  * ⚠️会动真鼠标(点完还原)、替身会短暂到前台:跑之前占 devlock、先问过用户。点之前 helper 自己核对这一点最上面是替身的窗口。
  *
  * 跑法:node scripts/first-click.check.mjs [--trials 5] [--any-protocol](PI_COMPUTER_USE_HELPER_APP_PATH 可指定 helper;要辅助功能,后台那一下还要录屏)
@@ -108,10 +106,10 @@ try {
   const failures = []
   for (let i = 1; i <= TRIALS; i++) {
     const { result, events } = await clickOnce(app, 'foreground', i)
-    const down = events.find((e) => e.kind === 'mouseDown')
-    const line = `foreground ${i}: ${result.ok ? `sent, waited ${result.result.performed?.frontmostWaitMs ?? 'n/a'}ms` : `error ${result.error?.code}`}; view ${down ? `got the click (active=${down.active})` : 'got nothing'}; ${events.map((e) => e.kind).join(' ')}`
+    const downs = events.filter((e) => e.kind === 'mouseDown'), down = downs[0]
+    const line = `foreground ${i}: ${result.ok ? `sent` : `error ${result.error?.code}`}; view ${down ? `got the click (active=${down.active})` : 'got nothing'}; ${events.map((e) => e.kind).join(' ')}`
     console.log(line)
-    if (!result.ok || !down || !down.active) failures.push(line)
+    if (!result.ok || downs.length !== 1 || !down.active) failures.push(line) // 两下 = 重复投递,同样算错
   }
   assert.deepEqual(failures, [], 'a physical click on a background app must reach the view once the app is in front')
   console.log(`PASS ${TRIALS}/${TRIALS} physical clicks on a background app reached the view`)
