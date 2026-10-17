@@ -112,6 +112,15 @@ replay it** (`npm run check:actions`, part of `npm run check`, goes red if it is
   `helperAct()` in `bridge.ts` counts, per pid and kind (click / scroll), background attempts in a row that
   changed nothing on screen; at two it sends later ones straight to the foreground (`backgroundPointerMisses`;
   one miss is not enough, a click on an already-selected row changes nothing too).
+- `focusTargetForPhysicalInput()` in `bridge.swift` (protocol 19): before a physical (HID) click it waits, once per
+  action and at most 0.5s, until the target app itself reports `AXFrontmost` (upstream: `activate()` + 20ms).
+  Activation is asynchronous (66–221ms measured on a stand-in, 10-17), so the click used to reach the app
+  before it was active, and a view that does not accept first mouse (AppKit's default) spent it on activating
+  the window: nothing clicked, `unknown`, the model clicks again — what Tangu wrote into HARNESS.md as "the
+  first click on a background window is eaten by focus". Such a view also drops **every** pid-posted click
+  while its app is inactive (the screenshot check sees no change and the click goes to the foreground), so
+  the foreground retry is the only click that can land there. Qt apps (WeChat 4.x) accept first mouse and take
+  pid clicks. `npm run check:first-click` (`FirstClickFixture`, real mouse) asserts both.
 - `scrollInPoints()` in `bridge.ts`, applied in `dispatchUiAction()` (macOS, coordinate scroll): the distance
   is given in the screenshot's pixels, like `x` / `y`, and converted to the screen points the helper scrolls
   in (`framePoints.w / look.image.width`). Upstream passes it through raw, so the same number means twice
@@ -205,7 +214,7 @@ Accessibility/Screen-Recording (TCC) grants to them.
 > stays put, everything else goes to `~/Applications` (no admin needed). Users whose `/Applications`
 > is not writable will be asked to re-grant TCC once, because the path moved.
 
-**Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **17**, in two places that must
+**Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **19**, in two places that must
 always match: `native/macos/bridge.swift` (`private let protocolVersion`) and
 `src/vendor/platform/macos/helper.ts` (`HELPER_PROTOCOL_VERSION`) — `npm run check:platform` fails when they
 differ. Checks never hard-code the number: they read it from those two files through

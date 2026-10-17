@@ -386,7 +386,7 @@ struct PidWindow {
 }
 
 final class Bridge {
-	private let protocolVersion = 18
+	private let protocolVersion = 19
 	/// 截图里变了超过这么多像素(缩到最长边 800 后)才算「画面变了」:光标闪烁、JPEG 噪声在这之下。
 	static let pixelChangeThreshold = 12
 	/// NSEvent 带窗口号造出来的 CGEvent 里,窗口号在这个字段(CGEventTypes.h 没有它)。
@@ -2307,6 +2307,7 @@ final class Bridge {
 			return true
 		}
 
+		var waitedForFront = false
 		func focusTargetForPhysicalInput() {
 			guard delivery == "hid" else { return }
 			if let app = NSRunningApplication(processIdentifier: pid), !app.isActive {
@@ -2318,7 +2319,12 @@ final class Bridge {
 				_ = AXUIElementSetAttributeValue(window, kAXFocusedAttribute as CFString, kCFBooleanTrue)
 				performed["raised"] = AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success
 			}
-			usleep(20_000)
+			// 激活是异步的(10-17 替身实测 66–221ms 才到前台),原来只等 20ms:物理点击常赶在激活之前到,
+			// 视图不接受首击的 App(AppKit 缺省)把这一下只当激活用掉,什么也没点上 —— 「第一下点击被焦点吞掉」。
+			// 每次动作只等一回(preflight / requireUncovered 会再调这里);系统不让它到前台就等满 0.5s 照发(和以前一样由这一下去激活)。
+			if waitedForFront { usleep(20_000); return }
+			waitedForFront = true
+			performed["frontmostWaitMs"] = waitUntilFrontmost(pid: pid)
 		}
 
 		func preflight(_ point: CGPoint) throws {
@@ -4190,6 +4196,22 @@ final class Bridge {
 			flags.insert(flag)
 		}
 		return (flags, keys.last ?? "")
+	}
+
+	/// 等目标 App 自己说「我在最前」(AXFrontmost,由它自己的 NSApp.isActive 回答):答 true 时它已经处理完激活,
+	/// 随后到的点击不会再被当成激活用的首击。返回等了多少毫秒,0.5s 还没到前台 = -1。
+	private func waitUntilFrontmost(pid: Int32, timeout: TimeInterval = 0.5) -> Int {
+		let app = AXUIElementCreateApplication(pid)
+		AXUIElementSetMessagingTimeout(app, 0.2)
+		let started = Date()
+		repeat {
+			var value: CFTypeRef?
+			if AXUIElementCopyAttributeValue(app, kAXFrontmostAttribute as CFString, &value) == .success, (value as? Bool) == true {
+				return Int(Date().timeIntervalSince(started) * 1000)
+			}
+			usleep(15_000)
+		} while Date().timeIntervalSince(started) < timeout
+		return -1
 	}
 
 	/// 物理按键只会落到最前面的 App。目标不在最前就不发:helper 自己是后台 App,系统(协作式激活)常拒绝它去激活别的 App,

@@ -1,6 +1,6 @@
 {
   "name": "@forsion/tangu-computer-use",
-  "version": "0.7.2-jev.6",
+  "version": "0.7.2-jev.7",
   "description": "Tangu engine plugin: let agents observe and control macOS, Windows, and Linux desktop apps. Fork of injaneity/pi-computer-use (MIT).",
   "type": "module",
   "license": "MIT",
@@ -53,6 +53,7 @@
     "check:permissions": "node scripts/permissions.check.mjs",
     "check:plugin": "node check.mjs",
     "check:desk": "node scripts/desk-present.check.mjs",
+    "check:first-click": "node scripts/first-click.check.mjs",
     "check:platform": "node scripts/platform-contract.check.mjs",
     "check:actions": "node scripts/actions.check.mjs",
     "check:blindclick": "node scripts/blind-click.check.mjs",

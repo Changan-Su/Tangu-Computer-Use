@@ -26,6 +26,8 @@ export const FIXTURES = {
   chatter: { source: 'scripts/vision-fixture/chatter.swift', name: 'ChatterFixture', bundleId: 'com.forsion.cu-fixture.chatter', size: { w: 900, h: 640 } },
   // pid-window 探针的盖窗(scripts/pid-window.probe.mjs):不是被测对象,盖在被测窗口上面、记下误落到自己身上的事件
   cover: { source: 'scripts/vision-fixture/cover.swift', name: 'CoverFixture', bundleId: 'com.forsion.cu-fixture.cover', size: { w: 600, h: 400 } },
+  // first-click 检查的替身:视图不接受首击(AppKit 缺省),Chatter / Melody 都接受,测不到「点击被激活吞掉」
+  firstmouse: { source: 'scripts/vision-fixture/firstmouse.swift', name: 'FirstClickFixture', bundleId: 'com.forsion.cu-fixture.firstclick', size: { w: 600, h: 400 } },
 }
 
 /**
