@@ -8,7 +8,7 @@
   - 文字识别读到叠窗那块的字时，挂在大纲根下当图片文字，不挂进下面被盖住的节点、也不和它们去重 —— 否则被盖住的那一行会带上下拉里的名字，按 ref 点就点到了被盖住的那一行。
   - 文字识别加上中文：语言设成简体、繁体中文和英文（原来没设，Vision 只认英文，中文读成「жлa」「฿ёx#t」）。中文模型给英文配全角标点，识别结果里的全角 ASCII 折回半角，英文和原来逐字一样。自动检测没用：中英混排的名字（「Sakura 粉丝群」）照样读烂。
   - 提示词 / 技能：叠窗画进截图时看着下拉里的名字按坐标点对的那一行；截图里也没有结果时才改去看得见的列表里找。
-  - 提示词 / 技能（收件人）：用户点名的人 / 聊天在屏幕上没有完全同名的，先在 App 里搜（没有搜索框就滚列表）；屏幕上或搜索结果里正好一个完全同名就是收件人，照常直接发；搜完还是没有、或者不止一个，才问，并照 App 里看到的列出最接近的几个。10-17 live 的 cusearch 有一次 Sakura 不在聊天列表里，模型没搜就先问了；用户 10-17 定：搜到唯一同名不算歧义。
+  - 提示词 / 技能（收件人）：用户点名的人 / 聊天在屏幕上没有完全同名的，先在 App 里搜（没有搜索框就滚列表）；屏幕上或搜索结果里正好一个完全同名就是收件人，照常直接发；搜完还是没有、或者不止一个，才问，并照 App 里看到的列出最接近的几个（搜不出东西时列列表里见过的相近名字）。10-17 live 的 cusearch 有一次 Sakura 不在聊天列表里，模型没搜就先问了；用户 10-17 定：搜到唯一同名不算歧义。
 - 替身 Chatter 加 `--popup`：搜索结果在一扇单独的浮动窗口里（`.floating` 层、不抢键盘、配不上窗口号，和微信那扇一样），排在前面的是两个群（「Sakura 粉丝群」「Sakura 读书会」），回车开第一个、↓ + 回车开第二个，盲按都落在群上；Sakura 不在聊天列表里，只能搜出来。冒烟加这一页：主窗口截图里要有下拉（`overlays = 1`，第一行的浅绿、第二行的白落在对应位置）；只截主窗口的老 helper 在这里失败。
 - 新检查 `check:capture-overlays`（不要授权）：哪些窗口要画进来（拿 10-16 量到的微信窗口表当夹具）、全角折半角、Vision 用 helper 的语言设置读一张自己画的中英文图。
 - The helper half of feedback 69651ff8 (ships with the plugin; dev cannot use the production helper for it):
@@ -16,7 +16,7 @@
   - The image reports `overlays`; the `[image]` note says so and to click there by x / y, never by the ref of a row it covers; `no_screenshot` now says such a root shows in the screenshot of the window under it.
   - OCR text inside a drawn-in window hangs at the outline root as picture-only text instead of on the covered nodes.
   - OCR reads Simplified and Traditional Chinese as well as English; full-width ASCII in its output is folded to half-width, so English reads exactly as before.
-  - Prompt and skill (recipients): when nothing on screen reads exactly the name the user gave, search the app for it (or scroll the list) before asking; exactly one exact match on screen or in the results is the recipient and is sent to as before; ask, naming the closest entries the app showed, only when the search still finds none or more than one.
+  - Prompt and skill (recipients): when nothing on screen reads exactly the name the user gave, search the app for it (or scroll the list) before asking; exactly one exact match on screen or in the results is the recipient and is sent to as before; ask, naming the closest entries the app showed (the look-alikes seen in the list when the search found nothing), only when the search still finds none or more than one.
 - Chatter stand-in `--popup`: search results in a separate floating window, two groups first (Return opens the first, Down + Return the second); the smoke checks the popup is in the main window's screenshot.
 - New offline check `check:capture-overlays`.
 
