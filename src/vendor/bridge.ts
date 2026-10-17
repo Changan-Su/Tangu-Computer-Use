@@ -1185,14 +1185,15 @@ async function wheelAction(target: ResolvedTarget, action: NativePreparedAction,
 }
 
 /**
- * pid + kind ("click" / "scroll") whose background pointer input once changed nothing on screen: later ones go
- * straight to the foreground instead of paying the helper's screenshot wait again (CEF apps such as NetEase
- * Cloud Music ignore it every time).
- * ponytail: per-process flag for the life of the engine. Chromium apps swallow only the first background click
- * (it makes the window key) and take later ones; this gives that up. Upgrade to "retry background after N
- * foreground actions" if it matters.
+ * Background pointer input that changed nothing on screen, in a row, per pid + kind ("click" / "scroll"). At two,
+ * later ones go straight to the foreground instead of paying the helper's screenshot wait again (CEF apps such as
+ * NetEase Cloud Music ignore it every time). One miss is not enough: a click that legitimately changes nothing
+ * (an already-selected row) would otherwise take the whole app to the foreground for good.
+ * ponytail: per-process count for the life of the engine. Chromium apps swallow only the first background click
+ * (it makes the window key) and take later ones; a second miss gives that up. Upgrade to "retry background after
+ * N foreground actions" if it matters.
  */
-const foregroundPointers = new Set<string>();
+const backgroundPointerMisses = new Map<string, number>();
 
 async function helperAct(
 	target: ResolvedTarget,
@@ -1210,7 +1211,7 @@ async function helperAct(
 	const timeoutMs = Math.max(COMMAND_TIMEOUT_MS, textTimeout);
 	const pointer = isBackgroundPointer(action);
 	const pointerKey = `${target.pid}:${action.action === "scroll" ? "scroll" : "click"}`;
-	if ((action.usesCurrentFocus || action.needsForeground || (pointer && foregroundPointers.has(pointerKey))) && !headless) {
+	if ((action.usesCurrentFocus || action.needsForeground || (pointer && (backgroundPointerMisses.get(pointerKey) ?? 0) >= 2)) && !headless) {
 		const sent = await wheelAction(target, action, signal);
 		const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, sent, "foreground"), { signal, timeoutMs }));
 		const trace = executionTraceFromAct(foreground, "foreground");
@@ -1222,7 +1223,7 @@ async function helperAct(
 		const sent = pointer ? await wheelAction(target, action, signal, initialPolicy) : action;
 		const result = checked(await currentPlatformBackend.act(helperActRequest(target, sent, initialPolicy), { signal, timeoutMs }));
 		if (canRetryInForeground(action, result.outcome, headless)) {
-			if (pointer) foregroundPointers.add(pointerKey);
+			if (pointer) backgroundPointerMisses.set(pointerKey, (backgroundPointerMisses.get(pointerKey) ?? 0) + 1);
 			const retry = pointer ? await wheelAction(target, action, signal) : action;
 			const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, retry, "foreground"), { signal, timeoutMs }));
 			const trace = executionTraceFromAct(foreground, "foreground");
@@ -1234,6 +1235,7 @@ async function helperAct(
 				: { outcome: "didnt", reason: "Background input produced no observable value change; a foreground retry was safe." };
 			return trace;
 		}
+		if (pointer && result.outcome === "worked") backgroundPointerMisses.delete(pointerKey);
 		const trace = executionTraceFromAct(result, "background");
 		trace.backgroundFirst = true;
 		return trace;
