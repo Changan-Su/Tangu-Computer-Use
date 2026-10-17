@@ -11,6 +11,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ToolDef, ToolProvider, ToolContext, AppProfile, PluginStore } from '@forsion/tangu-agent';
+import { presentLiveViewOnce } from './deskPresent.ts';
 import type { ExtensionContext, AgentToolResult } from './pi-compat.ts';
 import {
   executeFind, executeObserve, executeSearchUi, executeExpandUi, executeInspectUi,
@@ -384,7 +385,7 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
       }
       // 装/升级过就在结果里说一句 —— 用户装了什么、agent 替他做了什么,不该是暗箱。
       const prefix = installNote ? `${installNote}\n` : '';
-      if (spec.run) return prefix + await spec.run(args, tcx, pctx, store);
+      if (spec.run) return prefix + presentLiveViewOnce(spec.name, tcx, await spec.run(args, tcx, pctx, store));
       let result: AgentToolResult;
       try {
         result = await spec.exec!('', args, tcx.signal, undefined, pctx);
@@ -392,7 +393,7 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
         explainGone(e, args);
         throw e;
       }
-      return prefix + render(result, tcx, args);
+      return prefix + presentLiveViewOnce(spec.name, tcx, render(result, tcx, args));
     },
   });
 

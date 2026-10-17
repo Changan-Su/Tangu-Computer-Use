@@ -227,11 +227,13 @@ ASCII punctuation in its output is folded to half-width so it matches accessibil
 ## Seeing what the agent is doing
 
 - **Edge glow** — the window currently being acted on gets a glowing border drawn by the native helper
-  (click-through, never takes focus, follows the window as it moves). Off switch: the *操作可视化*
+  (click-through, never takes focus, follows the window as it moves). The glow and the agent cursor sit
+  on the target's window level, ordered just above the window the input lands on, so a window in front of
+  the target covers them as well: background work never draws over the user's foreground app. Off switch: the *操作可视化*
   setting, same one that controls the agent cursor.
 - **Live view** — `plugin:tangu-computer-use:live` shows that window's picture, polled ~8fps from the
-  helper's background capture. The skill tells the agent to put it on the **Agent Desk** at the start of
-  a session (`desk_present`), so the user watches instead of guessing. macOS only for now — the Windows
+  helper's background capture. The plugin puts it on the **Agent Desk** itself after the first successful
+  `act_ui` / `jev_ui` of a run (`ctx.presentDesk`, once per run), so the user watches instead of guessing. macOS only for now — the Windows
   helper is a stdio child process with no server for the desktop to talk to.
 
 ## When to use it vs. browser tools

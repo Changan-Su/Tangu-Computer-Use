@@ -286,13 +286,19 @@ every new native feature silently does nothing (that is exactly how the first li
   **Never** `CGWindowListCreateDescriptionFromArray` — it returns an **empty array** for windows owned
   by another process (measured on the same window id: 0 vs 1 entries). `AgentHighlight.show()` bails on
   a nil rect, so the glowing edge had never rendered once since it was written.
-  ② Both overlay windows must set `window.level` (`.floating` for the glow, `.screenSaver` for the
-  cursor). They live in an `.accessory` app that never activates, so at the default level 0 they sink
-  below the controlled app the moment it is activated. Upstream's
-  `window.order(.above, relativeTo: <foreign window number>)` is a **no-op across processes** (measured:
-  the window neither rises nor disappears) — cross-process stacking is only expressible as a level.
+  ② Both overlays are pinned **just above** the window the input lands on (`pinOverlay` in
+  `agent_highlight.swift`): same `window.level` as that window, then
+  `window.order(.above, relativeTo: <foreign window number>)`. Cross-process relative ordering works only
+  **within one level** — 0.4.0 judged it a no-op because the overlays were already on `.floating`
+  (measured on macOS 27, 10-17: at the same level the overlay sits between a covering window and the
+  target). The helper is `.accessory` and never activates, so activating the controlled app pushes it
+  above the overlay: the glow re-pins on every follow tick (125ms), the cursor on every action. Until
+  0.7.2-jev.6 both overlays sat above everything (`.floating`, `popUpMenu+1`) and drew over the user's
+  foreground app during background work (user report 10-17). The cursor keeps `popUpMenu+1` only when it
+  has no anchor window.
   `npm run check:overlay` samples the on-screen window stack at 100ms and asserts both overlays are
-  present **and above the controlled window**. Geometry unit tests cannot see either bug: "the rect is
+  present **and above the controlled window**, then puts a covering window in front and asserts both sit
+  **between** it and the target. Geometry unit tests cannot see either bug: "the rect is
   correct", "the window exists" and "the user can see it" are three different claims.
 
 - **Never spawn `Contents/MacOS/bridge` directly** — launch the daemon with
