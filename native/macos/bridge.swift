@@ -2264,7 +2264,7 @@ final class Bridge {
 			let target = candidates.first { $0.id == record.windowId && $0.pid == pid }
 			let anchor = target.map { pointerWindowId(target: $0, candidates: candidates, at: point) } ?? record.windowId
 			let layer = candidates.first { $0.id == anchor }?.layer
-			Task { @MainActor in AgentCursor.shared.animate(to: point, above: anchor, layer: layer) }
+			Task { @MainActor in AgentCursor.shared.animate(to: point, above: anchor, layer: layer, target: record.windowId) }
 		}
 
 		/// Tangu 新增:**纯坐标点击先做一次 AX 命中测试**。命中可按压元素就直接 AXPress ——
