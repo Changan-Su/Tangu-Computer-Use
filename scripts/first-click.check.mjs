@@ -33,6 +33,7 @@ const execFileP = promisify(execFile)
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const argValue = (name, fallback) => { const i = process.argv.indexOf(name); return i >= 0 ? process.argv[i + 1] : fallback }
 const TRIALS = Number(argValue('--trials', '5'))
+assert.ok(Number.isInteger(TRIALS) && TRIALS > 0, '--trials must be a positive integer')
 const helperApp = resolveMacosHelperAppPath()
 const socket = path.join(os.homedir(), 'Library', 'Caches', `forsion-first-click-${process.pid}.sock`)
 const ask = (cmd, args = {}) => new Promise((resolve, reject) => {
@@ -83,6 +84,16 @@ async function clickOnce(app, policy, index) {
   return { result: r, events }
 }
 
+// Ctrl-C / SIGTERM 不走 finally:照样收掉替身和这次起的 helper,别留着进程(和还没发完的真输入)到锁放掉以后
+async function cleanup() {
+  if (fixture) await quitFixture(fixture).catch(() => {})
+  await ask('shutdown').catch(() => {})
+  const { stdout } = await execFileP('pgrep', ['-f', socket]).catch(() => ({ stdout: '' }))
+  for (const pid of stdout.split(/\s+/).filter(Boolean)) { try { process.kill(Number(pid)) } catch { /* 已退出 */ } }
+  fs.rmSync(socket, { force: true })
+}
+for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, () => { cleanup().finally(() => process.exit(130)) })
+
 try {
   assert.ok(fs.existsSync(helperApp), `computer-use helper not installed at ${helperApp}`)
   await execFileP('open', ['-n', '-g', helperApp, '--args', 'serve', '--socket', socket])
@@ -114,9 +125,5 @@ try {
   assert.deepEqual(failures, [], 'a physical click on a background app must reach the view once the app is in front')
   console.log(`PASS ${TRIALS}/${TRIALS} physical clicks on a background app reached the view`)
 } finally {
-  if (fixture) await quitFixture(fixture).catch(() => {})
-  await ask('shutdown').catch(() => {})
-  const { stdout } = await execFileP('pgrep', ['-f', socket]).catch(() => ({ stdout: '' }))
-  for (const pid of stdout.split(/\s+/).filter(Boolean)) { try { process.kill(Number(pid)) } catch { /* 已退出 */ } }
-  fs.rmSync(socket, { force: true })
+  await cleanup()
 }
