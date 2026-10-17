@@ -3,12 +3,13 @@
 // 「打开每日推荐(先转 700ms 的圈)→ 双击播放某一首 → 点底栏的「评论」→ 读最热的那条评论」。
 // 判定只读状态文件(argv[1],每次变化原子写入),不信 agent 的自述;catalog 字段是答案表,测试不必再抄一份数据。
 //
-// 命令行:<exe> <statePath> [--frame x,y,w,h] [--page <页>] [--play <序号>] [--behind] [--selftest [--hold]]
+// 命令行:<exe> <statePath> [--frame x,y,w,h] [--page <页>] [--play <序号>] [--behind] [--no-activate] [--selftest [--hold]]
 //   --frame    整个窗口的位置和大小:全局屏幕点、左上角原点(与 CGWindowList 的 bounds 同一约定)
 //   --page     直接开在某页(只给截图冒烟用):home | daily | comments:<序号> | loading | playlist:<歌单名>
 //              | featured | podcast | roam | follow | liked | recent | local
 //   --play     开场就在放每日推荐里的第几首(行里是喇叭、底栏有歌、状态 playing 有值);同样只给截图校准用
 //   --behind   窗口放到所有窗口后面:截图走 desktopIndependentWindow 不受遮挡,冒烟时不挡用户的屏幕
+//   --no-activate 窗口照常显示,App 永远到不了前台(.prohibited):给 check:key-guard 造「系统不让目标到前台」
 //   --selftest 进程内直接调用输入处理函数把流程走一遍(不经系统、不发任何真实输入),结果打到 stdout、写进状态的 selftest;
 //              带 --hold 时跑完不退出、把窗口显示出来,给截图看交互之后的样子
 // 窗口用 fullSizeContentView:内容铺满整个窗口(和真 App 一样红绿灯压在侧栏上),所以 content == window 尺寸,
@@ -23,7 +24,7 @@ struct Options {
 	var frame: NSRect?
 	var page: String?
 	var play: Int?
-	var behind = false, selftest = false, hold = false
+	var behind = false, selftest = false, hold = false, noActivate = false
 }
 
 let options: Options = {
@@ -40,6 +41,7 @@ let options: Options = {
 		case "--page": o.page = next; i += 1
 		case "--play": o.play = Int(next ?? ""); i += 1
 		case "--behind": o.behind = true
+		case "--no-activate": o.noActivate = true
 		case "--selftest": o.selftest = true
 		case "--hold": o.hold = true
 		default: if i == 0 && !arg.hasPrefix("--") { o.statePath = arg }
@@ -1330,5 +1332,5 @@ UserDefaults.standard.register(defaults: ["ApplePersistenceIgnoreState": true])
 let app = NSApplication.shared
 let delegate = Delegate()
 app.delegate = delegate
-app.setActivationPolicy(options.selftest && !options.hold ? .accessory : .regular)
+app.setActivationPolicy(options.noActivate ? .prohibited : options.selftest && !options.hold ? .accessory : .regular)
 app.run()

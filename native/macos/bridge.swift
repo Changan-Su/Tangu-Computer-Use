@@ -2335,11 +2335,16 @@ final class Bridge {
 		/// 纯坐标的物理点击没有 AX 元素可比(上面的 preflight 直接放行):按窗口表看这一点最上面是不是目标 App 的窗口。
 		/// 不是就先试着把目标拿到前面;系统不让(协作式激活)就不点 —— 点下去会落到挡着的那个 App 上(10-17 Codex 复核)。
 		func requireUncovered(_ point: CGPoint) throws {
+			try requireUnlockedScreen()
+			let displays = displayAreas()
+			var top: Int32?
 			for attempt in 0..<3 {
-				if topWindowPid(at: point, candidates: onScreenWindows(), helperPid: getpid()) == pid { return }
+				top = topWindowPid(at: point, candidates: onScreenWindows(), helperPid: getpid(), displays: displays)
+				if top == pid { return }
 				if attempt < 2 { focusTargetForPhysicalInput(); usleep(80_000) }
 			}
-			throw BridgeFailure(message: "Another window covers this point and macOS did not let the target app come forward, so the click was NOT sent (it would have hit that window). Bring the target window to the front, or use a point where it is not covered.", code: "occluded_target")
+			let owner = top.flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName }.map { " (\($0))" } ?? ""
+			throw BridgeFailure(message: "Another window\(owner) covers this point and macOS did not let the target app come forward, so the click was NOT sent (it would have hit that window). Bring the target window to the front, or use a point where it is not covered.", code: "occluded_target")
 		}
 
 		func executeCoordinates(_ point: CGPoint) throws {
@@ -3855,6 +3860,21 @@ final class Bridge {
 	/// pid 投递的指针事件交给哪扇窗口:点上最上面那扇「目标自己,或叠在它上面、截图里也画进去的同进程窗口」
 	/// (微信的搜索下拉是单独一扇窗口,点下拉里的行要交给它)。目标不在屏幕上就不带窗口号(= 原来的样子,事件被丢)。
 	/// 屏幕上的窗口,最前在先;全透明的不算(点不中它)
+	/// 每块屏的整块和 visibleFrame,换成全局点、左上角原点(和 CGWindowList 的窗口位置一样)
+	private func displayAreas() -> [DisplayArea] {
+		let top = NSScreen.screens.first?.frame.maxY ?? 0
+		let flip = { (r: CGRect) in CGRect(x: r.minX, y: top - r.maxY, width: r.width, height: r.height) }
+		return NSScreen.screens.map { DisplayArea(frame: flip($0.frame), visible: flip($0.visibleFrame)) }
+	}
+
+	/// 锁屏时最前面的只能是 loginwindow:物理点击、按键一个都到不了 App(按键会打进锁屏的密码框),pid 投递的照样能到。
+	/// 10-17 凌晨那几轮 live 就是锁着屏跑的(launchservicesd:fPermittedFrontApps 只有 loginwindow)。
+	private func requireUnlockedScreen() throws {
+		if (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool == true {
+			throw BridgeFailure(message: "The screen is locked, so no click or key can reach the app; nothing was sent. Ask the user to unlock the Mac.", code: "screen_locked")
+		}
+	}
+
 	private func onScreenWindows() -> [OverlayCandidate] {
 		let entries = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
 		return entries.compactMap { entry -> OverlayCandidate? in
@@ -4170,6 +4190,7 @@ final class Bridge {
 	/// 物理按键只会落到最前面的 App。目标不在最前就不发:helper 自己是后台 App,系统(协作式激活)常拒绝它去激活别的 App,
 	/// 拒了还照发,字就打进了用户正在用的那个 App(10-17 live 实际发生过)。鼠标那边有 preflight 查遮挡,键盘这边就靠这一道。
 	private func requireFrontmostForKeys(pid: Int32) throws {
+		try requireUnlockedScreen()
 		let deadline = Date().addingTimeInterval(0.5)
 		while NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
 			guard Date() < deadline else {

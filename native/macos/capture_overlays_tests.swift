@@ -51,7 +51,13 @@ import Vision
 		check(topWindowPid(at: CGPoint(x: 100, y: 100), candidates: [mine, main], helperPid: 55) == 6769, "the helper's own overlay is skipped")
 		check(topWindowPid(at: CGPoint(x: 100, y: 40), candidates: [win(11, 25, true, 0, 0, 1512, 60, pid: 88), main], helperPid: 55) == 6769, "the menu bar layer is skipped")
 		check(topWindowPid(at: CGPoint(x: 100, y: 960), candidates: [win(12, 20, true, 0, 940, 1512, 42, pid: 99), main], helperPid: 55) == 99, "the Dock covering the window counts")
-
+		// 10-17 量到的:Dock 自动隐藏时它那扇 20 层窗口铺满整块屏(0,0 1512x982,alpha 1),点击穿透
+		let screen = CGRect(x: 0, y: 0, width: 1512, height: 982), backdrop = win(13, 20, true, 0, 0, 1512, 982, pid: 99)
+		let hidden = DisplayArea(frame: screen, visible: CGRect(x: 0, y: 33, width: 1512, height: 949))
+		let pinned = DisplayArea(frame: screen, visible: CGRect(x: 0, y: 33, width: 1512, height: 880))
+		check(topWindowPid(at: CGPoint(x: 1167, y: 825), candidates: [backdrop, main], helperPid: 55, displays: [hidden]) == 6769, "the Dock's full-screen backdrop does not cover the window")
+		check(topWindowPid(at: CGPoint(x: 1167, y: 950), candidates: [backdrop, main], helperPid: 55, displays: [pinned]) == 99, "a pinned Dock strip below the visible frame does")
+		check(topWindowPid(at: CGPoint(x: 1167, y: 825), candidates: [backdrop, main], helperPid: 55, displays: [pinned]) == 6769, "above the strip it does not")
 		check(foldFullwidthASCII("Did you push the fix？") == "Did you push the fix?", "full-width question mark folds")
 		check(foldFullwidthASCII("Play all （30）　Ａ１") == "Play all (30) A1", "full-width brackets, letters, digits and space fold")
 		check(foldFullwidthASCII("周末一起去看展吗？好，见") == "周末一起去看展吗?好,见", "CJK text keeps its characters, punctuation folds")

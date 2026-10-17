@@ -48,10 +48,22 @@ func pointerWindowId(target: OverlayCandidate, candidates: [OverlayCandidate], a
 	return candidates.first { ($0.id == target.id || overlays.contains($0.id)) && $0.frame.contains(point) }?.id ?? target.id
 }
 
+/// 一块屏(全局点、左上角原点):visible = NSScreen.visibleFrame,让出了菜单栏和常驻的 Dock 条。
+struct DisplayArea {
+	let frame: CGRect
+	let visible: CGRect
+}
+
 /// 物理鼠标事件会落到这一点最上面的那扇窗口上:它属于哪个进程。candidates 按 CGWindowList 的前后顺序(最前在先);
-/// 跳过 helper 自己的窗口(虚拟光标、高亮)和菜单栏及以上的层(菜单栏、状态栏图标、系统提示)。Dock(20 层)挡着也算挡着。
-func topWindowPid(at point: CGPoint, candidates: [OverlayCandidate], helperPid: Int32) -> Int32? {
-	candidates.first { $0.onScreen && $0.pid != helperPid && $0.layer < 24 && $0.frame.contains(point) }?.pid
+/// 跳过 helper 自己的窗口(虚拟光标、高亮)和菜单栏及以上的层(菜单栏、状态栏图标、系统提示)。
+/// Dock 层(20)铺满整块屏的那扇是 Dock 的底板(自动隐藏时一直在,点击穿透它;10-17 把每一下物理点击都判成被挡):
+/// 只有它在左 / 右 / 下三边让出来的 Dock 条挡点击。ponytail: 自动隐藏的 Dock 被鼠标叫出来那一会儿看不出来。
+func topWindowPid(at point: CGPoint, candidates: [OverlayCandidate], helperPid: Int32, displays: [DisplayArea] = []) -> Int32? {
+	candidates.first { window in
+		guard window.onScreen, window.pid != helperPid, window.layer < 24, window.frame.contains(point) else { return false }
+		guard window.layer == 20, let display = displays.first(where: { $0.frame == window.frame }) else { return true }
+		return point.y >= display.visible.maxY || point.x < display.visible.minX || point.x >= display.visible.maxX
+	}?.pid
 }
 
 /// 两张截图有多少像素变了:都缩到最长边 ≤ maxDimension 再逐像素比(任一通道差 > 24 算变)。
