@@ -1,5 +1,5 @@
 // pid-window 探针的「盖窗」:一个普通窗口,起来就把自己激活、盖在 --frame 指定的位置上(就是被测窗口的位置)。
-// 它收到的鼠标 / 滚轮事件、自己被激活 / 失活、真鼠标挪没挪都记进状态文件:投给别的进程的事件如果误落到最前面的窗口上,这里会看到。
+// 它收到的鼠标 / 滚轮事件、自己被激活 / 失活、别的 App 被激活(pid)、真鼠标挪没挪都记进状态文件:投给别的进程的事件如果误落到最前面的窗口上,这里会看到。
 // 命令行:<exe> <statePath> --frame x,y,w,h(整个窗口,全局屏幕点、左上角原点,与 CGWindowList bounds 同一约定)
 import AppKit
 
@@ -72,7 +72,14 @@ final class Delegate: NSObject, NSApplicationDelegate {
 		window.contentView = Pad()
 		window.isReleasedWhenClosed = false
 		window.makeKeyAndOrderFront(nil)
+		// 程序化启动的 App 要前台,系统(协作式激活)常常不给:拿不到也照样压在最上面,判据不靠「盖窗是前台」
+		window.orderFrontRegardless()
 		NSApp.activate(ignoringOtherApps: true)
+		// 这段时间里谁被激活了(只记 pid):被盖住的替身一旦出现在这里,就是被测的那一下把它拿到了前台
+		NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { note in
+			let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+			log("appActivated", "\(app?.processIdentifier ?? -1)")
+		}
 		save()
 	}
 	func applicationDidBecomeActive(_ notification: Notification) { log("becomeActive") }
