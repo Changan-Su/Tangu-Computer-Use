@@ -18,7 +18,8 @@ const execFileP = promisify(execFile)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const BUNDLE_ID = 'com.apple.calculator'
 
-export const SOCK = `${os.homedir()}/Library/Caches/tangu-computer-use/bridge.sock`
+// 和 vendor 一样认 PI_CU_SOCKET_PATH:拿签名包在私有 socket 上测,不碰用户正在用的 daemon
+export const SOCK = process.env.PI_CU_SOCKET_PATH ?? `${os.homedir()}/Library/Caches/tangu-computer-use/bridge.sock`
 export const HELPER_APP = resolveMacosHelperAppPath()
 export const HELPER_EXECUTABLE = path.join(HELPER_APP, 'Contents', 'MacOS', 'bridge')
 

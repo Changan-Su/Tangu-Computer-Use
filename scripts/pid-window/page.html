@@ -1,0 +1,31 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>pid-window probe page</title>
+<!-- pid-window 探针的网页靶子(Chrome 隔离实例和 Electron 替身共用):收到的指针事件一律报回探针服务器的 /log。 -->
+<style>
+  body { margin: 0; font: 16px -apple-system, sans-serif; }
+  #btn { position: fixed; left: 40px; top: 40px; width: 240px; height: 120px; border: 0; background: #3a8; color: #fff; font-size: 20px; }
+  #list { position: fixed; left: 320px; top: 20px; right: 20px; bottom: 20px; overflow: auto; border: 1px solid #ccc; }
+  .row { height: 40px; line-height: 40px; padding-left: 12px; border-bottom: 1px solid #eee; }
+</style>
+<button id="btn">Click target</button>
+<div id="list"></div>
+<script>
+  const who = new URLSearchParams(location.search).get('who')
+  const send = (event) => fetch('/log', { method: 'POST', body: JSON.stringify({ who, t: Date.now(), ...event }) })
+  for (let i = 1; i <= 200; i++) { const row = document.createElement('div'); row.className = 'row'; row.textContent = `Row ${i}`; list.append(row) }
+  const where = (e) => ({ x: e.clientX, y: e.clientY, target: e.target.id || e.target.className, focus: document.hasFocus() })
+  for (const type of ['mousedown', 'mouseup', 'click', 'dblclick', 'contextmenu']) {
+    addEventListener(type, (e) => send({ type, button: e.button, detail: e.detail, ...where(e) }), true)
+  }
+  // Chrome 自己的右键菜单会盖在所有窗口上面、挡住后面的点:只记事件,不弹菜单
+  addEventListener('contextmenu', (e) => e.preventDefault())
+  addEventListener('wheel', (e) => send({ type: 'wheel', dy: e.deltaY, ...where(e) }), { capture: true, passive: true })
+  list.addEventListener('scroll', () => send({ type: 'scroll', top: Math.round(list.scrollTop) }), { passive: true })
+  addEventListener('focus', () => send({ type: 'focus' }))
+  addEventListener('blur', () => send({ type: 'blur' }))
+  // 窗口在屏幕上的位置和边框厚度:探针按它把页面里的点换成全局坐标
+  const geom = () => send({ type: 'geom', screenX, screenY, outerWidth, outerHeight, innerWidth, innerHeight, btn: btn.getBoundingClientRect().toJSON(), list: list.getBoundingClientRect().toJSON() })
+  addEventListener('load', geom)
+  addEventListener('resize', geom)
+</script>

@@ -35,7 +35,7 @@ async function unitTests() {
   assert.ok(has(foregroundNote({ delivery: 'hid' })), 'hid delivery → note');
   assert.ok(has(foregroundNote({ deliveryPolicy: 'foreground' })), 'foreground policy → note');
 
-  // ⚠️坐标点击在 TS 层恒被判 needsForeground → policy 恒为 foreground;helper 却可能用 AX 命中测试
+  // ⚠️右键 / 拖拽、后台没落下而升前台的坐标点击,policy 是 foreground;helper 却可能用 AX 命中测试
   // 在后台完成它。这时报「抢了前台」是**反的**,比不报更坏。
   assert.equal(foregroundNote({ delivery: 'ax', deliveryPolicy: 'foreground' }), '', 'ax delivery under a foreground policy → no note');
   assert.ok(has(foregroundNote({ delivery: 'ax', deliveryPolicy: 'foreground', escalatedToForeground: true })), 'ax + escalated → still a note');
@@ -133,7 +133,8 @@ async function unitTests() {
   assert.match(scrollNote([{ action: 'scroll', ref: '@e2', scrollY: 3 }], { steps: [{ delivery: 'hid' }] }, 'darwin'), /\[scroll\]/, 'ref scroll that resolved to real input → note');
   assert.equal(scrollNote([{ action: 'click', x: 1, y: 2 }, { action: 'scroll', ref: '@e2', scrollY: 3 }], { steps: [{ delivery: 'hid' }, { delivery: 'ax' }] }, 'darwin'), '', 'another step took the foreground, the scroll did not → empty');
   assert.equal(scrollNote(wheel, { steps: [{ delivery: 'hid' }] }, 'darwin'), '', 'the batch stopped before the scroll ran → empty');
-  assert.equal(scrollNote(wheel, { steps: [{ delivery: 'ax' }, { delivery: 'pid', deliveryPolicy: 'background' }] }, 'darwin'), '', 'nothing took the foreground (strict background) → empty');
+  assert.match(scrollNote(wheel, { steps: [{ delivery: 'ax' }, { delivery: 'pid', deliveryPolicy: 'background' }] }, 'darwin'), /\[scroll\]/, 'a background wheel event (pid + window number) goes through the mouse utility too → note');
+  assert.equal(scrollNote(wheel, { steps: [{ delivery: 'ax' }, { delivery: 'ax' }] }, 'darwin'), '', 'scrolled through accessibility only → empty');
   assert.equal(scrollNote([{ action: 'click', x: 1, y: 2 }], { delivery: 'hid' }, 'darwin'), '', 'no scroll → empty');
   assert.equal(scrollNote(undefined, { delivery: 'hid' }, 'darwin'), '', 'no actions → empty');
   assert.equal(scrollNote(wheel, { steps: [{ delivery: 'hid' }, { delivery: 'hid' }] }, 'win32'), '', 'not macOS → empty');

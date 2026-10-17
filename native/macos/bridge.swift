@@ -370,8 +370,23 @@ final class InputSuppressionGuard {
 
 }
 
+/// pid 投递的鼠标事件要交给哪个窗口:窗口号 + 窗口左上角的全局坐标(点)。
+struct PidWindow {
+	let id: UInt32
+	let origin: CGPoint
+}
+
 final class Bridge {
-	private let protocolVersion = 16
+	private let protocolVersion = 17
+	/// 截图里变了超过这么多像素(缩到最长边 800 后)才算「画面变了」:光标闪烁、JPEG 噪声在这之下。
+	static let pixelChangeThreshold = 12
+	/// NSEvent 带窗口号造出来的 CGEvent 里,窗口号在这个字段(CGEventTypes.h 没有它)。
+	static let windowNumberField = CGEventField(rawValue: 51)!
+	/// CoreGraphics 导出、头文件里没有。ponytail: 哪天系统去掉了这个符号,pid 投递就退回不带窗口号(= 原来的样子)。
+	static let setWindowLocation: ((CGEvent, CGPoint) -> Void)? = dlsym(dlopen(nil, RTLD_NOW), "CGEventSetWindowLocation").map {
+		let fn = unsafeBitCast($0, to: (@convention(c) (CGEvent, CGPoint) -> Void).self)
+		return { fn($0, $1) }
+	}
 	private let refStore = AXRefStore()
 	private let inputSuppressionGuard = InputSuppressionGuard()
 	private let physicalInputLock = NSRecursiveLock()
@@ -816,6 +831,9 @@ final class Bridge {
 			return try axReadText(request)
 		case "getMousePosition":
 			return getMousePosition()
+		case "probeInput" where CommandLine.arguments.contains("--dev-probe"):
+			ActivityRecorder.shared.agentEnter(); defer { ActivityRecorder.shared.agentLeave() }
+			return try probeInput(request)
 		case "dockCandidates":
 			return dockCandidates(request)
 		case "dockProbe":
@@ -2157,6 +2175,8 @@ final class Bridge {
 		noteControlledWindow(windowId: record.windowId, pid: pid, highlight: request["cursorOverlay"] as? Bool ?? true)
 		let deferRootDelta = boolArg(request, "deferRootDelta") ?? false
 		let delivery = policy == "background" ? "pid" : ((params["delivery"] as? String) == "pid" ? "pid" : "hid")
+		// pid 投递的坐标点击 / 滚轮投完看画面:变了多少像素(-1 = 截不到图),nil = 没走这条路。
+		var pixelsChanged: Int?
 		var holdsPhysicalInput = false
 		func acquirePhysicalInputIfNeeded() {
 			if delivery == "hid" && !holdsPhysicalInput {
@@ -2312,19 +2332,27 @@ final class Bridge {
 			if element == nil, backgroundPressAtPoint(point) { return }
 			performed["grounding"] = "coordinates"
 			if delivery == "pid" { performed["verification"] = "caller_required" }
+			// pid 投递的事件带上窗口号(没带的 AppKit 一律丢掉,见 postEvent)。拖拽还没在真机上验过,照旧不带。
+			let window = delivery == "pid" && action != "drag" ? pointerWindow(target: record.windowId, pid: pid, at: point) : nil
+			if let window { performed["window"] = Int(window.id) }
+			// 投给后台窗口的点击 / 滚轮,App 不回话:投之前先截一张,投完比画面(零位移的滚轮是垫的,不比)。
+			let scrolls = ((params["scrollX"] as? NSNumber)?.intValue ?? 0) != 0 || ((params["scrollY"] as? NSNumber)?.intValue ?? 0) != 0
+			let pixelsBefore = window != nil && (action == "press" || action == "click" || (action == "scroll" && scrolls))
+				? try? captureWindow(windowId: record.windowId).image : nil
+			defer { if let pixelsBefore { pixelsChanged = pixelsChangedAfterInput(windowId: record.windowId, before: pixelsBefore) } }
 			acquirePhysicalInputIfNeeded()
 			focusTargetForPhysicalInput()
 			if delivery == "hid" { try preflight(point) }
 			switch action {
 			case "press", "click":
 				animateCursor(at: point)
-				try postMouseClick(at: point, pid: pid, button: mouseButton(params["button"] as? String ?? "left"), clickCount: max(1, min(3, (params["clickCount"] as? NSNumber)?.intValue ?? 1)), delivery: delivery)
+				try postMouseClick(at: point, pid: pid, button: mouseButton(params["button"] as? String ?? "left"), clickCount: max(1, min(3, (params["clickCount"] as? NSNumber)?.intValue ?? 1)), delivery: delivery, window: window)
 			case "moveMouse":
 				animateCursor(at: point)
-				try postMouseMove(to: point, pid: pid, delivery: delivery)
+				try postMouseMove(to: point, pid: pid, delivery: delivery, window: window)
 			case "scroll":
 				animateCursor(at: point)
-				try postScrollWheel(at: point, deltaX: (params["scrollX"] as? NSNumber)?.intValue ?? 0, deltaY: (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid: pid, delivery: delivery)
+				try postScrollWheel(at: point, deltaX: (params["scrollX"] as? NSNumber)?.intValue ?? 0, deltaY: (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid: pid, delivery: delivery, window: window)
 			case "drag":
 				guard let rawPath = params["path"] as? [[String: Any]], rawPath.count >= 2 else {
 					throw BridgeFailure(message: "drag requires path", code: "invalid_args")
@@ -2490,6 +2518,12 @@ final class Bridge {
 			outcome = "worked"
 		}
 		if windowChanged { evidence["windowChanged"] = true }
+		if let pixelsChanged {
+			// 画面变了 = 落下了;一直没变 = 没落下(落下了却什么都没变的,如滚到了头,前台再来一次也没坏处)。
+			if pixelsChanged > Self.pixelChangeThreshold { outcome = "worked" } else if pixelsChanged >= 0, outcome != "worked" { outcome = "didnt" }
+			evidence["pixelsChanged"] = pixelsChanged
+			performed["verification"] = "pixels"
+		}
 		var response: [String: Any] = ["outcome": outcome, "performed": performed]
 		if !evidence.isEmpty { response["evidence"] = evidence }
 		return finish(response)
@@ -3106,6 +3140,34 @@ final class Bridge {
 			"totalChars": characters.count,
 			"hasMore": end < characters.count,
 		]
+	}
+
+	/// 只在 `serve --dev-probe` 下认:不经 look,按全局坐标(点、左上角原点)直接给 pid 投鼠标 / 滚轮事件,
+	/// 和 act 的 pid 路径是同一组 post* 函数。给没有录屏授权的开发证书 helper 跑探针用(act 的坐标点击要求
+	/// look 带了截图)。windowId 不给 = 上游那样不填窗口号。
+	private func probeInput(_ request: [String: Any]) throws -> [String: Any] {
+		let pid = Int32(try intArg(request, "pid"))
+		guard let x = (request["x"] as? NSNumber)?.doubleValue, let y = (request["y"] as? NSNumber)?.doubleValue else {
+			throw BridgeFailure(message: "probeInput needs x and y", code: "invalid_args")
+		}
+		let point = CGPoint(x: x, y: y)
+		let window = try optionalIntArg(request, "windowId").map { id -> PidWindow in
+			guard let frame = windowInfo(windowId: UInt32(id))?.bounds else {
+				throw BridgeFailure(message: "Window \(id) is not on screen", code: "invalid_args")
+			}
+			return PidWindow(id: UInt32(id), origin: frame.origin)
+		}
+		switch try stringArg(request, "kind") {
+		case "click":
+			try postMouseClick(at: point, pid: pid, button: mouseButton(optionalStringArg(request, "button") ?? "left"), clickCount: max(1, min(3, optionalIntArg(request, "clickCount") ?? 1)), delivery: "pid", window: window)
+		case "scroll":
+			try postScrollWheel(at: point, deltaX: optionalIntArg(request, "scrollX") ?? 0, deltaY: optionalIntArg(request, "scrollY") ?? 0, pid: pid, delivery: "pid", window: window)
+		case "move":
+			try postMouseMove(to: point, pid: pid, delivery: "pid", window: window)
+		default:
+			throw BridgeFailure(message: "probeInput kind must be click, scroll or move", code: "invalid_args")
+		}
+		return ["posted": true, "windowFields": window != nil]
 	}
 
 	private func getMousePosition() -> [String: Any] {
@@ -3757,6 +3819,37 @@ final class Bridge {
 		return windowInfo(windowId: windowId)?.bounds
 	}
 
+	/// pid 投递的指针事件交给哪扇窗口:点上最上面那扇「目标自己,或叠在它上面、截图里也画进去的同进程窗口」
+	/// (微信的搜索下拉是单独一扇窗口,点下拉里的行要交给它)。目标不在屏幕上就不带窗口号(= 原来的样子,事件被丢)。
+	private func pointerWindow(target windowId: UInt32, pid: Int32, at point: CGPoint) -> PidWindow? {
+		guard Self.setWindowLocation != nil else { return nil }
+		let entries = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+		let candidates = entries.compactMap { entry -> OverlayCandidate? in
+			guard let id = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+				let owner = (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+				let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
+				let frame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
+			else { return nil }
+			return OverlayCandidate(id: id, pid: owner, layer: (entry[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0, frame: frame, onScreen: true)
+		}
+		guard let target = candidates.first(where: { $0.id == windowId && $0.pid == pid }) else { return nil }
+		let id = pointerWindowId(target: target, candidates: candidates, at: point)
+		return candidates.first { $0.id == id }.map { PidWindow(id: id, origin: $0.frame.origin) }
+	}
+
+	/// 投完隔一会儿截一张目标窗口和投之前比,变了就停。600ms 一直没变就报最后一次的数;截不到图 = -1。
+	private func pixelsChangedAfterInput(windowId: UInt32, before: CGImage) -> Int {
+		let deadline = Date().addingTimeInterval(0.6)
+		var changed = 0
+		repeat {
+			usleep(120_000)
+			guard let after = try? captureWindow(windowId: windowId).image else { return -1 }
+			changed = changedPixels(before, after)
+			if changed > Self.pixelChangeThreshold { return changed }
+		} while Date() < deadline
+		return changed
+	}
+
 	private func windowInfo(windowId: UInt32) -> (pid: Int32, bounds: CGRect)? {
 		func matchingEntry(_ entries: [[String: Any]]?) -> [String: Any]? {
 			entries?.first {
@@ -3810,8 +3903,17 @@ final class Bridge {
 		optionalStringArg(request, "delivery") == "pid" ? "pid" : "hid"
 	}
 
-	private func postEvent(_ event: CGEvent, pid: Int32, delivery: String = "hid") {
+	/// `window`:只对 pid 投递的鼠标 / 滚轮事件有意义。没带窗口号的鼠标事件投给进程,App 的事件队列里收得到,
+	/// 但 NSEvent.window 是 nil,AppKit 直接丢掉 —— 上游记的「postToPid 对非 key 窗口会被丢掉」其实连 key 窗口也丢
+	/// (macOS 27 实测,scripts/pid-window.probe.mjs)。AppKit 认的是事件记录里的窗口号(字段 51,NSEvent 带窗口号
+	/// 造事件时写的就是它;公开的 91 / 92 填了不认)和另一份窗口内坐标(windowLocation,左上角原点),
+	/// 后者只能用未公开的 CGEventSetWindowLocation 写。⚠️顺序:改 location 会把 windowLocation 作废成 (-1,-1)。
+	private func postEvent(_ event: CGEvent, pid: Int32, delivery: String = "hid", window: PidWindow? = nil) {
 		if delivery == "pid" {
+			if let window, let setWindowLocation = Self.setWindowLocation {
+				setWindowLocation(event, CGPoint(x: event.location.x - window.origin.x, y: event.location.y - window.origin.y))
+				event.setIntegerValueField(Self.windowNumberField, value: Int64(window.id))
+			}
 			event.postToPid(pid)
 			return
 		}
@@ -3831,13 +3933,13 @@ final class Bridge {
 		event.post(tap: .cghidEventTap)
 	}
 
-	private func postMouseMove(to point: CGPoint, pid: Int32, delivery: String = "hid") throws {
+	private func postMouseMove(to point: CGPoint, pid: Int32, delivery: String = "hid", window: PidWindow? = nil) throws {
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		guard let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
 			throw BridgeFailure(message: "Failed to create mouse move event", code: "input_failed")
 		}
-		postEvent(move, pid: pid, delivery: delivery)
+		postEvent(move, pid: pid, delivery: delivery, window: window)
 	}
 
 	private func mouseButton(_ name: String) -> CGMouseButton {
@@ -3884,7 +3986,7 @@ final class Bridge {
 		}
 	}
 
-	private func postMouseClick(at point: CGPoint, pid: Int32, button: CGMouseButton = .left, clickCount: Int = 1, delivery: String = "hid") throws {
+	private func postMouseClick(at point: CGPoint, pid: Int32, button: CGMouseButton = .left, clickCount: Int = 1, delivery: String = "hid", window: PidWindow? = nil) throws {
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		// Tangu:HID 点击会把**用户的实物指针**挪到目标处并留在那里 —— 前台被抢已经够烦,
@@ -3901,7 +4003,7 @@ final class Bridge {
 				CGAssociateMouseAndMouseCursorPosition(1)
 			}
 		}
-		try postMouseMove(to: point, pid: pid, delivery: delivery)
+		try postMouseMove(to: point, pid: pid, delivery: delivery, window: window)
 		for index in 1...max(1, clickCount) {
 			guard let down = CGEvent(mouseEventSource: nil, mouseType: mouseDownType(for: button), mouseCursorPosition: point, mouseButton: button),
 				let up = CGEvent(mouseEventSource: nil, mouseType: mouseUpType(for: button), mouseCursorPosition: point, mouseButton: button)
@@ -3910,33 +4012,33 @@ final class Bridge {
 			}
 			down.setIntegerValueField(.mouseEventClickState, value: Int64(index))
 			up.setIntegerValueField(.mouseEventClickState, value: Int64(index))
-			postEvent(down, pid: pid, delivery: delivery)
+			postEvent(down, pid: pid, delivery: delivery, window: window)
 			usleep(12_000)
-			postEvent(up, pid: pid, delivery: delivery)
+			postEvent(up, pid: pid, delivery: delivery, window: window)
 			if index < clickCount {
 				usleep(70_000)
 			}
 		}
 	}
 
-	private func postMouseDrag(points: [CGPoint], pid: Int32, delivery: String = "hid") throws {
+	private func postMouseDrag(points: [CGPoint], pid: Int32, delivery: String = "hid", window: PidWindow? = nil) throws {
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		guard points.count >= 2, let first = points.first else {
 			throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
 		}
-		try postMouseMove(to: first, pid: pid, delivery: delivery)
+		try postMouseMove(to: first, pid: pid, delivery: delivery, window: window)
 		guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: first, mouseButton: .left) else {
 			throw BridgeFailure(message: "Failed to create mouse down event", code: "input_failed")
 		}
-		postEvent(down, pid: pid, delivery: delivery)
+		postEvent(down, pid: pid, delivery: delivery, window: window)
 		usleep(12_000)
 
 		for point in points.dropFirst() {
 			guard let drag = CGEvent(mouseEventSource: nil, mouseType: mouseDraggedType(for: .left), mouseCursorPosition: point, mouseButton: .left) else {
 				throw BridgeFailure(message: "Failed to create mouse drag event", code: "input_failed")
 			}
-			postEvent(drag, pid: pid, delivery: delivery)
+			postEvent(drag, pid: pid, delivery: delivery, window: window)
 			usleep(8_000)
 		}
 
@@ -3945,13 +4047,13 @@ final class Bridge {
 		else {
 			throw BridgeFailure(message: "Failed to create mouse up event", code: "input_failed")
 		}
-		postEvent(up, pid: pid, delivery: delivery)
+		postEvent(up, pid: pid, delivery: delivery, window: window)
 	}
 
-	private func postScrollWheel(at point: CGPoint, deltaX: Int, deltaY: Int, pid: Int32, delivery: String = "hid") throws {
+	private func postScrollWheel(at point: CGPoint, deltaX: Int, deltaY: Int, pid: Int32, delivery: String = "hid", window: PidWindow? = nil) throws {
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
-		try postMouseMove(to: point, pid: pid, delivery: delivery)
+		try postMouseMove(to: point, pid: pid, delivery: delivery, window: window)
 		guard let event = CGEvent(
 			scrollWheelEvent2Source: nil,
 			units: .pixel,
@@ -3963,7 +4065,7 @@ final class Bridge {
 			throw BridgeFailure(message: "Failed to create scroll event", code: "input_failed")
 		}
 		event.location = point
-		postEvent(event, pid: pid, delivery: delivery)
+		postEvent(event, pid: pid, delivery: delivery, window: window)
 	}
 
 	private func modifierFlag(_ key: String) -> CGEventFlags? {

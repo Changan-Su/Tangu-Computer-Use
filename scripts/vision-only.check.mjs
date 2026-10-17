@@ -8,15 +8,17 @@
  *
  *   ① 坐标空间:结果里那行 [image] 报的尺寸 = 越界校验用的尺寸;照这张图的像素点色块,页码真的变了
  *   ② expect 没满足要进正文:文字条件在这种窗口上永远等不到,[expect] 那行要说出来并劝模型别再用
- *   ③ 按坐标的 scroll / drag 是真实输入:对一个窗口的第一次滚动也得到(装着 Mos 这类平滑滚动工具时第一个
- *      滚轮事件会被吞,桥接层先垫一个零位移的)、列表真的滚了、拖拽真的到了;顺带打印「投给进程」那条旧路收到
- *      几个事件。方向不写死 —— 真实滚轮输入要过系统设置和鼠标工具(Mos 会反向并放大),结果里那行 [scroll] 说的就是这个
+ *   ③ 按坐标的点击 / scroll 投给后台(pid + 窗口号,helper 协议 17),替身被别的 App 的窗口盖着也落得下、
+ *      不抢前台、不动真鼠标;对一个窗口的第一次滚动也得到(装着 Mos 这类平滑滚动工具时第一个滚轮事件会被吞,
+ *      桥接层先垫一个零位移的)、列表真的滚了;drag 仍是真实输入、真的拖到了。方向不写死 —— 滚轮事件要过
+ *      系统设置和鼠标工具(Mos 会反向并放大),结果里那行 [scroll] 说的就是这个
  *   ④ 窗口不在当前桌面:act_ui 的报错与 find_roots 的空结果都指向 ensure_app;ensure_app 后台打开不管用时
  *      改为激活,并如实说它到了前台;窗口本来就在时不抢前台
  *
  * 跑法:node scripts/vision-only.check.mjs
- * 需要:macOS、helper 已装并授权、swiftc。会打开一个叫「CU Fixture」的小窗口并**把它拿到前台约十秒**
- * (真实的点击 / 滚轮 / 拖拽),跑完关掉、把原来的前台 App 切回来。期间别碰键盘鼠标。
+ * 需要:macOS、helper 已装并授权、swiftc。会打开一个叫「CU Fixture」的小窗口、用一个「Probe cover」窗口盖住它
+ * 几秒(点击 / 滚轮都在后台落下),拖拽那一下会把替身拿到前台;跑完关掉、把原来的前台 App 切回来。期间别碰键盘鼠标。
+ * 拿签名包在私有 socket 上测:带 PI_COMPUTER_USE_HELPER_APP_PATH + PI_CU_SOCKET_PATH(配方见 UPSTREAM.md)。
  */
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
@@ -29,6 +31,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { build } from 'esbuild'
 import { SOCK, ensureDaemon } from './calc-fixture.mjs'
+import { buildFixture as buildNamedFixture, waitForState, quitFixture } from './vision-fixtures.mjs'
 
 if (process.platform !== 'darwin') {
   console.log('vision-only check skipped (not macOS)')
@@ -135,6 +138,8 @@ const failure = (promise) => promise.then(() => assert.fail('expected the call t
 const line = (said, tag) => said.split('\n').find((l) => l.startsWith(tag)) ?? ''
 const frontmost = () => ask({ cmd: 'getFrontmost' })
 const toFront = (bundleId) => execFileP('open', ['-b', bundleId]).catch(() => {})
+const waitForStateNow = (file) => JSON.parse(fs.readFileSync(file, 'utf8'))
+let cover
 
 await buildFixture()
 await ensureDaemon(ask)
@@ -174,26 +179,43 @@ try {
   const list = at(boot.railWidth + (boot.content.w - boot.railWidth) / 2, boot.content.h / 2)
   const firstStep = (d) => d.execution?.steps?.[0] ?? d.execution
 
+  // ── 盖住替身:盖窗(另一个 App)激活、盖在替身窗口上面,③ 的点击 / 滚动都得在它下面落下 ──
+  const frame = (await ask({ cmd: 'listWindows', pid: boot.pid })).find((w) => w.windowId)?.framePoints
+  assert.ok(frame, '替身窗口的位置拿不到')
+  const coverState = path.join(os.tmpdir(), 'cu-vision-fixture', 'cover.json')
+  fs.rmSync(coverState, { force: true })
+  await execFileP('open', ['-n', await buildNamedFixture('cover'), '--args', coverState, '--frame', [frame.x - 20, frame.y - 20, frame.w + 40, frame.h + 40].map(Math.round).join(',')])
+  cover = await waitForState(coverState, (s) => s.ready && s.active, { timeoutMs: 8000 })
+  const global = (p) => ({ x: frame.x + p.x / scale, y: frame.y + p.y / scale })
+  const mouseAt = async (p) => { const m = await ask({ cmd: 'getMousePosition' }); const g = global(p); return Math.abs(m.x - g.x) < 2 && Math.abs(m.y - g.y) < 2 }
+  const stillCovered = async (what) => {
+    assert.equal((await frontmost()).pid, cover.pid, `${what}:前台应还是盖窗(没被抢)`)
+    assert.equal(waitForStateNow(coverState).events.filter((e) => /mouse|scroll/i.test(e.kind)).length, 0, `${what}:事件落到了盖窗上`)
+  }
+
   // ── ③a 对这个窗口的第一次滚动 ──(放在任何点击 / 滚动之前)
   // 装着平滑滚动的鼠标工具(Mos)时,对一个新目标的第一个滚轮事件到不了 App(实测 6 次里 6 次是 0 个事件),
   // 第二个才到。桥接层先发一个零位移的滚轮事件把这一下垫掉。没装这类工具的机器上这一条本来就过。
-  assert.notEqual((await frontmost()).pid, boot.pid, '③a 夹具应把替身 App 开在后台')
   const cold = await act(details, [{ action: 'scroll', ...list, scrollY: 120 }])
   details = cold.details
   await sleep(1000)
-  assert.equal(firstStep(details)?.delivery, 'hid', `③a 按坐标的 scroll 应是真实输入(hid),实得 ${firstStep(details)?.delivery}`)
+  assert.equal(firstStep(details)?.delivery, 'pid', `③a 按坐标的 scroll 应投给后台(pid),实得 ${firstStep(details)?.delivery}`)
   // ⚠️命门:看的是 App 自己数到的滚轮事件。没有这一条,「不报错」可以靠事件落到别的窗口换来。
   assert.ok(state().scrolls > 0, '③a 对这个窗口的第一次滚动,带位移的滚轮事件一个都没到替身 App')
-  assert.equal((await frontmost()).pid, boot.pid, '③a 真实输入之后替身 App 应在前台')
-  assert.ok(line(cold.said, '[foreground]'), `③a 抢了前台要说,实得:${cold.said}`)
-  assert.match(line(cold.said, '[scroll]'), /off the screenshot/, '③a 真实滚轮输入的距离不保证,要提醒模型看图')
-  console.log(`  ③a 对这个窗口的第一次滚动(目标原在后台):替身 App 收到 ${state().scrolls} 个滚轮事件`)
+  await stillCovered('③a')
+  assert.ok(!line(cold.said, '[foreground]'), `③a 没抢前台就不该说抢了,实得:${cold.said}`)
+  assert.match(line(cold.said, '[scroll]'), /off the screenshot/, '③a 滚轮事件的距离不保证,要提醒模型看图')
+  console.log(`  ③a 对被盖住的窗口的第一次滚动:替身 App 收到 ${state().scrolls} 个滚轮事件,前台仍是盖窗`)
 
   const outside = (await failure(act(details, [{ action: 'click', x: W + 5, y: 10 }]))).message
   assert.ok(outside.includes(`look image bounds (${W}x${H})`), `① 越界校验用的尺寸应与 [image] 行一致,实得:${outside}`)
   details = (await observe()).details // 失败的那次 act_ui 让原状态过期
   details = (await act(details, [{ action: 'click', ...rail(2) }])).details
   await until('① 点第 3 个色块后页码变成 3', (s) => s.page === 2)
+  assert.equal(firstStep(details)?.delivery, 'pid', `③ 按坐标的左键点击应投给后台(pid),实得 ${firstStep(details)?.delivery}`)
+  assert.equal(firstStep(details)?.outcome, 'worked', `③ 画面变了,helper 应判 worked,实得 ${firstStep(details)?.outcome}`)
+  assert.ok(!(await mouseAt(rail(2))), '③ 后台点击不该把真鼠标挪到点击位置')
+  await stillCovered('③ 点击')
   console.log(`  ① 截图 ${W}x${H}(点名要图时 ${big.details.capture.width}x${big.details.capture.height};窗口 ${boot.window.w}x${boot.window.h} 点),按截图像素点第 3 个色块 → 第 3 页`)
 
   // ── ② expect 没满足要进正文 ──
@@ -208,12 +230,7 @@ try {
   assert.match(unmet, /prefer leaving expect out/, '② 这种窗口上应劝模型别再用 expect')
   console.log(`  ② expect 等了 ${Date.now() - t0}ms 没等到,正文补上:${unmet.trim().slice(0, 88)}…`)
 
-  // ── ③b 按坐标的 scroll / drag 真的生效 ──(点色块已把列表归到顶端)
-  // 先量旧路(投给进程):只打印不断言,留作「为什么不能走后台」的现场证据。
-  const before0 = state()
-  await ask({ cmd: 'act', lookId: details.lookId, pid: boot.pid, target: list, action: 'scroll', params: { scrollX: 0, scrollY: 120, delivery: 'pid' }, policy: 'background', cursorOverlay: false }).catch((e) => console.log(`  ③b (旧路直接报错:${e.message})`))
-  await sleep(500)
-  console.log(`  ③b 旧路(投给进程):替身 App 收到 ${state().scrolls - before0.scrolls} 个滚轮事件,滚动位置 ${before0.offset} → ${state().offset}`)
+  // ── ③b 按坐标的 scroll / drag 真的生效 ──(点色块已把列表归到顶端;scroll 在盖窗下面,drag 走前台)
   details = (await observe()).details
   // 正值 = 往下,量大致对得上。真实滚轮输入要过鼠标工具:Mos 的反向和放大由 src/wheel.ts 抵掉(这台机器上不抵的话
   // +300 一动不动、-300 滚 867)。别的改滚轮的工具它不认识,这里会红 —— 那是真的发现,不是检查坏了。
@@ -237,11 +254,14 @@ try {
   await sleep(1500)
   const far = state().offset - here
   assert.ok(near(far, want(600, wide.details.capture.width)), `③b 对着 ${wide.details.capture.width} 宽的大图 scrollY +600 应滚约 ${Math.round(want(600, wide.details.capture.width))} 点,实得 ${far}(滚动量没按截图的缩放折算)`)
+  await stillCovered('③b 滚动')
   const dragsBefore = state().drags
   details = (await act(details, [{ action: 'drag', path: [list, { x: list.x, y: list.y + 80 }] }])).details
   await until('③b drag 真的拖到了', (s) => s.drags > dragsBefore)
   assert.equal(firstStep(details)?.delivery, 'hid', '③b drag 应是真实输入(hid)')
-  console.log(`  ③b 新路(真实输入):对着 ${W} 宽的截图 scrollY +300 → 往下 ${down} 点(应约 ${Math.round(want(300, W))}),-150 → ${up};对着 ${wide.details.capture.width} 宽的大图 +600 → ${far} 点(应约 ${Math.round(want(600, wide.details.capture.width))});drag 收到 ${state().drags - dragsBefore} 次拖动事件`)
+  await quitFixture(cover.pid)
+  cover = undefined
+  console.log(`  ③b 后台滚轮(盖窗下):对着 ${W} 宽的截图 scrollY +300 → 往下 ${down} 点(应约 ${Math.round(want(300, W))}),-150 → ${up};对着 ${wide.details.capture.width} 宽的大图 +600 → ${far} 点(应约 ${Math.round(want(600, wide.details.capture.width))});drag 收到 ${state().drags - dragsBefore} 次拖动事件`)
 
   // ── ④ 窗口不在当前桌面 ──
   if (before.bundleId) await toFront(before.bundleId) // 用户切回了原来的 App
@@ -282,8 +302,9 @@ try {
     assert.match(quiet, /did not take the foreground/, `④ 窗口在场时应留在后台,实得:${quiet}`)
     assert.equal((await frontmost()).pid, before.pid, '④ 说没抢前台,前台就得还是原来那个 App')
   }
-  console.log('✅ 只能看图的 App:坐标按截图像素、expect 没满足进正文、按坐标滚动 / 拖拽真的生效、窗口离开当前桌面时有出路')
+  console.log('✅ 只能看图的 App:坐标按截图像素、expect 没满足进正文、被盖住时按坐标点击 / 滚动在后台落下、拖拽真的生效、窗口离开当前桌面时有出路')
 } finally {
+  if (cover) await quitFixture(cover.pid)
   await killFixture()
   if (before.bundleId) await toFront(before.bundleId)
 }

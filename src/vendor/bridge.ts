@@ -6,7 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { canRetryInForeground, needsFrontmostProbe, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
+import { canRetryInForeground, isBackgroundPointer, needsFrontmostProbe, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
 import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
 import { applyWheelFix, wheelFix } from "../wheel.ts"; // Forsion patch, see UPSTREAM.md
@@ -1175,14 +1175,24 @@ function executionTraceFromAct(result: HelperActResult, policy = currentDelivery
  * 2. Undo what that utility will do to the real one (reversed direction, multiplied distance); see
  *    `src/wheel.ts`. Returns the action to send.
  */
-async function wheelAction(target: ResolvedTarget, action: NativePreparedAction, signal?: AbortSignal): Promise<NativePreparedAction> {
+async function wheelAction(target: ResolvedTarget, action: NativePreparedAction, signal?: AbortSignal, policy: DeliveryPolicy = "foreground"): Promise<NativePreparedAction> {
 	if (currentPlatformBackend.name !== "macos" || action.action !== "scroll" || !("x" in action.target)) return action;
 	const primer: NativePreparedAction = { ...action, params: { scrollX: 0, scrollY: 0 } };
-	await currentPlatformBackend.act(helperActRequest(target, primer, "foreground"), { signal, timeoutMs: COMMAND_TIMEOUT_MS }).catch(() => undefined);
+	await currentPlatformBackend.act(helperActRequest(target, primer, policy), { signal, timeoutMs: COMMAND_TIMEOUT_MS }).catch(() => undefined);
 	const fix = await wheelFix(target.pid);
 	const params = action.params as { scrollX: number; scrollY: number };
 	return { ...action, params: { scrollX: applyWheelFix(params.scrollX, fix), scrollY: applyWheelFix(params.scrollY, fix) } };
 }
+
+/**
+ * pid + kind ("click" / "scroll") whose background pointer input once changed nothing on screen: later ones go
+ * straight to the foreground instead of paying the helper's screenshot wait again (CEF apps such as NetEase
+ * Cloud Music ignore it every time).
+ * ponytail: per-process flag for the life of the engine. Chromium apps swallow only the first background click
+ * (it makes the window key) and take later ones; this gives that up. Upgrade to "retry background after N
+ * foreground actions" if it matters.
+ */
+const foregroundPointers = new Set<string>();
 
 async function helperAct(
 	target: ResolvedTarget,
@@ -1198,7 +1208,9 @@ async function helperAct(
 	};
 	const textTimeout = "text" in action.params ? action.params.text.length * 25 + 4_000 : COMMAND_TIMEOUT_MS;
 	const timeoutMs = Math.max(COMMAND_TIMEOUT_MS, textTimeout);
-	if ((action.usesCurrentFocus || action.needsForeground) && !headless) {
+	const pointer = isBackgroundPointer(action);
+	const pointerKey = `${target.pid}:${action.action === "scroll" ? "scroll" : "click"}`;
+	if ((action.usesCurrentFocus || action.needsForeground || (pointer && foregroundPointers.has(pointerKey))) && !headless) {
 		const sent = await wheelAction(target, action, signal);
 		const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, sent, "foreground"), { signal, timeoutMs }));
 		const trace = executionTraceFromAct(foreground, "foreground");
@@ -1207,14 +1219,19 @@ async function helperAct(
 	}
 	try {
 		const initialPolicy = headless ? "ax_only" : "background";
-		const result = checked(await currentPlatformBackend.act(helperActRequest(target, action, initialPolicy), { signal, timeoutMs }));
+		const sent = pointer ? await wheelAction(target, action, signal, initialPolicy) : action;
+		const result = checked(await currentPlatformBackend.act(helperActRequest(target, sent, initialPolicy), { signal, timeoutMs }));
 		if (canRetryInForeground(action, result.outcome, headless)) {
-			const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, action, "foreground"), { signal, timeoutMs }));
+			if (pointer) foregroundPointers.add(pointerKey);
+			const retry = pointer ? await wheelAction(target, action, signal) : action;
+			const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, retry, "foreground"), { signal, timeoutMs }));
 			const trace = executionTraceFromAct(foreground, "foreground");
 			trace.backgroundFirst = true;
 			trace.escalatedToForeground = true;
-			trace.escalationReason = "side_effect_free_didnt";
-			trace.backgroundAttempt = { outcome: "didnt", reason: "Background input produced no observable value change; a foreground retry was safe." };
+			trace.escalationReason = pointer ? "no_visible_change" : "side_effect_free_didnt";
+			trace.backgroundAttempt = pointer
+				? { outcome: "didnt", reason: "Background pointer input changed nothing in the window's screenshot; retried in the foreground." }
+				: { outcome: "didnt", reason: "Background input produced no observable value change; a foreground retry was safe." };
 			return trace;
 		}
 		const trace = executionTraceFromAct(result, "background");

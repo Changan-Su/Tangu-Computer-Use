@@ -26,6 +26,16 @@ import Vision
 		check(overlayWindowIds(target: main, candidates: [win(7, 3, true, 40, 40, 1, 400)]).isEmpty, "a sliver window is left out")
 		check(overlayWindowIds(target: main, candidates: (1...12).map { win(UInt32(100 + $0), 3, true, 10, 40, 50, 50) }).count == 8, "at most eight windows are drawn in")
 
+		// 投给后台进程的点击要带上窗口号:点在 App 自己的弹出层里就投给弹出层,其余投给目标窗口;别人的窗口永远不选
+		check(pointerWindowId(target: main, candidates: [popup] + recorded, at: CGPoint(x: 100, y: 100)) == 8084, "a click inside the app's popup goes to the popup")
+		check(pointerWindowId(target: main, candidates: [popup] + recorded, at: CGPoint(x: 800, y: 600)) == 994, "a click outside the popup goes to the target window")
+		check(pointerWindowId(target: main, candidates: [win(5, 3, true, 0, 0, 1512, 982, pid: 99), main], at: CGPoint(x: 100, y: 100)) == 994, "another app's window covering the point is never picked")
+
+		let flat = render(["Play all (30)"]), same = render(["Play all (30)"]), other = render(["Paused"])
+		check(changedPixels(flat, same) == 0, "the same picture changes no pixels")
+		check(changedPixels(flat, other) > 12, "different text changes more pixels than the verdict threshold")
+		check(changedPixels(flat, render(["Play all (30)", "x"])) == Int.max, "a resized window counts as fully changed")
+
 		check(foldFullwidthASCII("Did you push the fix？") == "Did you push the fix?", "full-width question mark folds")
 		check(foldFullwidthASCII("Play all （30）　Ａ１") == "Play all (30) A1", "full-width brackets, letters, digits and space fold")
 		check(foldFullwidthASCII("周末一起去看展吗？好，见") == "周末一起去看展吗?好,见", "CJK text keeps its characters, punctuation folds")

@@ -24,6 +24,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 export const FIXTURES = {
   melody: { source: 'scripts/vision-fixture/melody.swift', name: 'MelodyFixture', bundleId: 'com.forsion.cu-fixture.melody', size: { w: 1000, h: 680 } },
   chatter: { source: 'scripts/vision-fixture/chatter.swift', name: 'ChatterFixture', bundleId: 'com.forsion.cu-fixture.chatter', size: { w: 900, h: 640 } },
+  // pid-window 探针的盖窗(scripts/pid-window.probe.mjs):不是被测对象,盖在被测窗口上面、记下误落到自己身上的事件
+  cover: { source: 'scripts/vision-fixture/cover.swift', name: 'CoverFixture', bundleId: 'com.forsion.cu-fixture.cover', size: { w: 600, h: 400 } },
 }
 
 /**

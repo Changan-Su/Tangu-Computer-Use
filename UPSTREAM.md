@@ -98,14 +98,17 @@ replay it** (`npm run check:actions`, part of `npm run check`, goes red if it is
   strict headless (that batch path is untouched).
 - `missingTarget()`: the error for those two cases tells the model how to fix the call.
 
-- `needsForeground` in `prepareAction()` also covers a **coordinate `scroll` and `drag`** (upstream: clicks
-  only). A scroll or drag posted to the pid is ignored by apps that draw their own UI and expose no
-  accessibility tree (WeChat), its outcome is `unknown` rather than `didnt`, so `canRetryInForeground`
-  never retried it: the model scrolled four times and nothing moved (Forsion feedback 55b984eb). A `ref`
-  scroll keeps the background accessibility path, and strict headless is untouched. `moveMouse` is left
-  alone. Do not move this to `canRetryInForeground`: escalating on `unknown` would post the scroll twice
-  wherever the background one did land. Measured on a self-drawn AppKit view (`npm run check:vision`
-  prints it every run): a pid-posted wheel event reaches the view 0 times, frontmost or not.
+- `needsForeground` in `prepareAction()` covers a coordinate **`drag`** and a coordinate **right / middle click**
+  (upstream: all coordinate clicks). A coordinate **left click** (any click count) and a coordinate **`scroll`**
+  go to the background first (`isBackgroundPointer()`), and `canRetryInForeground()` takes them to the
+  foreground when the helper reports `didnt`. That needs helper protocol 17: the helper posts them to the pid
+  **with the window number and window-local location** (see `postEvent` in `bridge.swift`) and decides
+  `worked` / `didnt` by comparing screenshots of the target window before and after. History: these used to
+  go straight to the foreground because a pid-posted wheel event reached a self-drawn view 0 times (Forsion
+  feedback 55b984eb); the cause was the missing window number, not the pid delivery
+  (`scripts/pid-window.probe.mjs`, 10-17). `unknown` still never escalates (it may have landed).
+  `helperAct()` in `bridge.ts` remembers, per pid and kind (click / scroll), a background attempt that
+  changed nothing on screen and sends later ones straight to the foreground (`foregroundPointers`).
 - `scrollInPoints()` in `bridge.ts`, applied in `dispatchUiAction()` (macOS, coordinate scroll): the distance
   is given in the screenshot's pixels, like `x` / `y`, and converted to the screen points the helper scrolls
   in (`framePoints.w / look.image.width`). Upstream passes it through raw, so the same number means twice
@@ -113,7 +116,8 @@ replay it** (`npm run check:actions`, part of `npm run check`, goes red if it is
   path in `dispatchUiTransaction()` goes through the same conversion. Measured with a real
   model: 1800 against a 1520 px capture of a 760 pt window went twice as far as meant. Windows and Linux
   are untouched (their wheel units are not pixels).
-- `wheelAction()` in `bridge.ts`, called from `helperAct()` before a foreground coordinate scroll (macOS).
+- `wheelAction()` in `bridge.ts`, called from `helperAct()` before a coordinate scroll (macOS), with the policy
+  that scroll goes out under (background first, foreground on retry); Mos rewrites pid-posted wheel events too.
   It imports `applyWheelFix` / `wheelFix` from `src/wheel.ts` (the one import that reaches out of vendor):
   - It first sends one zero-distance wheel event to the same point. With a smooth-scrolling mouse utility
     running (Mos), the first wheel event aimed at a window that was not the previous scroll target never
@@ -198,7 +202,7 @@ Accessibility/Screen-Recording (TCC) grants to them.
 > stays put, everything else goes to `~/Applications` (no admin needed). Users whose `/Applications`
 > is not writable will be asked to re-grant TCC once, because the path moved.
 
-**Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **16**, in two places that must
+**Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **17**, in two places that must
 always match: `native/macos/bridge.swift` (`private let protocolVersion`) and
 `src/vendor/platform/macos/helper.ts` (`HELPER_PROTOCOL_VERSION`) — `npm run check:platform` fails when they
 differ. Checks never hard-code the number: they read it from those two files through
@@ -227,6 +231,21 @@ every new native feature silently does nothing (that is exactly how the first li
   as 1920×1080 mostly white. That whitespace is baked into the JPEG; no amount of CSS fixes it.
   Anything serving the live view must set width/height. `captureWindow` itself is left alone because
   `look` depends on its coordinate space.
+- `bridge.swift` **pid-posted pointer events carry the window** (protocol 17). Upstream posts them with
+  `CGEventPostToPid` and nothing else; they reach the app's event queue, but `NSEvent.window` is nil and
+  AppKit drops them — key window or not (macOS 27, measured with a local event monitor in
+  `scripts/vision-fixture/cover.swift --trace`). AppKit reads the window number from CGEvent field **51**
+  (what `NSEvent.mouseEvent(…windowNumber:…).cgEvent` writes; the public fields 91 / 92 are ignored) and
+  the location from the record's **window location**, which only the exported-but-undeclared
+  `CGEventSetWindowLocation` writes (setting `location` resets it to (-1,-1), so set it last-but-one).
+  `pointerWindow()` picks the window: the topmost on-screen one of the target and the same-pid overlays the
+  screenshot draws (`pointerWindowId()` in `capture_overlays.swift`). After a coordinate click or a non-zero
+  scroll posted that way, `act()` compares screenshots of the target window (`changedPixels()`, up to 600 ms)
+  and reports `worked` / `didnt` with `evidence.pixelsChanged`. Drags still go without a window number (not
+  measured). Measured with the target covered by another app's active window: self-drawn AppKit views,
+  TextEdit, Electron and Chrome take clicks / scrolls without activating, raising or moving the real cursor;
+  Chromium swallows the first click into a non-key window (it only makes the window key); a CEF app
+  (NetEase Cloud Music) ignored everything.
 - `bridge.swift` `act()`: **coordinate clicks try an AX hit-test first** (`backgroundPressAtPoint`).
   Upstream sends coordinate clicks straight to HID/foreground (`needsForeground` in `actions.ts`)
   because `CGEventPostToPid` is dropped by non-key windows — so "look at the screenshot and click"
@@ -364,6 +383,7 @@ button; `install.sh dev|prod` stays as the developer loop for iterating on the b
 - Computer History recorder (protocol 13, 0.6.0): `native/macos/activity_recorder.swift` + `activity_recorder_tests.swift` (`check:recorder-logic`), listed in `macosSourcePaths` before `bridge.swift`. Three `bridge.swift` hooks to replay after a resync: `processClient` hands a `recordSubscribe` line to `subscribeRecorder()` and, once subscribed, only waits for EOF and then calls `ActivityRecorder.shared.unsubscribe`; `handleRequest` wraps `act` / `actBatch` / `focusWindow` / `restoreUserFocus` in `agentEnter()` / `agentLeave()` (events become `origin:"agent"`) and rejects `recordSubscribe` on stdin; `diagnostics` reports `recorderSubscribers`. `grep -n "ActivityRecorder" native/macos/bridge.swift` must find them. The recorder never calls `ensureEnhancedAccessibility`.
 - Computer History recorder, **Windows** (recordSubscribe contract 13): `native/windows/bridge-rs/src/recorder.rs` (pipe server, hook thread, UIA thread — `#[cfg(windows)]`), `recorder_logic.rs` (platform-neutral, tests in `tests/recorder_logic_tests.rs`, run anywhere with `cargo test`) and `agent_marker.rs`. Replay after a resync: `lib.rs` declares the three modules; `main.rs` branches to `recorder-protocol` / `serve --pipe` **before** `window::start_root_event_journal()` (serve mode must not start the journal or the stdio loop) and wraps `act` / `actBatch` / `focusWindow` / `openBrowserLocation` in `agent_marker::enter()` (a session-local named mutex, held 750ms past the command; the serve process probes it to mark `origin:"agent"` — actor and recorder are different processes on Windows). `Cargo.toml` adds the `implement` feature + a direct `windows-core` dependency (the `#[implement]` macro expands to `windows_core::…`) and the Security / Pipes / IO / RemoteDesktop / StationsAndDesktops / LibraryLoader / Storage features. `grep -n "agent_marker\|serve_recorder" native/windows/bridge-rs/src/main.rs` must find them. The **stdio** protocol number (`protocol::PROTOCOL_VERSION`, vendor TS checks it with `!==`) is untouched; `RECORDER_PROTOCOL` is a separate constant. Desktop runs serve from its own hashed copy of the exe (never the `~/.pi/...` path setup-helper overwrites). Real-machine check: `.github/workflows/windows-recorder-probe.yml` (push `ci/windows-recorder*`) runs `scripts/probe-recorder-windows.mjs`.
 - App side panel (protocol 14, 0.6.2): three read-only commands in `bridge.swift` under `MARK: - Tangu:App 侧边拼接` — `dockCandidates` (on-screen layer-0 windows of `.regular` apps, front to back), `dockProbe` (one window's live CGWindowList bounds + `frontPid`, no AX, polled ~60Hz by the desktop) and `selection` (focused element's selected text, walking up to the AXWebArea and falling back to `AXSelectedTextMarkerRange`; else selected rows/children; secure fields — and secure descendants of selected rows — never read; with `windowId` it reads only when that window is the focused one). Plus `setWindowFrame` now treats `width`/`height` as optional (move without resize). Dispatch cases sit next to `getMousePosition`.
+- Background pointer input (protocol 17): pid-posted clicks / scrolls carry the window number and window-local location, and `act()` judges them by screenshot — see the `bridge.swift` bullets above. `grep -n "CGEventSetWindowLocation\|pointerWindowId\|pixelsChangedAfterInput" native/macos/*.swift` must find all three after a resync.
 - Pair gestures and window image (protocol 16, 0.7.1): `HotkeyMonitor` runs one `ModPairMachine` per `ModPairFamily` (⌘ / ⇧ / ⌥: flag, device bits, key codes) and each subscriber names one gesture; `bridge.swift` gains `windowImage` (preflight `CGPreflightScreenCaptureAccess` first, then `captureWindow` + `downscaledImage` + `jpegData`, no AX). Windows: `hotkey_logic.rs` / `hotkey.rs` gain the Shift and Alt families the same way; no Windows protocol number changes. `grep -n "windowImage" native/macos/bridge.swift` must find the case and the function after a resync.
 - Global gesture subscription (`hotkeySubscribe`, protocol 15, 0.7.0): `native/macos/hotkey_monitor.swift` + `hotkey_monitor_tests.swift` (`check:hotkey-logic`), listed in `macosSourcePaths` after `activity_recorder.swift` — it reuses that file's `RecorderSubscriber` write queue, `recorderPeerIsSameUser`, `recorderTitle` and `recorderSecureInputActive`, and never references `Bridge`. Three `bridge.swift` hooks to replay after a resync: `processClient` tries `subscribeHotkey()` right after `subscribeRecorder()` and on EOF also calls `HotkeyMonitor.shared.unsubscribe`; `handleRequest` rejects `hotkeySubscribe` on stdin with `unsupported`; `diagnostics` reports `hotkeySubscribers`. `grep -n "HotkeyMonitor" native/macos/bridge.swift` must find them. **Windows**: `native/windows/bridge-rs/src/hotkey.rs` (`#[cfg(windows)]`: its own `WH_KEYBOARD_LL` hook thread and a dispatcher thread, alive only while there are gesture subscribers) and `hotkey_logic.rs` (platform-neutral, tests in `tests/hotkey_logic_tests.rs`, run anywhere with `cargo test`). Replay after a resync: `lib.rs` declares both modules; in `recorder.rs`, `serve_client` branches on `hotkeySubscribe`, `idle_watchdog` also requires `hotkey::subscriber_count() == 0`, serve-mode `diagnostics` reports `hotkeySubscribers`, and `now_ms`, `Outbox::send`, `window_text`, `window_pid`, `window_app`, `process_path` and `file_description` are `pub(crate)`. `grep -n "hotkey" native/windows/bridge-rs/src/recorder.rs` must find them. Neither Windows number changes (`protocol::PROTOCOL_VERSION` 4, `RECORDER_PROTOCOL` 13): the command is additive there and an older exe answers `unknown_command`. Real-machine check: `scripts/probe-hotkey-windows.mjs`, run by `.github/workflows/windows-recorder-probe.yml` before the recorder probe.
 - Mini Panel foreground activity: `native/macos/foreground_activity.swift` emits a bounded, data-only lease beside the daemon socket. Hooked into actual HID/focus delivery and recursive input scopes, not the requested delivery policy. Included in both native-build and source-install inputs. No change to upstream tool schemas or input behavior.

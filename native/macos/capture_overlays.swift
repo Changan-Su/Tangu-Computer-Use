@@ -41,3 +41,37 @@ func foldFullwidthASCII(_ s: String) -> String {
 	}
 	return String(out)
 }
+
+/// pid 投递的指针事件该交给哪扇窗口:candidates 按从前到后排,取点上第一扇「目标自己,或会画进目标截图的叠窗」。
+func pointerWindowId(target: OverlayCandidate, candidates: [OverlayCandidate], at point: CGPoint) -> UInt32 {
+	let overlays = Set(overlayWindowIds(target: target, candidates: candidates))
+	return candidates.first { ($0.id == target.id || overlays.contains($0.id)) && $0.frame.contains(point) }?.id ?? target.id
+}
+
+/// 两张截图有多少像素变了:都缩到最长边 ≤ maxDimension 再逐像素比(任一通道差 > 24 算变)。
+/// 尺寸不一样 = 窗口变了,算全变。给「投给后台窗口的点击 / 滚轮落没落下」用 —— App 不回话,只能看画面。
+func changedPixels(_ a: CGImage, _ b: CGImage, maxDimension: Int = 800) -> Int {
+	guard a.width == b.width, a.height == b.height else { return Int.max }
+	let scale = min(1, Double(maxDimension) / Double(max(a.width, a.height)))
+	let w = max(1, Int(Double(a.width) * scale)), h = max(1, Int(Double(a.height) * scale))
+	func pixels(_ image: CGImage) -> [UInt8] {
+		var buffer = [UInt8](repeating: 0, count: w * h * 4)
+		buffer.withUnsafeMutableBytes { raw in
+			CGContext(data: raw.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)?
+				.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+		}
+		return buffer
+	}
+	let pa = pixels(a), pb = pixels(b)
+	var changed = 0
+	// ⚠️拆成单独的语句:写成一个 max(abs(...), ...) 表达式,Swift 类型检查要跑好几分钟
+	for i in stride(from: 0, to: pa.count, by: 4) {
+		var differs = false
+		for c in 0..<3 {
+			let d: Int = Int(pa[i + c]) - Int(pb[i + c])
+			if d > 24 || d < -24 { differs = true }
+		}
+		if differs { changed += 1 }
+	}
+	return changed
+}

@@ -154,10 +154,12 @@ export function prepareAction(action: UiAction, state: ActionState, env: ActionE
 	if (isClick(operation) || operation === "moveMouse" || operation === "scroll") state.pointer = target;
 	if (isClick(operation)) state.frontmost = false;
 	const establishesFocus = !env.headless && Boolean(action.ref) && isClick(operation) && containsEditable(env.node(action.ref!));
-	// Coordinate-targeted pointer input is real input. A scroll or drag posted to the pid is silently
-	// ignored by apps that draw their own UI (WeChat: no accessibility tree, so coordinates are the only
-	// way in), and its outcome is "unknown", so nothing ever retried it in the foreground.
-	const needsForeground = !env.headless && "x" in target && (isClick(operation) || operation === "scroll" || operation === "drag");
+	// Coordinate-targeted pointer input. A left click or a scroll goes to the target pid first, carrying the
+	// window number (helper protocol 17; AppKit drops pid-posted mouse events without one, which is why they used
+	// to go straight to the foreground). The helper compares screenshots, so "didnt" means nothing moved on
+	// screen and canRetryInForeground() takes it to the foreground. Drags and right / middle clicks have not been
+	// measured in the background and stay foreground-only.
+	const needsForeground = !env.headless && "x" in target && (operation === "drag" || (isClick(operation) && mouseButton(action.button) !== "left"));
 
 	switch (operation) {
 		case "press":
@@ -172,7 +174,12 @@ export function prepareAction(action: UiAction, state: ActionState, env: ActionE
 }
 
 export function canRetryInForeground(action: PreparedAction, outcome: "worked" | "didnt" | "unknown", headless: boolean): boolean {
-	return !headless && outcome === "didnt" && (action.action === "typeText" || action.action === "keypress");
+	return !headless && outcome === "didnt" && (action.action === "typeText" || action.action === "keypress" || isBackgroundPointer(action));
+}
+
+/** A coordinate left click or scroll that goes to the background first (see needsForeground in prepareAction). */
+export function isBackgroundPointer(action: PreparedAction): boolean {
+	return (action.action === "click" || action.action === "press" || action.action === "scroll") && "x" in action.target && !action.needsForeground;
 }
 
 export function outcomeAfterCheck(current: "worked" | "didnt" | "unknown", check: "verified" | "preexisting" | "failed"): "worked" | "didnt" | "unknown" {
