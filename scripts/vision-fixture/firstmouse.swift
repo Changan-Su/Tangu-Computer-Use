@@ -22,6 +22,10 @@ func log(_ kind: String) {
 
 final class Pad: NSView {
 	override var isFlipped: Bool { true }
+	// 无障碍里露成一个没有按压动作的分组:检查按 ref 点它的中心(没有录屏授权的 dev helper 截不到图,只能按 ref)
+	override func isAccessibilityElement() -> Bool { true }
+	override func accessibilityRole() -> NSAccessibility.Role? { .group }
+	override func accessibilityLabel() -> String? { "first-click pad" }
 	override func draw(_ dirtyRect: NSRect) {
 		(clicks % 2 == 0 ? NSColor.systemTeal : NSColor.systemOrange).setFill()
 		bounds.fill()

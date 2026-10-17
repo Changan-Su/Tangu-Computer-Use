@@ -13,7 +13,7 @@
  * 加 --any-protocol 跑,前台那几下会有被吞的。
  * ⚠️会动真鼠标(点完还原)、替身会短暂到前台:跑之前占 devlock、先问过用户。点之前 helper 自己核对这一点最上面是替身的窗口。
  *
- * 跑法:node scripts/first-click.check.mjs [--trials 5] [--any-protocol](PI_COMPUTER_USE_HELPER_APP_PATH 可指定 helper;要辅助功能 + 录屏授权)
+ * 跑法:node scripts/first-click.check.mjs [--trials 5] [--any-protocol](PI_COMPUTER_USE_HELPER_APP_PATH 可指定 helper;要辅助功能,后台那一下还要录屏)
  */
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
@@ -52,6 +52,13 @@ const ask = (cmd, args = {}) => new Promise((resolve, reject) => {
   s.write(`${JSON.stringify({ id: `fc-${Date.now()}`, cmd, ...args })}\n`)
 })
 
+const findNode = (node, pred) => {
+  if (!node) return null
+  if (pred(node)) return node
+  for (const c of node.children || []) { const hit = findNode(c, pred); if (hit) return hit }
+  return null
+}
+let screenRecording = false
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cu-first-click-'))
 let fixture
 /** 起一个在后台的替身,点它板子中间一下,回 {result, events(这一下之后的)}。 */
@@ -60,12 +67,14 @@ async function clickOnce(app, policy, index) {
   fixture = await launchFixture(app, statePath, { frame: { x: 80, y: 140, w: 600, h: 400 } })
   await sleep(300)
   assert.equal(readState(statePath).active, false, 'the fixture came up frontmost; the check needs it in the background')
-  const look = (await ask('look', { pid: fixture.pid, windowId: fixture.windowNumber, includeImage: true })).result
-  assert.ok(look?.lookId && look.image, 'look failed (needs Screen Recording)')
+  const look = (await ask('look', { pid: fixture.pid, windowId: fixture.windowNumber, includeImage: screenRecording })).result
+  const pad = findNode(look?.outline, (n) => [n.label, n.title, n.description].includes('first-click pad'))
+  assert.ok(look?.lookId && pad?.ref, 'look failed or the pad is not in the outline')
   const before = readState(statePath).events.length
+  // 按 ref 点:板子没有按压动作,helper 在它中心发鼠标事件(和按坐标点同一条路)
   const r = await ask('act', {
     lookId: look.lookId, pid: fixture.pid, policy, cursorOverlay: false, action: 'click',
-    target: { x: look.image.width * 0.5, y: look.image.height * 0.6 }, params: { button: 'left', clickCount: 1, delivery: policy === 'background' ? 'pid' : 'hid' },
+    target: { ref: pad.ref }, params: { button: 'left', clickCount: 1, delivery: policy === 'background' ? 'pid' : 'hid' },
   })
   assert.notEqual(r.error?.code, 'screen_locked', 'the screen is locked; unlock it and run again')
   await sleep(500)
@@ -81,16 +90,20 @@ try {
   await execFileP('open', ['-n', '-g', helperApp, '--args', 'serve', '--socket', socket])
   let diag
   for (let i = 0; i < 75 && !diag; i++) diag = (await ask('diagnostics').catch(() => undefined))?.result ?? (await sleep(200), undefined)
-  assert.ok(diag?.accessibility && diag?.screenRecording, 'isolated helper needs Accessibility and Screen Recording')
+  assert.ok(diag?.accessibility, 'isolated helper needs Accessibility')
+  screenRecording = diag.screenRecording === true
   if (!process.argv.includes('--any-protocol')) assert.equal(diag.protocolVersion, runtimeProtocolVersion(), 'helper protocol differs from this checkout')
   console.log(`helper ${helperApp} protocol ${diag.protocolVersion}`)
   const app = await buildFixture('firstmouse')
 
-  const bg = await clickOnce(app, 'background', 0)
-  assert.ok(bg.result.ok, `background click failed: ${JSON.stringify(bg.result.error)}`)
-  assert.ok(!bg.events.some((e) => e.kind === 'mouseDown'), 'a background click reached a view that does not accept first mouse (AppKit changed?)')
-  assert.equal(bg.result.result.outcome, 'didnt', `a background click the view never got must be judged didnt (that is what takes it to the foreground), got ${bg.result.result.outcome}`)
-  console.log('PASS background click: view got nothing, helper judged didnt')
+  // 后台那一下要截图判 didnt:没有录屏授权(开发证书签的 .dev helper)就跳过,照实说
+  if (screenRecording) {
+    const bg = await clickOnce(app, 'background', 0)
+    assert.ok(bg.result.ok, `background click failed: ${JSON.stringify(bg.result.error)}`)
+    assert.ok(!bg.events.some((e) => e.kind === 'mouseDown'), 'a background click reached a view that does not accept first mouse (AppKit changed?)')
+    assert.equal(bg.result.result.outcome, 'didnt', `a background click the view never got must be judged didnt (that is what takes it to the foreground), got ${bg.result.result.outcome}`)
+    console.log('PASS background click: view got nothing, helper judged didnt')
+  } else console.log('SKIP background click: this helper has no Screen Recording grant, so it cannot judge didnt')
 
   const failures = []
   for (let i = 1; i <= TRIALS; i++) {
