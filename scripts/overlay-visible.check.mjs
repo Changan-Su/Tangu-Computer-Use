@@ -76,6 +76,7 @@ while Date() < deadline {
             "windowId": info[kCGWindowNumber as String] as? Int ?? 0,
             "layer": info[kCGWindowLayer as String] as? Int ?? 0,
             "alpha": info[kCGWindowAlpha as String] as? Double ?? 0,
+            "x": b["X"] as? Double ?? 0, "y": b["Y"] as? Double ?? 0,
             "w": b["Width"] as? Double ?? 0, "h": b["Height"] as? Double ?? 0,
         ])
     }
@@ -93,6 +94,35 @@ fs.writeFileSync(swiftFile, PROBE_SWIFT)
 execFileSync('xcrun', ['swiftc', '-target', triple, '-O',
   '-module-cache-path', path.join(os.tmpdir(), `tangu-cu-overlay-cache-${process.arch}`),
   swiftFile, '-o', probeBin], { stdio: 'inherit' })
+
+// 遮挡窗:另一个进程开一扇普通窗口盖住目标并把自己激活,扮演「用户的前台 App」。
+const COVER_SWIFT = `
+import AppKit
+let a = CommandLine.arguments.dropFirst().compactMap { Double($0) }
+let app = NSApplication.shared
+app.setActivationPolicy(.regular)
+let primary = NSScreen.screens.first { $0.frame.origin == .zero } ?? NSScreen.screens[0]
+let frame = NSRect(x: a[0] - 20, y: primary.frame.height - a[1] - a[3] - 20, width: a[2] + 40, height: a[3] + 40)
+let w = NSWindow(contentRect: frame, styleMask: [.titled], backing: .buffered, defer: false)
+w.title = "tangu-cu overlay check cover"
+w.backgroundColor = .systemGray
+w.makeKeyAndOrderFront(nil)
+app.activate(ignoringOtherApps: true)
+DispatchQueue.main.asyncAfter(deadline: .now() + 20) { exit(0) }
+app.run()
+`
+const coverFile = path.join(os.tmpdir(), `tangu-cu-overlay-cover-${process.pid}.swift`)
+const coverBin = path.join(os.tmpdir(), `tangu-cu-overlay-cover-${process.pid}`)
+fs.writeFileSync(coverFile, COVER_SWIFT)
+execFileSync('xcrun', ['swiftc', '-target', triple, '-O',
+  '-module-cache-path', path.join(os.tmpdir(), `tangu-cu-overlay-cache-${process.arch}`),
+  coverFile, '-o', coverBin], { stdio: 'inherit' })
+/** 开一扇盖住 frame(CG 全局坐标)的遮挡窗,返回子进程。 */
+async function openCover(frame) {
+  const child = spawn(coverBin, [frame.x, frame.y, frame.w, frame.h].map(String), { stdio: 'ignore' })
+  await sleep(300)
+  return child
+}
 
 /** 后台采样 seconds 秒,返回每帧的窗口栈。 */
 function watch(seconds) {
@@ -117,12 +147,15 @@ function helperPid() {
   return pid
 }
 
-const CURSOR_LEVEL = 102 // NSWindow.Level.popUpMenu + 1(见 agent_cursor.swift)
-const GLOW_LEVEL = 3 // NSWindow.Level.floating
 const VISIBLE_ALPHA = 0.5 // 淡入淡出中的窗口不算"用户看得见"
-const overlaysIn = (windowStack, hpid) => {
+const GLOW_PAD = 12 // agent_highlight.swift 的 pad:光效窗口比目标每边大 12pt
+// 两个叠层现在都跟目标同层(钉在目标正上方,10-17),不能再按 level 分:按 helper 进程 + 尺寸分。
+// 光效 = 目标矩形外扩 pad;示意光标 = 铺满所有屏幕的那扇(远大于目标)。alpha 门槛照旧挡住淡出中的残影。
+const overlaysIn = (windowStack, hpid, target) => {
   const mine = windowStack.filter((x) => x.pid === hpid && x.alpha > VISIBLE_ALPHA)
-  return { cursor: mine.find((x) => x.layer === CURSOR_LEVEL), glow: mine.find((x) => x.layer === GLOW_LEVEL) }
+  const glow = target && mine.find((x) => Math.abs(x.w - target.w - GLOW_PAD * 2) <= 2 && Math.abs(x.h - target.h - GLOW_PAD * 2) <= 2)
+  const cursor = mine.find((x) => x !== glow && x.w * x.h > 4 * (target ? target.w * target.h : 0) && x.w >= 640)
+  return { cursor, glow }
 }
 
 /**
@@ -131,14 +164,14 @@ const overlaysIn = (windowStack, hpid) => {
  * ⚠️这一步是**假绿灯防线**:光标空闲 8 秒才自动隐藏,而 check:live 会紧接着 check:liveview 跑 ——
  * 上一个仪器留下的光标窗口足以让本次的断言通过,哪怕本次这一下压根没画光标。
  */
-async function waitForCleanSlate(hpid, timeoutMs = 14_000) {
+async function waitForCleanSlate(hpid, targetId, timeoutMs = 14_000) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     const w = watch(0.15)
     await w.done
     const last = w.frames.at(-1)
     if (last) {
-      const { cursor, glow } = overlaysIn(last.windows, hpid)
+      const { cursor, glow } = overlaysIn(last.windows, hpid, last.windows.find((x) => x.windowId === targetId))
       if (!cursor && !glow) return
     }
     await sleep(500)
@@ -164,7 +197,7 @@ try {
   assert.ok(five, '没找到数字键 5')
 
   // 干净起跑线:确认此刻一个叠层都没有,后面「出现了」才归功于这一次操作。
-  await waitForCleanSlate(hpid)
+  await waitForCleanSlate(hpid, win.windowId)
 
   const w = watch(6)
   await sleep(400) // 这段是基线帧,必须是空的
@@ -189,7 +222,7 @@ try {
   const calcWinId = win.windowId
   const rows = w.frames.map((f) => {
     const target = f.windows.find((x) => x.windowId === calcWinId)
-    return { t: f.t, ...overlaysIn(f.windows, hpid), targetZ: target?.z }
+    return { t: f.t, ...overlaysIn(f.windows, hpid, target), targetZ: target?.z }
   })
   const baseline = rows.filter((r) => r.t < 400) // act 发出之前
   const after = rows.filter((r) => r.t >= 400 + actMs)
@@ -208,14 +241,57 @@ try {
 
   assert.ok(after.some((r) => r.cursor), '这一下之后示意光标没出现 —— AgentCursor 的 NSWindow 没被创建/显示')
   assert.ok(after.some((r) => r.glow), '这一下之后边缘光效没出现 —— AgentHighlight 没被点亮')
-  // 命门:窗口在屏上 ≠ 用户看得见。level 没设的话它待在普通层(layer=0),
-  // 而宿主是 .accessory 从不激活 → 永远被被操控的那个 App 压在下面 = 用户什么也看不到。
+  // 命门:窗口在屏上 ≠ 用户看得见。叠层没钉到目标上面的话(跨进程 order 没生效、level 不对),
+  // 宿主是 .accessory 从不激活 → 永远被被操控的那个 App 压在下面 = 用户什么也看不到。
   assert.ok(after.some((r) => r.cursor && r.targetZ != null && r.cursor.z < r.targetZ), '示意光标始终被目标窗口盖住(z-order 在其下)—— 用户看不见,等于没画')
   assert.ok(after.some((r) => r.glow && r.targetZ != null && r.glow.z < r.targetZ), '边缘光效始终被目标窗口盖住(z-order 在其下)—— 用户看不见,等于没画')
   console.log('✅ 叠层可见性:这一下之后两个叠层都新上了屏,且都盖在被操控窗口之上')
+
+  // ── 第二段:目标被别的 App 的窗口盖住时,叠层必须在那扇窗口**下面**(10-17 用户定「特效跟着窗口可见部分」)。
+  // 以前叠层压在一切之上,后台操作时光效和光标画在用户的前台窗口上。现在叠层钉在目标正上方一层。
+  const calcFrame = w.frames.at(-1)?.windows.find((x) => x.windowId === calcWinId)
+  assert.ok(calcFrame, '第一段结束时找不到计算器窗口')
+  const cover = await openCover(calcFrame)
+  try {
+    await sleep(900)
+    const look2 = await ask({ cmd: 'look', pid: calc.pid, windowId: win.windowId, includeImage: true })
+    const five2 = findNode(look2.outline, (x) => x.role === 'AXButton' && (x.description === '5' || x.title === '5'))
+    assert.ok(five2, '盖窗后没找到数字键 5')
+    const w2 = watch(3)
+    await sleep(200)
+    const acted2 = await ask({
+      cmd: 'act', lookId: look2.lookId, pid: calc.pid, policy: 'background',
+      cursorOverlay: true, action: 'click',
+      target: { x: five2.rect.x + five2.rect.w / 2, y: five2.rect.y + five2.rect.h / 2 },
+      params: { button: 'left', clickCount: 1 },
+    })
+    await w2.done
+    assert.ok(['ax', 'pid'].includes(acted2.performed?.delivery), `盖窗时必须走后台投递,实得 delivery=${acted2.performed?.delivery}`)
+    const rows2 = w2.frames.map((f) => {
+      const target = f.windows.find((x) => x.windowId === calcWinId)
+      const coverWin = f.windows.find((x) => x.pid === cover.pid && x.layer === 0)
+      return { t: f.t, ...overlaysIn(f.windows, hpid, target), targetZ: target?.z, coverZ: coverWin?.z }
+    }).filter((r) => r.t >= 200)
+    const g2 = (o, r) => (!o || r.targetZ == null || r.coverZ == null ? '·' : o.z < r.coverZ ? 'X' : o.z < r.targetZ ? 'S' : 'b')
+    console.log(`  盖窗后光标: ${rows2.map((r) => g2(r.cursor, r)).join('')}`)
+    console.log(`  盖窗后光效: ${rows2.map((r) => g2(r.glow, r)).join('')}`)
+    console.log('             (· 不在屏上 ｜ S 夹在遮挡窗和目标之间 ｜ X 盖在遮挡窗上面 ｜ b 被目标盖住)')
+    assert.ok(rows2.some((r) => r.coverZ != null && r.targetZ != null && r.coverZ < r.targetZ), '遮挡窗没盖到计算器上面 —— 这一段测不出东西')
+    const sandwiched = (o, r) => o && r.coverZ != null && r.targetZ != null && r.coverZ < o.z && o.z < r.targetZ
+    const onTop = (o, r) => o && r.coverZ != null && o.z < r.coverZ
+    assert.ok(rows2.some((r) => sandwiched(r.glow, r)), '盖窗时边缘光效没夹在遮挡窗和目标之间')
+    assert.ok(!rows2.some((r) => onTop(r.glow, r)), '盖窗时边缘光效盖到了遮挡窗上面 —— 后台操作画在用户的前台窗口上')
+    assert.ok(rows2.some((r) => sandwiched(r.cursor, r)), '盖窗时示意光标没夹在遮挡窗和目标之间')
+    assert.ok(!rows2.some((r) => onTop(r.cursor, r)), '盖窗时示意光标盖到了遮挡窗上面 —— 后台操作画在用户的前台窗口上')
+    console.log('✅ 盖窗:两个叠层都在遮挡窗下面、目标上面')
+  } finally {
+    cover.kill()
+  }
   console.log('   (只验证窗口的创建/层级/z 序 —— 画布内容是否真画出了像素,本仪器不覆盖)')
 } finally {
   await killCalculator(ask).catch(() => {})
   fs.rmSync(probeBin, { force: true })
   fs.rmSync(swiftFile, { force: true })
+  fs.rmSync(coverBin, { force: true })
+  fs.rmSync(coverFile, { force: true })
 }

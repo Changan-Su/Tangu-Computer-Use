@@ -1,6 +1,6 @@
 ---
 name: Desktop app control
-description: Use when a task needs a real desktop application rather than an API, CLI, or file — reading what is on screen in another app, clicking through its UI, filling its fields, or driving a GUI-only workflow. Covers the Computer Use tool loop, keeping actions in the background, showing the controlled window on the Agent Desk, and the confirmation rules for irreversible actions.
+description: Use when a task needs a real desktop application rather than an API, CLI, or file — reading what is on screen in another app, clicking through its UI, filling its fields, or driving a GUI-only workflow. Covers the Computer Use tool loop, keeping actions in the background, and the confirmation rules for irreversible actions.
 version: 1.0.0
 category: automation
 ---
@@ -162,16 +162,10 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
 
 ## Show the user what you are doing
 
-The desktop shows a glowing edge around whichever window you are acting on, so the user can always see
-which app you are touching. On top of that, put the live picture of that window on the Agent Desk **at
-the start of a Computer Use session**, so they can watch instead of guessing:
-
-```
-desk_present({ views: [{ type: "view", view: "plugin:tangu-computer-use:live", name: "被操控的窗口" }], size: "half" })
-```
-
-Do it once, before the first `act_ui`. The view keeps itself up to date — you do not re-present it per
-action. If `desk_present` is unavailable, just carry on; it is a courtesy, not a dependency.
+The window you act on gets a glowing edge, and clicks you send in the background show an agent cursor.
+Both sit just above that window, so a window the user keeps in front of it covers them too. After your
+first successful `act_ui` or `jev_ui` in a run, the live picture of that window appears on the Agent
+Desk by itself: do not call `desk_present` for it.
 
 On macOS, Genesis automatically opens a temporary Mini Panel for the current running conversation
 when real Computer Use input takes another app into the foreground. The user does not need to open

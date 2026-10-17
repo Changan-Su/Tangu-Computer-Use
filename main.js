@@ -176,7 +176,9 @@ const CSS = `
 
 ctx.registerView({
   id: VIEW_ID,
-  title: '被操控的窗口',
+  // Agent Desk 卡片标题也用它(插件第一次动手时自己摆上 Desk,不带名字)。
+  // ponytail: 装载时按语言取一次;切换界面语言后要重载插件才跟上(老宿主的视图标题只认字符串)。
+  title: (ctx.getLocale ? ctx.getLocale() : 'zh') === 'en' ? 'Controlled window' : '被操控的窗口',
   mount(el) {
     const doc = el.ownerDocument || document
     if (!doc.getElementById('cu-live-style')) {

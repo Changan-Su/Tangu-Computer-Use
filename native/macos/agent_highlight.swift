@@ -98,9 +98,7 @@ final class AgentHighlight {
             currentFrame = appKitFrame
             window.setFrame(appKitFrame, display: true)
         }
-        if !window.isVisible { window.orderFrontRegardless() }
-        // ⚠️这里曾是 window.order(.above, relativeTo: Int(windowId)) —— 对**别的进程**的 window number
-        // 是空操作(实测:窗口既不上移也不消失)。跨进程的 z-order 只能靠 window level,见 init 里的 .floating。
+        pinOverlay(window, above: windowId)
     }
 
     private func startFollowing() {
@@ -160,6 +158,33 @@ final class AgentHighlight {
     }
 }
 
+/// 把叠层钉在 windowId 那扇窗口的正上方一层(光效与示意光标共用)。
+///
+/// 叠层跟目标同一个 window level,再跨进程 order(.above, relativeTo:):用户自己摆在目标上面的窗口照样盖住它,
+/// 目标露出来的部分照常看得见(10-17 用户定「特效跟着窗口可见部分」;此前用 .floating / popUpMenu+1
+/// 压在所有窗口之上,后台操作时光效和光标盖在用户的前台窗口上)。
+/// ⚠️跨进程 order(.above, relativeTo:) **只在同一 level 内**起作用:以前判它「空操作」,是因为叠层当时在 .floating
+/// (10-17 macOS 27 实测:同在 0 层时稳定夹在遮挡窗和目标之间)。
+/// 目标 App 被激活后会压过叠层,所以光效跟随的每一拍都要重钉一次;没上屏(第一次)才 orderFrontRegardless 兜底。
+@MainActor
+func pinOverlay(_ window: NSWindow, above windowId: UInt32, layer: Int? = nil) {
+    let level = NSWindow.Level(rawValue: layer ?? cgWindowLayer(windowId: windowId) ?? 0)
+    if window.level != level { window.level = level }
+    window.order(.above, relativeTo: Int(windowId))
+    if !window.isVisible {
+        window.orderFrontRegardless()
+        window.order(.above, relativeTo: Int(windowId))
+    }
+}
+
+/// 窗口所在的 window level(CGWindowList 的 kCGWindowLayer)。拿不到就 nil。
+func cgWindowLayer(windowId: UInt32) -> Int? {
+    guard let entries = CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(windowId)) as? [[String: Any]],
+        let entry = entries.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowId })
+    else { return nil }
+    return (entry[kCGWindowLayer as String] as? NSNumber)?.intValue
+}
+
 /// 按 CG 窗口号取窗口矩形(CG 全局坐标,左上原点)。
 /// 顶层函数而非 Bridge 方法:AgentHighlight 是 @MainActor 单例,不该为了拿个矩形去持有 Bridge。
 /// 只用 CGWindowList(同步、便宜),不碰 ScreenCaptureKit —— 8Hz 跟随经不起异步捕获那条路。
@@ -190,10 +215,7 @@ private final class HighlightOverlayWindow: NSWindow {
         backgroundColor = .clear
         hasShadow = false
         ignoresMouseEvents = true
-        // 宿主是 .accessory,永远不激活 → 普通层(0)的叠层会被"刚被激活的目标 App"直接压在下面,
-        // 用户什么也看不见。跨进程置顶只有 window level 一条路。光效用 .floating(3):盖住普通窗口,
-        // 但目标自己弹的菜单(popUpMenu=101)仍在它之上 —— 菜单本来就该盖住窗口边框的光。
-        level = .floating
+        // level 和前后顺序都由 pinOverlay 按目标窗口现定(跟目标同层、紧贴其上),这里不设。
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         isReleasedWhenClosed = false
         hidesOnDeactivate = false

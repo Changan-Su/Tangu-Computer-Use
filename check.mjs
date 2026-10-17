@@ -94,9 +94,12 @@ A.equal(typeof views[0].mount, 'function', 'mount 必须是函数')
 
 const T = globalThis.__CU_LIVE_TEST__
 A.ok(T, 'main.js 必须暴露 __CU_LIVE_TEST__ 供自检')
-// 技能 SKILL.md 里写死的视图 id 必须与插件 id/视图 id 拼得出来,改一处不改另一处就是死链
+// 引擎那半自己摆 Desk(src/deskPresent.ts)写死的视图 id 必须与这里的插件 id/视图 id 拼得出来,改一处不改另一处就是死链
+const deskSrc = readFileSync(new URL('./src/deskPresent.ts', import.meta.url), 'utf8')
+A.ok(deskSrc.includes(`plugin:${T.PLUGIN_ID}:${T.VIEW_ID}`), 'src/deskPresent.ts 里的视图 id 与插件不一致')
+// 画面由插件自己摆(10-17):技能里再教模型调 desk_present 会重复摆、白占提示词
 const skill = readFileSync(new URL('./skills/computer-use/SKILL.md', import.meta.url), 'utf8')
-A.ok(skill.includes(`plugin:${T.PLUGIN_ID}:${T.VIEW_ID}`), 'SKILL.md 里的 desk_present 视图 id 与插件不一致')
+A.ok(!/desk_present\(/.test(skill), 'SKILL.md 又在教模型调 desk_present —— 画面已由插件自己摆')
 const manifest = JSON.parse(readFileSync(new URL('./manifest.json', import.meta.url), 'utf8'))
 A.equal(manifest.id, T.PLUGIN_ID, 'manifest.id 必须与 main.js 里的 PLUGIN_ID 一致(视图 id 由它拼)')
 A.equal(manifest.main, 'main.js')

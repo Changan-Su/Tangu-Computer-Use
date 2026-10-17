@@ -386,7 +386,7 @@ struct PidWindow {
 }
 
 final class Bridge {
-	private let protocolVersion = 17
+	private let protocolVersion = 18
 	/// 截图里变了超过这么多像素(缩到最长边 800 后)才算「画面变了」:光标闪烁、JPEG 噪声在这之下。
 	static let pixelChangeThreshold = 12
 	/// NSEvent 带窗口号造出来的 CGEvent 里,窗口号在这个字段(CGEventTypes.h 没有它)。
@@ -2259,7 +2259,12 @@ final class Bridge {
 				viaAx || (delivery == "pid" && policy != "ax_only"),
 				["press", "click", "moveMouse", "scroll", "drag"].contains(action)
 			else { return }
-			Task { @MainActor in AgentCursor.shared.animate(to: point, above: record.windowId) }
+			// 钉在这一点上接住事件的那扇窗口上方(目标,或它画进截图的下拉 / 菜单),而不是压在所有窗口之上。
+			let candidates = onScreenWindows()
+			let target = candidates.first { $0.id == record.windowId && $0.pid == pid }
+			let anchor = target.map { pointerWindowId(target: $0, candidates: candidates, at: point) } ?? record.windowId
+			let layer = candidates.first { $0.id == anchor }?.layer
+			Task { @MainActor in AgentCursor.shared.animate(to: point, above: anchor, layer: layer, target: record.windowId) }
 		}
 
 		/// Tangu 新增:**纯坐标点击先做一次 AX 命中测试**。命中可按压元素就直接 AXPress ——
