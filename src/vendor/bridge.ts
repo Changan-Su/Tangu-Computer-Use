@@ -6,7 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { canRetryInForeground, isBackgroundPointer, needsFrontmostProbe, pointerMissesAfter, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
+import { canRetryInForeground, isBackgroundPointer, keysFollow, needsFrontmostProbe, pointerMissesAfter, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
 import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
 import { applyWheelFix, wheelFix } from "../wheel.ts"; // Forsion patch, see UPSTREAM.md
@@ -1899,7 +1899,8 @@ async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget
 	// the target window is frontmost. Probed live, never remembered: the user can switch apps between calls.
 	const frontmost = !headless && needsFrontmostProbe(actions) && await targetHoldsFocus(target, signal);
 	const actionState: ActionState = { currentFocus: false, frontmost };
-	for (const action of actions) {
+	for (const [index, action] of actions.entries()) {
+		actionState.keysFollow = keysFollow(actions, index);
 		const step = await dispatchUiAction(action, target, look, headless, actionState, signal);
 		steps.push(step);
 		if (step.outcome === "didnt") break;

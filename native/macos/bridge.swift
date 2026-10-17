@@ -4144,7 +4144,20 @@ final class Bridge {
 		return (flags, keys.last ?? "")
 	}
 
+	/// 物理按键只会落到最前面的 App。目标不在最前就不发:helper 自己是后台 App,系统(协作式激活)常拒绝它去激活别的 App,
+	/// 拒了还照发,字就打进了用户正在用的那个 App(10-17 live 实际发生过)。鼠标那边有 preflight 查遮挡,键盘这边就靠这一道。
+	private func requireFrontmostForKeys(pid: Int32) throws {
+		let deadline = Date().addingTimeInterval(0.5)
+		while NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+			guard Date() < deadline else {
+				throw BridgeFailure(message: "The target app is not frontmost and macOS did not let it come forward, so the keys were NOT sent (they would have gone to another app). Click a visible point of the target window in the same act_ui call before typing.", code: "foreground_unavailable")
+			}
+			usleep(30_000)
+		}
+	}
+
 	private func postKeyPress(keys: [String], pid: Int32, delivery: String = "hid") throws {
+		if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		if let chord = keyChord(keys) {
@@ -4188,6 +4201,7 @@ final class Bridge {
 	}
 
 	private func postUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
+		if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		for scalar in text.unicodeScalars {
@@ -4210,6 +4224,7 @@ final class Bridge {
 	}
 
 	private func postAtomicUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
+		if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),

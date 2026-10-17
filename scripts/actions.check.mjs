@@ -35,7 +35,7 @@ try {
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
-const { prepareAction, followsFocus, needsFrontmostProbe, targetIsFrontmost, canRetryInForeground, isBackgroundPointer, pointerMissesAfter } = actions;
+const { prepareAction, followsFocus, needsFrontmostProbe, targetIsFrontmost, canRetryInForeground, isBackgroundPointer, pointerMissesAfter, keysFollow } = actions;
 
 // 6) 设置要活过 vendor 的重新加载。syncSettings 以前只改内存里的配置对象,而每次工具调用的 ensureReady 都会
 // loadComputerUseConfig(整个对象换新)—— 设置页里的「严格后台」因此从未生效,[foreground] 那行还在劝用户去开它。
@@ -235,6 +235,14 @@ console.log('✓ scroll:沿用本批 click / moveMouse 的位置、单独出现�
   assert.equal(foreground({ action: 'click', x: 300, y: 200, clickCount: 2 }), false, 'so does a double click');
   assert.equal(foreground({ action: 'click', x: 300, y: 200, button: 'right' }), true, 'a right click was never measured in the background');
   assert.equal(foreground({ action: 'drag', path: dragPath }), true, 'a drag is still foreground-only');
+  // 后面跟着打字的那一下点击走前台:按键只到最前面的 App,系统不让 helper 去激活别的 App,真点一下才激活(10-17 live 打错了 App)
+  const batch = [{ action: 'click', x: 300, y: 200 }, { action: 'typeText', text: 'hi' }];
+  assert.equal(keysFollow(batch, 0), true);
+  assert.equal(prep(batch[0], env(), { ...fresh(), keysFollow: keysFollow(batch, 0) }).needsForeground, true, 'a click that typing follows goes to the foreground');
+  assert.equal(keysFollow([{ action: 'click', x: 1, y: 1 }], 0), false, 'a click with nothing after it stays in the background');
+  assert.equal(keysFollow([{ action: 'click', x: 1, y: 1 }, { action: 'typeText', ref: '@e3', text: 'x' }], 0), false, 'typing into a named ref does not follow the focus');
+  assert.equal(keysFollow([{ action: 'typeText', text: 'x' }, { action: 'click', x: 1, y: 1 }], 1), false, 'keys before the click do not count');
+  assert.equal(prep(batch[0], env({ headless: true }), { ...fresh(), keysFollow: true }).needsForeground, false, 'strict background never takes the foreground (click before keys)');
   const state = fresh();
   prepareAction({ action: 'moveMouse', x: 5, y: 5 }, state, env());
   assert.equal(isBackgroundPointer(prepareAction({ action: 'scroll', scrollY: 3 }, state, env())), true, 'a scroll that reuses the pointer position is a coordinate scroll too');

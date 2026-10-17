@@ -26,6 +26,13 @@ export interface ActionState {
 	frontmost?: boolean;
 	/** Where the last click / press / moveMouse / scroll of this batch landed; a scroll that names no target reuses it. */
 	pointer?: ActionTarget;
+	/** Keyboard input that follows the focus comes later in this batch (`keysFollow`); set per action by the caller. */
+	keysFollow?: boolean;
+}
+
+/** Whether a keypress / typeText that names no ref, and so follows the focus, comes after actions[index]. */
+export function keysFollow(actions: readonly UiAction[], index: number): boolean {
+	return actions.slice(index + 1).some((action) => isKeyboard(action.action) && !action.ref?.trim());
 }
 
 export interface ActionEnvironment {
@@ -158,8 +165,11 @@ export function prepareAction(action: UiAction, state: ActionState, env: ActionE
 	// window number (helper protocol 17; AppKit drops pid-posted mouse events without one, which is why they used
 	// to go straight to the foreground). The helper compares screenshots, so "didnt" means nothing moved on
 	// screen and canRetryInForeground() takes it to the foreground. Drags and right / middle clicks have not been
-	// measured in the background and stay foreground-only.
-	const needsForeground = !env.headless && "x" in target && (operation === "drag" || (isClick(operation) && mouseButton(action.button) !== "left"));
+	// measured in the background and stay foreground-only. So does a click that keys follow in this batch: keys
+	// only reach the frontmost app, macOS refuses the helper's own requests to activate another app, and a real
+	// click on the window is what activates it (10-17 live: a background click left Chatter inactive and the
+	// typing went to whatever app was in front).
+	const needsForeground = !env.headless && "x" in target && (operation === "drag" || (isClick(operation) && (mouseButton(action.button) !== "left" || state.keysFollow === true)));
 
 	switch (operation) {
 		case "press":
