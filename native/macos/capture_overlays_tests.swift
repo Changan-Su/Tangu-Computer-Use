@@ -40,6 +40,17 @@ import Vision
 		check(changedPixels(ticking[1], ticking[2]) > 12, "without the earlier shot the ticking clock looks like a change")
 		check(changedPixels(ticking[1], ticking[2], quiet: ticking[0]) <= 12, "with it, the cells that were already changing are left out")
 		check(changedPixels(ticking[1], render(["Paused", "01:25"]), quiet: ticking[0]) > 12, "a change outside those cells still counts")
+		// 点在正在动的那块旁边:有没有落下看不出来(点视频暂停这种),给 -2,不能拿来升前台重放
+		let clock = CGPoint(x: 90, y: Double(ticking[0].height) - 50) // 「01:2x」的最后一位
+		check(changedPixels(ticking[1], ticking[2], quiet: ticking[0], focus: clock) == -2, "a click next to cells that were already changing cannot be judged")
+		check(changedPixels(ticking[1], ticking[2], quiet: ticking[0], focus: CGPoint(x: 600, y: 20)) <= 12, "a click away from them still is")
+
+		// 物理点击落在这一点最上面那扇窗口上:别的 App 挡着就不是目标;helper 自己的光标窗口、菜单栏那几层不算
+		let cover = win(9, 0, true, 0, 0, 1512, 982, pid: 77), mine = win(10, 0, true, 0, 0, 1512, 982, pid: 55)
+		check(topWindowPid(at: CGPoint(x: 100, y: 100), candidates: [cover, main], helperPid: 55) == 77, "another app's window on top owns the click")
+		check(topWindowPid(at: CGPoint(x: 100, y: 100), candidates: [mine, main], helperPid: 55) == 6769, "the helper's own overlay is skipped")
+		check(topWindowPid(at: CGPoint(x: 100, y: 40), candidates: [win(11, 25, true, 0, 0, 1512, 60, pid: 88), main], helperPid: 55) == 6769, "the menu bar layer is skipped")
+		check(topWindowPid(at: CGPoint(x: 100, y: 960), candidates: [win(12, 20, true, 0, 940, 1512, 42, pid: 99), main], helperPid: 55) == 99, "the Dock covering the window counts")
 
 		check(foldFullwidthASCII("Did you push the fix？") == "Did you push the fix?", "full-width question mark folds")
 		check(foldFullwidthASCII("Play all （30）　Ａ１") == "Play all (30) A1", "full-width brackets, letters, digits and space fold")

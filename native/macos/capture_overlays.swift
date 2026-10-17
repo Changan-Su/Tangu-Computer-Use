@@ -48,12 +48,20 @@ func pointerWindowId(target: OverlayCandidate, candidates: [OverlayCandidate], a
 	return candidates.first { ($0.id == target.id || overlays.contains($0.id)) && $0.frame.contains(point) }?.id ?? target.id
 }
 
+/// 物理鼠标事件会落到这一点最上面的那扇窗口上:它属于哪个进程。candidates 按 CGWindowList 的前后顺序(最前在先);
+/// 跳过 helper 自己的窗口(虚拟光标、高亮)和菜单栏及以上的层(菜单栏、状态栏图标、系统提示)。Dock(20 层)挡着也算挡着。
+func topWindowPid(at point: CGPoint, candidates: [OverlayCandidate], helperPid: Int32) -> Int32? {
+	candidates.first { $0.onScreen && $0.pid != helperPid && $0.layer < 24 && $0.frame.contains(point) }?.pid
+}
+
 /// 两张截图有多少像素变了:都缩到最长边 ≤ maxDimension 再逐像素比(任一通道差 > 24 算变)。
 /// 尺寸不一样 = 窗口变了,算全变。给「投给后台窗口的点击 / 滚轮落没落下」用 —— App 不回话,只能看画面。
 /// quiet:投之前稍早的一张。和 a 之间就在变的 cell×cell 格子(播放进度、动图、歌词)整格不算 ——
 /// 否则 App 没收到点击、画面照样在动,会被当成落下了(10-17 Codex 评审)。
+/// focus:点下去的位置(a 的像素)。它周围 3×3 格里有在动的,这一下有没有落下就看不出来了(点视频暂停、反馈全在动画里):
+/// 返回 -2,调用方当「不知道」,不能拿来升前台重放(10-17 Codex 复核)。
 /// ponytail: 只看两张之间 ~150ms 的变化;1 秒才跳一下的(时钟数字)抓不到,会算进去。要更准就跨请求记住每扇窗口的忙格子。
-func changedPixels(_ a: CGImage, _ b: CGImage, quiet: CGImage? = nil, maxDimension: Int = 800, cell: Int = 16) -> Int {
+func changedPixels(_ a: CGImage, _ b: CGImage, quiet: CGImage? = nil, focus: CGPoint? = nil, maxDimension: Int = 800, cell: Int = 16) -> Int {
 	guard a.width == b.width, a.height == b.height else { return Int.max }
 	let scale = min(1, Double(maxDimension) / Double(max(a.width, a.height)))
 	let w = max(1, Int(Double(a.width) * scale)), h = max(1, Int(Double(a.height) * scale))
@@ -80,6 +88,12 @@ func changedPixels(_ a: CGImage, _ b: CGImage, quiet: CGImage? = nil, maxDimensi
 		let pq = pixels(quiet)
 		for y in 0..<h {
 			for x in 0..<w where differs(pq, pa, (y * w + x) * 4) { busy[(y / cell) * columns + x / cell] = true }
+		}
+	}
+	if let focus {
+		let fx = Int(focus.x * scale) / cell, fy = Int(focus.y * scale) / cell, rows = busy.count / columns
+		for cy in max(0, fy - 1)...min(rows - 1, max(0, fy + 1)) {
+			for cx in max(0, fx - 1)...min(columns - 1, max(0, fx + 1)) where busy[cy * columns + cx] { return -2 }
 		}
 	}
 	var changed = 0

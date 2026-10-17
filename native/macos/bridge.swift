@@ -376,6 +376,8 @@ struct PixelsBefore {
 	let quiet: CGImage
 	let image: CGImage
 	let windows: Set<UInt32>
+	/// 点下去的位置,在截图像素里
+	let focus: CGPoint?
 }
 
 struct PidWindow {
@@ -2330,13 +2332,24 @@ final class Bridge {
 			}
 		}
 
+		/// 纯坐标的物理点击没有 AX 元素可比(上面的 preflight 直接放行):按窗口表看这一点最上面是不是目标 App 的窗口。
+		/// 不是就先试着把目标拿到前面;系统不让(协作式激活)就不点 —— 点下去会落到挡着的那个 App 上(10-17 Codex 复核)。
+		func requireUncovered(_ point: CGPoint) throws {
+			for attempt in 0..<3 {
+				if topWindowPid(at: point, candidates: onScreenWindows(), helperPid: getpid()) == pid { return }
+				if attempt < 2 { focusTargetForPhysicalInput(); usleep(80_000) }
+			}
+			throw BridgeFailure(message: "Another window covers this point and macOS did not let the target app come forward, so the click was NOT sent (it would have hit that window). Bring the target window to the front, or use a point where it is not covered.", code: "occluded_target")
+		}
+
 		func executeCoordinates(_ point: CGPoint) throws {
 			guard element != nil || record.hasImage else {
 				throw BridgeFailure(message: "Coordinate grounding is unavailable for this outline-only root", code: "coordinate_unavailable_for_root")
 			}
 			// 纯坐标点击先试后台 AX 按压。带 element 的路径不试:那边刚判过 AXPress 支不支持,
 			// 走到这里就是已经失败过一次,再试一遍只是重复同一个失败。
-			if element == nil, backgroundPressAtPoint(point) { return }
+			// 走物理事件(前台)的不试:要的就是一次真实点击 —— 它让系统把目标 App 拿到前面,后面的打字才进得去(keysFollow)。
+			if element == nil, delivery != "hid", backgroundPressAtPoint(point) { return }
 			performed["grounding"] = "coordinates"
 			if delivery == "pid" { performed["verification"] = "caller_required" }
 			// pid 投递的事件带上窗口号(没带的 AppKit 一律丢掉,见 postEvent)。拖拽还没在真机上验过,照旧不带。
@@ -2348,17 +2361,21 @@ final class Bridge {
 			var pixelsBefore: PixelsBefore?
 			if window != nil && (action == "press" || action == "click" || (action == "scroll" && scrolls)) {
 				let started = Date()
-				if let quiet = try? captureWindow(windowId: record.windowId).image {
+				if let quiet = try? captureWindow(windowId: record.windowId).image, Date().timeIntervalSince(started) < 1.0 {
 					usleep(150_000)
 					if let before = try? captureWindow(windowId: record.windowId).image, Date().timeIntervalSince(started) < 1.5 {
-						pixelsBefore = PixelsBefore(quiet: quiet, image: before, windows: appWindowIds(pid: pid))
+						let bounds = windowInfo(windowId: record.windowId)?.bounds
+						let focus = bounds.map { b in
+							CGPoint(x: (point.x - b.minX) * Double(before.width) / max(1, b.width), y: (point.y - b.minY) * Double(before.height) / max(1, b.height))
+						}
+						pixelsBefore = PixelsBefore(quiet: quiet, image: before, windows: appWindowIds(pid: pid), focus: focus)
 					}
 				}
 			}
 			defer { if let pixelsBefore { pixelsChanged = pixelsChangedAfterInput(windowId: record.windowId, pid: pid, before: pixelsBefore) } }
 			acquirePhysicalInputIfNeeded()
 			focusTargetForPhysicalInput()
-			if delivery == "hid" { try preflight(point) }
+			if delivery == "hid" { try preflight(point); try requireUncovered(point) }
 			switch action {
 			case "press", "click":
 				animateCursor(at: point)
@@ -3837,34 +3854,40 @@ final class Bridge {
 
 	/// pid 投递的指针事件交给哪扇窗口:点上最上面那扇「目标自己,或叠在它上面、截图里也画进去的同进程窗口」
 	/// (微信的搜索下拉是单独一扇窗口,点下拉里的行要交给它)。目标不在屏幕上就不带窗口号(= 原来的样子,事件被丢)。
-	private func pointerWindow(target windowId: UInt32, pid: Int32, at point: CGPoint) -> PidWindow? {
-		guard Self.setWindowLocation != nil else { return nil }
+	/// 屏幕上的窗口,最前在先;全透明的不算(点不中它)
+	private func onScreenWindows() -> [OverlayCandidate] {
 		let entries = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
-		let candidates = entries.compactMap { entry -> OverlayCandidate? in
+		return entries.compactMap { entry -> OverlayCandidate? in
 			guard let id = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
 				let owner = (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
 				let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
-				let frame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary)
+				let frame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+				((entry[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1) > 0
 			else { return nil }
 			return OverlayCandidate(id: id, pid: owner, layer: (entry[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0, frame: frame, onScreen: true)
 		}
+	}
+
+	private func pointerWindow(target windowId: UInt32, pid: Int32, at point: CGPoint) -> PidWindow? {
+		guard Self.setWindowLocation != nil else { return nil }
+		let candidates = onScreenWindows()
 		guard let target = candidates.first(where: { $0.id == windowId && $0.pid == pid }) else { return nil }
 		let id = pointerWindowId(target: target, candidates: candidates, at: point)
 		return candidates.first { $0.id == id }.map { PidWindow(id: id, origin: $0.frame.origin) }
 	}
 
-	/// 投完隔一会儿截一张目标窗口和投之前比,变了就停。600ms 一直没变就报最后一次的数;截不到图 = -1。
-	/// 投完 1s 内每 120ms 看一次:App 的窗口表变了(点开的是弹出层 / 新窗口)= Int.max;截不到图 = -1;
-	/// 否则是安静格子里变了的像素数,一过阈值就返回。
+	/// 投完 1s 内每 120ms 看一次:App 的窗口表变了(点开的是弹出层 / 新窗口)= Int.max;截不到图或一张截了 1s 以上 = -1;
+	/// 点下去的地方本来就在动 = -2(看不出来);否则是安静格子里变了的像素数,一过阈值就返回。
 	private func pixelsChangedAfterInput(windowId: UInt32, pid: Int32, before: PixelsBefore) -> Int {
 		let deadline = Date().addingTimeInterval(1.0)
 		var changed = 0
 		repeat {
 			usleep(120_000)
 			if appWindowIds(pid: pid) != before.windows { return Int.max }
-			guard let after = try? captureWindow(windowId: windowId).image else { return -1 }
-			changed = changedPixels(before.image, after, quiet: before.quiet)
-			if changed > Self.pixelChangeThreshold { return changed }
+			let shot = Date()
+			guard let after = try? captureWindow(windowId: windowId).image, Date().timeIntervalSince(shot) < 1.0 else { return -1 }
+			changed = changedPixels(before.image, after, quiet: before.quiet, focus: before.focus)
+			if changed > Self.pixelChangeThreshold || changed == -2 { return changed }
 		} while Date() < deadline
 		return changed
 	}
@@ -4179,6 +4202,8 @@ final class Bridge {
 	}
 
 	private func postKey(_ key: String, flags: CGEventFlags, pid: Int32, delivery: String = "hid") throws {
+		// 每个键都再核一次:打到一半用户切走了 App,剩下的键不能跟过去
+		if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		guard let code = keyCode(key) else {
@@ -4217,6 +4242,7 @@ final class Bridge {
 			}
 			setUnicodeString(event: down, text: char)
 			setUnicodeString(event: up, text: char)
+			if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
 			postEvent(down, pid: pid, delivery: delivery)
 			postEvent(up, pid: pid, delivery: delivery)
 			usleep(8_000)
