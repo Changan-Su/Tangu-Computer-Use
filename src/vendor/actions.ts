@@ -178,6 +178,11 @@ export function canRetryInForeground(action: PreparedAction, outcome: "worked" |
 }
 
 /** A coordinate left click or scroll that goes to the background first (see needsForeground in prepareAction). */
+/** Background pointer misses in a row once this outcome is in: "didnt" adds one, anything else ("worked", or "unknown", which may have landed) starts over. */
+export function pointerMissesAfter(misses: number, outcome: string): number {
+	return outcome === "didnt" ? misses + 1 : 0;
+}
+
 export function isBackgroundPointer(action: PreparedAction): boolean {
 	return (action.action === "click" || action.action === "press" || action.action === "scroll") && "x" in action.target && !action.needsForeground;
 }

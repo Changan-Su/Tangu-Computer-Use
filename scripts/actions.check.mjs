@@ -35,7 +35,7 @@ try {
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
-const { prepareAction, followsFocus, needsFrontmostProbe, targetIsFrontmost, canRetryInForeground, isBackgroundPointer } = actions;
+const { prepareAction, followsFocus, needsFrontmostProbe, targetIsFrontmost, canRetryInForeground, isBackgroundPointer, pointerMissesAfter } = actions;
 
 // 6) 设置要活过 vendor 的重新加载。syncSettings 以前只改内存里的配置对象,而每次工具调用的 ensureReady 都会
 // loadComputerUseConfig(整个对象换新)—— 设置页里的「严格后台」因此从未生效,[foreground] 那行还在劝用户去开它。
@@ -249,6 +249,11 @@ console.log('✓ scroll:沿用本批 click / moveMouse 的位置、单独出现�
   assert.equal(canRetryInForeground(click, 'worked', false), false);
   assert.equal(canRetryInForeground(click, 'didnt', true), false, 'strict background never escalates');
   assert.equal(canRetryInForeground(prep({ action: 'click', ref: '@e1' }), 'didnt', false), false, 'a ref click is judged by its value, not escalated');
+  // 连续两次后台没落下才记住走前台:中间夹一次 unknown(可能落下了)/ worked 都从头数
+  const misses = (outcomes) => outcomes.reduce((n, o) => pointerMissesAfter(n, o), 0);
+  assert.equal(misses(['didnt', 'didnt']), 2);
+  assert.equal(misses(['didnt', 'unknown', 'didnt']), 1, 'an unknown in between breaks the run (Codex review)');
+  assert.equal(misses(['didnt', 'worked', 'didnt']), 1);
 }
 console.log('✓ 按坐标的左键点击 / scroll 先走后台、画面没变才上前台;drag、右键、按 ref 的与严格后台不变');
 

@@ -371,6 +371,13 @@ final class InputSuppressionGuard {
 }
 
 /// pid 投递的鼠标事件要交给哪个窗口:窗口号 + 窗口左上角的全局坐标(点)。
+/// 投给后台窗口之前的样子:隔 150ms 的两张截图(quiet 是先截的那张)和 App 当时在屏幕上的窗口
+struct PixelsBefore {
+	let quiet: CGImage
+	let image: CGImage
+	let windows: Set<UInt32>
+}
+
 struct PidWindow {
 	let id: UInt32
 	let origin: CGPoint
@@ -2335,11 +2342,20 @@ final class Bridge {
 			// pid 投递的事件带上窗口号(没带的 AppKit 一律丢掉,见 postEvent)。拖拽还没在真机上验过,照旧不带。
 			let window = delivery == "pid" && action != "drag" ? pointerWindow(target: record.windowId, pid: pid, at: point) : nil
 			if let window { performed["window"] = Int(window.id) }
-			// 投给后台窗口的点击 / 滚轮,App 不回话:投之前先截一张,投完比画面(零位移的滚轮是垫的,不比)。
+			// 投给后台窗口的点击 / 滚轮,App 不回话:投之前隔 150ms 截两张(两张之间就在变的格子 = 播放进度、动图,不算),
+			// 再记下 App 有哪些窗口;投完比画面和窗口表(零位移的滚轮是垫的,不比)。截图慢(> 1.5s)就不判,免得拖过整个动作的超时。
 			let scrolls = ((params["scrollX"] as? NSNumber)?.intValue ?? 0) != 0 || ((params["scrollY"] as? NSNumber)?.intValue ?? 0) != 0
-			let pixelsBefore = window != nil && (action == "press" || action == "click" || (action == "scroll" && scrolls))
-				? try? captureWindow(windowId: record.windowId).image : nil
-			defer { if let pixelsBefore { pixelsChanged = pixelsChangedAfterInput(windowId: record.windowId, before: pixelsBefore) } }
+			var pixelsBefore: PixelsBefore?
+			if window != nil && (action == "press" || action == "click" || (action == "scroll" && scrolls)) {
+				let started = Date()
+				if let quiet = try? captureWindow(windowId: record.windowId).image {
+					usleep(150_000)
+					if let before = try? captureWindow(windowId: record.windowId).image, Date().timeIntervalSince(started) < 1.5 {
+						pixelsBefore = PixelsBefore(quiet: quiet, image: before, windows: appWindowIds(pid: pid))
+					}
+				}
+			}
+			defer { if let pixelsBefore { pixelsChanged = pixelsChangedAfterInput(windowId: record.windowId, pid: pid, before: pixelsBefore) } }
 			acquirePhysicalInputIfNeeded()
 			focusTargetForPhysicalInput()
 			if delivery == "hid" { try preflight(point) }
@@ -3838,16 +3854,27 @@ final class Bridge {
 	}
 
 	/// 投完隔一会儿截一张目标窗口和投之前比,变了就停。600ms 一直没变就报最后一次的数;截不到图 = -1。
-	private func pixelsChangedAfterInput(windowId: UInt32, before: CGImage) -> Int {
-		let deadline = Date().addingTimeInterval(0.6)
+	/// 投完 1s 内每 120ms 看一次:App 的窗口表变了(点开的是弹出层 / 新窗口)= Int.max;截不到图 = -1;
+	/// 否则是安静格子里变了的像素数,一过阈值就返回。
+	private func pixelsChangedAfterInput(windowId: UInt32, pid: Int32, before: PixelsBefore) -> Int {
+		let deadline = Date().addingTimeInterval(1.0)
 		var changed = 0
 		repeat {
 			usleep(120_000)
+			if appWindowIds(pid: pid) != before.windows { return Int.max }
 			guard let after = try? captureWindow(windowId: windowId).image else { return -1 }
-			changed = changedPixels(before, after)
+			changed = changedPixels(before.image, after, quiet: before.quiet)
 			if changed > Self.pixelChangeThreshold { return changed }
 		} while Date() < deadline
 		return changed
+	}
+
+	private func appWindowIds(pid: Int32) -> Set<UInt32> {
+		let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+		return Set(windows.compactMap { entry -> UInt32? in
+			guard (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid else { return nil }
+			return (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+		})
 	}
 
 	private func windowInfo(windowId: UInt32) -> (pid: Int32, bounds: CGRect)? {

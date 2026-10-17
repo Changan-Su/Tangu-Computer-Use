@@ -35,6 +35,11 @@ import Vision
 		check(changedPixels(flat, same) == 0, "the same picture changes no pixels")
 		check(changedPixels(flat, other) > 12, "different text changes more pixels than the verdict threshold")
 		check(changedPixels(flat, render(["Play all (30)", "x"])) == Int.max, "a resized window counts as fully changed")
+		// 投之前就在变的那块(播放进度在走)整格不算:App 没收到点击、只有它在动,不能当成落下了
+		let ticking = [render(["Play all (30)", "01:23"]), render(["Play all (30)", "01:24"]), render(["Play all (30)", "01:25"])]
+		check(changedPixels(ticking[1], ticking[2]) > 12, "without the earlier shot the ticking clock looks like a change")
+		check(changedPixels(ticking[1], ticking[2], quiet: ticking[0]) <= 12, "with it, the cells that were already changing are left out")
+		check(changedPixels(ticking[1], render(["Paused", "01:25"]), quiet: ticking[0]) > 12, "a change outside those cells still counts")
 
 		check(foldFullwidthASCII("Did you push the fix？") == "Did you push the fix?", "full-width question mark folds")
 		check(foldFullwidthASCII("Play all （30）　Ａ１") == "Play all (30) A1", "full-width brackets, letters, digits and space fold")

@@ -50,7 +50,10 @@ func pointerWindowId(target: OverlayCandidate, candidates: [OverlayCandidate], a
 
 /// 两张截图有多少像素变了:都缩到最长边 ≤ maxDimension 再逐像素比(任一通道差 > 24 算变)。
 /// 尺寸不一样 = 窗口变了,算全变。给「投给后台窗口的点击 / 滚轮落没落下」用 —— App 不回话,只能看画面。
-func changedPixels(_ a: CGImage, _ b: CGImage, maxDimension: Int = 800) -> Int {
+/// quiet:投之前稍早的一张。和 a 之间就在变的 cell×cell 格子(播放进度、动图、歌词)整格不算 ——
+/// 否则 App 没收到点击、画面照样在动,会被当成落下了(10-17 Codex 评审)。
+/// ponytail: 只看两张之间 ~150ms 的变化;1 秒才跳一下的(时钟数字)抓不到,会算进去。要更准就跨请求记住每扇窗口的忙格子。
+func changedPixels(_ a: CGImage, _ b: CGImage, quiet: CGImage? = nil, maxDimension: Int = 800, cell: Int = 16) -> Int {
 	guard a.width == b.width, a.height == b.height else { return Int.max }
 	let scale = min(1, Double(maxDimension) / Double(max(a.width, a.height)))
 	let w = max(1, Int(Double(a.width) * scale)), h = max(1, Int(Double(a.height) * scale))
@@ -62,16 +65,26 @@ func changedPixels(_ a: CGImage, _ b: CGImage, maxDimension: Int = 800) -> Int {
 		}
 		return buffer
 	}
-	let pa = pixels(a), pb = pixels(b)
-	var changed = 0
 	// ⚠️拆成单独的语句:写成一个 max(abs(...), ...) 表达式,Swift 类型检查要跑好几分钟
-	for i in stride(from: 0, to: pa.count, by: 4) {
-		var differs = false
+	func differs(_ p: [UInt8], _ q: [UInt8], _ i: Int) -> Bool {
 		for c in 0..<3 {
-			let d: Int = Int(pa[i + c]) - Int(pb[i + c])
-			if d > 24 || d < -24 { differs = true }
+			let d: Int = Int(p[i + c]) - Int(q[i + c])
+			if d > 24 || d < -24 { return true }
 		}
-		if differs { changed += 1 }
+		return false
+	}
+	let pa = pixels(a), pb = pixels(b)
+	let columns = (w + cell - 1) / cell
+	var busy = [Bool](repeating: false, count: columns * ((h + cell - 1) / cell))
+	if let quiet, quiet.width == a.width, quiet.height == a.height {
+		let pq = pixels(quiet)
+		for y in 0..<h {
+			for x in 0..<w where differs(pq, pa, (y * w + x) * 4) { busy[(y / cell) * columns + x / cell] = true }
+		}
+	}
+	var changed = 0
+	for y in 0..<h {
+		for x in 0..<w where !busy[(y / cell) * columns + x / cell] && differs(pa, pb, (y * w + x) * 4) { changed += 1 }
 	}
 	return changed
 }

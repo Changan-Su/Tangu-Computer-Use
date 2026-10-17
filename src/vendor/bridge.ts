@@ -6,7 +6,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { canRetryInForeground, isBackgroundPointer, needsFrontmostProbe, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
+import { canRetryInForeground, isBackgroundPointer, needsFrontmostProbe, pointerMissesAfter, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
 import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
 import { applyWheelFix, wheelFix } from "../wheel.ts"; // Forsion patch, see UPSTREAM.md
@@ -1222,8 +1222,8 @@ async function helperAct(
 		const initialPolicy = headless ? "ax_only" : "background";
 		const sent = pointer ? await wheelAction(target, action, signal, initialPolicy) : action;
 		const result = checked(await currentPlatformBackend.act(helperActRequest(target, sent, initialPolicy), { signal, timeoutMs }));
+		if (pointer) backgroundPointerMisses.set(pointerKey, pointerMissesAfter(backgroundPointerMisses.get(pointerKey) ?? 0, result.outcome));
 		if (canRetryInForeground(action, result.outcome, headless)) {
-			if (pointer) backgroundPointerMisses.set(pointerKey, (backgroundPointerMisses.get(pointerKey) ?? 0) + 1);
 			const retry = pointer ? await wheelAction(target, action, signal) : action;
 			const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, retry, "foreground"), { signal, timeoutMs }));
 			const trace = executionTraceFromAct(foreground, "foreground");
@@ -1235,7 +1235,6 @@ async function helperAct(
 				: { outcome: "didnt", reason: "Background input produced no observable value change; a foreground retry was safe." };
 			return trace;
 		}
-		if (pointer && result.outcome === "worked") backgroundPointerMisses.delete(pointerKey);
 		const trace = executionTraceFromAct(result, "background");
 		trace.backgroundFirst = true;
 		return trace;

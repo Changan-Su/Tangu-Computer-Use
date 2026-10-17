@@ -241,8 +241,13 @@ every new native feature silently does nothing (that is exactly how the first li
   `CGEventSetWindowLocation` writes (setting `location` resets it to (-1,-1), so set it last-but-one).
   `pointerWindow()` picks the window: the topmost on-screen one of the target and the same-pid overlays the
   screenshot draws (`pointerWindowId()` in `capture_overlays.swift`). After a coordinate click or a non-zero
-  scroll posted that way, `act()` compares screenshots of the target window (`changedPixels()`, up to 600 ms)
-  and reports `worked` / `didnt` with `evidence.pixelsChanged`. Drags still go without a window number (not
+  scroll posted that way, `act()` compares screenshots of the target window (`changedPixels()`, up to 1 s)
+  and reports `worked` / `didnt` with `evidence.pixelsChanged`: two shots 150 ms apart before posting mark the
+  cells that were already changing (playback progress, animation) and those are not counted; a change in the
+  app's on-screen window list counts as landed (`Int.max`); a pre-capture slower than 1.5 s skips the verdict.
+  Ceilings (10-17 Codex review): a landed click whose only feedback is outside the window or later than 1 s
+  is judged `didnt` and replayed once in the foreground; a ~1 Hz ticker outside the masked cells can make an
+  ignored click look landed; a toggle sharing a cell with an animation is masked. Drags still go without a window number (not
   measured). Measured with the target covered by another app's active window: self-drawn AppKit views,
   TextEdit, Electron and Chrome take clicks / scrolls without activating, raising or moving the real cursor;
   Chromium swallows the first click into a non-key window (it only makes the window key); a CEF app
