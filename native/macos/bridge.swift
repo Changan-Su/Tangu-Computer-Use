@@ -370,8 +370,32 @@ final class InputSuppressionGuard {
 
 }
 
+/// pid 投递的鼠标事件要交给哪个窗口:窗口号 + 窗口左上角的全局坐标(点)。
+/// 投给后台窗口之前的样子:隔 150ms 的两张截图(quiet 是先截的那张)和 App 当时在屏幕上的窗口
+struct PixelsBefore {
+	let quiet: CGImage
+	let image: CGImage
+	let windows: Set<UInt32>
+	/// 点下去的位置,在截图像素里
+	let focus: CGPoint?
+}
+
+struct PidWindow {
+	let id: UInt32
+	let origin: CGPoint
+}
+
 final class Bridge {
-	private let protocolVersion = 16
+	private let protocolVersion = 17
+	/// 截图里变了超过这么多像素(缩到最长边 800 后)才算「画面变了」:光标闪烁、JPEG 噪声在这之下。
+	static let pixelChangeThreshold = 12
+	/// NSEvent 带窗口号造出来的 CGEvent 里,窗口号在这个字段(CGEventTypes.h 没有它)。
+	static let windowNumberField = CGEventField(rawValue: 51)!
+	/// CoreGraphics 导出、头文件里没有。ponytail: 哪天系统去掉了这个符号,pid 投递就退回不带窗口号(= 原来的样子)。
+	static let setWindowLocation: ((CGEvent, CGPoint) -> Void)? = dlsym(dlopen(nil, RTLD_NOW), "CGEventSetWindowLocation").map {
+		let fn = unsafeBitCast($0, to: (@convention(c) (CGEvent, CGPoint) -> Void).self)
+		return { fn($0, $1) }
+	}
 	private let refStore = AXRefStore()
 	private let inputSuppressionGuard = InputSuppressionGuard()
 	private let physicalInputLock = NSRecursiveLock()
@@ -816,6 +840,9 @@ final class Bridge {
 			return try axReadText(request)
 		case "getMousePosition":
 			return getMousePosition()
+		case "probeInput" where CommandLine.arguments.contains("--dev-probe"):
+			ActivityRecorder.shared.agentEnter(); defer { ActivityRecorder.shared.agentLeave() }
+			return try probeInput(request)
 		case "dockCandidates":
 			return dockCandidates(request)
 		case "dockProbe":
@@ -2157,6 +2184,8 @@ final class Bridge {
 		noteControlledWindow(windowId: record.windowId, pid: pid, highlight: request["cursorOverlay"] as? Bool ?? true)
 		let deferRootDelta = boolArg(request, "deferRootDelta") ?? false
 		let delivery = policy == "background" ? "pid" : ((params["delivery"] as? String) == "pid" ? "pid" : "hid")
+		// pid 投递的坐标点击 / 滚轮投完看画面:变了多少像素(-1 = 截不到图),nil = 没走这条路。
+		var pixelsChanged: Int?
 		var holdsPhysicalInput = false
 		func acquirePhysicalInputIfNeeded() {
 			if delivery == "hid" && !holdsPhysicalInput {
@@ -2303,28 +2332,65 @@ final class Bridge {
 			}
 		}
 
+		/// 纯坐标的物理点击没有 AX 元素可比(上面的 preflight 直接放行):按窗口表看这一点最上面是不是目标 App 的窗口。
+		/// 不是就先试着把目标拿到前面;系统不让(协作式激活)就不点 —— 点下去会落到挡着的那个 App 上(10-17 Codex 复核)。
+		func requireUncovered(_ point: CGPoint) throws {
+			try requireUnlockedScreen()
+			let displays = displayAreas(), dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
+			var top: Int32?
+			for attempt in 0..<3 {
+				top = topWindowPid(at: point, candidates: onScreenWindows(), helperPid: getpid(), displays: displays, dockPid: dock)
+				if top == pid { return }
+				if attempt < 2 { focusTargetForPhysicalInput(); usleep(80_000) }
+			}
+			let owner = top.flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName }.map { " (\($0))" } ?? ""
+			throw BridgeFailure(message: "Another window\(owner) covers this point and macOS did not let the target app come forward, so the click was NOT sent (it would have hit that window). Bring the target window to the front, or use a point where it is not covered.", code: "occluded_target")
+		}
+
 		func executeCoordinates(_ point: CGPoint) throws {
 			guard element != nil || record.hasImage else {
 				throw BridgeFailure(message: "Coordinate grounding is unavailable for this outline-only root", code: "coordinate_unavailable_for_root")
 			}
 			// 纯坐标点击先试后台 AX 按压。带 element 的路径不试:那边刚判过 AXPress 支不支持,
 			// 走到这里就是已经失败过一次,再试一遍只是重复同一个失败。
-			if element == nil, backgroundPressAtPoint(point) { return }
+			// 走物理事件(前台)的不试:要的就是一次真实点击 —— 它让系统把目标 App 拿到前面,后面的打字才进得去(keysFollow)。
+			if element == nil, delivery != "hid", backgroundPressAtPoint(point) { return }
 			performed["grounding"] = "coordinates"
 			if delivery == "pid" { performed["verification"] = "caller_required" }
+			// pid 投递的事件带上窗口号(没带的 AppKit 一律丢掉,见 postEvent)。拖拽还没在真机上验过,照旧不带。
+			let window = delivery == "pid" && action != "drag" ? pointerWindow(target: record.windowId, pid: pid, at: point) : nil
+			if let window { performed["window"] = Int(window.id) }
+			// 投给后台窗口的点击 / 滚轮,App 不回话:投之前隔 150ms 截两张(两张之间就在变的格子 = 播放进度、动图,不算),
+			// 再记下 App 有哪些窗口;投完比画面和窗口表(零位移的滚轮是垫的,不比)。截图慢(> 1.5s)就不判,免得拖过整个动作的超时。
+			let scrolls = ((params["scrollX"] as? NSNumber)?.intValue ?? 0) != 0 || ((params["scrollY"] as? NSNumber)?.intValue ?? 0) != 0
+			var pixelsBefore: PixelsBefore?
+			if window != nil && (action == "press" || action == "click" || (action == "scroll" && scrolls)) {
+				let started = Date()
+				if let quiet = try? captureWindow(windowId: record.windowId).image, Date().timeIntervalSince(started) < 1.0 {
+					usleep(150_000)
+					if let before = try? captureWindow(windowId: record.windowId).image, Date().timeIntervalSince(started) < 1.5 {
+						let bounds = windowInfo(windowId: record.windowId)?.bounds
+						let focus = bounds.map { b in
+							CGPoint(x: (point.x - b.minX) * Double(before.width) / max(1, b.width), y: (point.y - b.minY) * Double(before.height) / max(1, b.height))
+						}
+						pixelsBefore = PixelsBefore(quiet: quiet, image: before, windows: appWindowIds(pid: pid), focus: focus)
+					}
+				}
+			}
+			defer { if let pixelsBefore { pixelsChanged = pixelsChangedAfterInput(windowId: record.windowId, pid: pid, before: pixelsBefore) } }
 			acquirePhysicalInputIfNeeded()
 			focusTargetForPhysicalInput()
-			if delivery == "hid" { try preflight(point) }
+			if delivery == "hid" { try preflight(point); try requireUncovered(point) }
 			switch action {
 			case "press", "click":
 				animateCursor(at: point)
-				try postMouseClick(at: point, pid: pid, button: mouseButton(params["button"] as? String ?? "left"), clickCount: max(1, min(3, (params["clickCount"] as? NSNumber)?.intValue ?? 1)), delivery: delivery)
+				try postMouseClick(at: point, pid: pid, button: mouseButton(params["button"] as? String ?? "left"), clickCount: max(1, min(3, (params["clickCount"] as? NSNumber)?.intValue ?? 1)), delivery: delivery, window: window)
 			case "moveMouse":
 				animateCursor(at: point)
-				try postMouseMove(to: point, pid: pid, delivery: delivery)
+				try postMouseMove(to: point, pid: pid, delivery: delivery, window: window)
 			case "scroll":
 				animateCursor(at: point)
-				try postScrollWheel(at: point, deltaX: (params["scrollX"] as? NSNumber)?.intValue ?? 0, deltaY: (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid: pid, delivery: delivery)
+				try postScrollWheel(at: point, deltaX: (params["scrollX"] as? NSNumber)?.intValue ?? 0, deltaY: (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid: pid, delivery: delivery, window: window)
 			case "drag":
 				guard let rawPath = params["path"] as? [[String: Any]], rawPath.count >= 2 else {
 					throw BridgeFailure(message: "drag requires path", code: "invalid_args")
@@ -2490,6 +2556,12 @@ final class Bridge {
 			outcome = "worked"
 		}
 		if windowChanged { evidence["windowChanged"] = true }
+		if let pixelsChanged {
+			// 画面变了 = 落下了;一直没变 = 没落下(落下了却什么都没变的,如滚到了头,前台再来一次也没坏处)。
+			if pixelsChanged > Self.pixelChangeThreshold { outcome = "worked" } else if pixelsChanged >= 0, outcome != "worked" { outcome = "didnt" }
+			evidence["pixelsChanged"] = pixelsChanged
+			performed["verification"] = "pixels"
+		}
 		var response: [String: Any] = ["outcome": outcome, "performed": performed]
 		if !evidence.isEmpty { response["evidence"] = evidence }
 		return finish(response)
@@ -3106,6 +3178,34 @@ final class Bridge {
 			"totalChars": characters.count,
 			"hasMore": end < characters.count,
 		]
+	}
+
+	/// 只在 `serve --dev-probe` 下认:不经 look,按全局坐标(点、左上角原点)直接给 pid 投鼠标 / 滚轮事件,
+	/// 和 act 的 pid 路径是同一组 post* 函数。给没有录屏授权的开发证书 helper 跑探针用(act 的坐标点击要求
+	/// look 带了截图)。windowId 不给 = 上游那样不填窗口号。
+	private func probeInput(_ request: [String: Any]) throws -> [String: Any] {
+		let pid = Int32(try intArg(request, "pid"))
+		guard let x = (request["x"] as? NSNumber)?.doubleValue, let y = (request["y"] as? NSNumber)?.doubleValue else {
+			throw BridgeFailure(message: "probeInput needs x and y", code: "invalid_args")
+		}
+		let point = CGPoint(x: x, y: y)
+		let window = try optionalIntArg(request, "windowId").map { id -> PidWindow in
+			guard let frame = windowInfo(windowId: UInt32(id))?.bounds else {
+				throw BridgeFailure(message: "Window \(id) is not on screen", code: "invalid_args")
+			}
+			return PidWindow(id: UInt32(id), origin: frame.origin)
+		}
+		switch try stringArg(request, "kind") {
+		case "click":
+			try postMouseClick(at: point, pid: pid, button: mouseButton(optionalStringArg(request, "button") ?? "left"), clickCount: max(1, min(3, optionalIntArg(request, "clickCount") ?? 1)), delivery: "pid", window: window)
+		case "scroll":
+			try postScrollWheel(at: point, deltaX: optionalIntArg(request, "scrollX") ?? 0, deltaY: optionalIntArg(request, "scrollY") ?? 0, pid: pid, delivery: "pid", window: window)
+		case "move":
+			try postMouseMove(to: point, pid: pid, delivery: "pid", window: window)
+		default:
+			throw BridgeFailure(message: "probeInput kind must be click, scroll or move", code: "invalid_args")
+		}
+		return ["posted": true, "windowFields": window != nil]
 	}
 
 	private func getMousePosition() -> [String: Any] {
@@ -3757,6 +3857,69 @@ final class Bridge {
 		return windowInfo(windowId: windowId)?.bounds
 	}
 
+	/// pid 投递的指针事件交给哪扇窗口:点上最上面那扇「目标自己,或叠在它上面、截图里也画进去的同进程窗口」
+	/// (微信的搜索下拉是单独一扇窗口,点下拉里的行要交给它)。目标不在屏幕上就不带窗口号(= 原来的样子,事件被丢)。
+	/// 屏幕上的窗口,最前在先;全透明的不算(点不中它)
+	/// 每块屏的整块和 visibleFrame,换成全局点、左上角原点(和 CGWindowList 的窗口位置一样)
+	private func displayAreas() -> [DisplayArea] {
+		let top = NSScreen.screens.first?.frame.maxY ?? 0
+		let flip = { (r: CGRect) in CGRect(x: r.minX, y: top - r.maxY, width: r.width, height: r.height) }
+		return NSScreen.screens.map { DisplayArea(frame: flip($0.frame), visible: flip($0.visibleFrame)) }
+	}
+
+	/// 锁屏时最前面的只能是 loginwindow:物理点击、按键一个都到不了 App(按键会打进锁屏的密码框),pid 投递的照样能到。
+	/// 10-17 凌晨那几轮 live 就是锁着屏跑的(launchservicesd:fPermittedFrontApps 只有 loginwindow)。
+	private func requireUnlockedScreen() throws {
+		if (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool == true {
+			throw BridgeFailure(message: "The screen is locked, so no click or key can reach the app; nothing was sent. Ask the user to unlock the Mac.", code: "screen_locked")
+		}
+	}
+
+	private func onScreenWindows() -> [OverlayCandidate] {
+		let entries = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+		return entries.compactMap { entry -> OverlayCandidate? in
+			guard let id = (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value,
+				let owner = (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+				let boundsDict = entry[kCGWindowBounds as String] as? [String: Any],
+				let frame = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
+				((entry[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1) > 0
+			else { return nil }
+			return OverlayCandidate(id: id, pid: owner, layer: (entry[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0, frame: frame, onScreen: true)
+		}
+	}
+
+	private func pointerWindow(target windowId: UInt32, pid: Int32, at point: CGPoint) -> PidWindow? {
+		guard Self.setWindowLocation != nil else { return nil }
+		let candidates = onScreenWindows()
+		guard let target = candidates.first(where: { $0.id == windowId && $0.pid == pid }) else { return nil }
+		let id = pointerWindowId(target: target, candidates: candidates, at: point)
+		return candidates.first { $0.id == id }.map { PidWindow(id: id, origin: $0.frame.origin) }
+	}
+
+	/// 投完 1s 内每 120ms 看一次:App 的窗口表变了(点开的是弹出层 / 新窗口)= Int.max;截不到图或一张截了 1s 以上 = -1;
+	/// 点下去的地方本来就在动 = -2(看不出来);否则是安静格子里变了的像素数,一过阈值就返回。
+	private func pixelsChangedAfterInput(windowId: UInt32, pid: Int32, before: PixelsBefore) -> Int {
+		let deadline = Date().addingTimeInterval(1.0)
+		var changed = 0
+		repeat {
+			usleep(120_000)
+			if appWindowIds(pid: pid) != before.windows { return Int.max }
+			let shot = Date()
+			guard let after = try? captureWindow(windowId: windowId).image, Date().timeIntervalSince(shot) < 1.0 else { return -1 }
+			changed = changedPixels(before.image, after, quiet: before.quiet, focus: before.focus)
+			if changed > Self.pixelChangeThreshold || changed == -2 { return changed }
+		} while Date() < deadline
+		return changed
+	}
+
+	private func appWindowIds(pid: Int32) -> Set<UInt32> {
+		let windows = (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]) ?? []
+		return Set(windows.compactMap { entry -> UInt32? in
+			guard (entry[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid else { return nil }
+			return (entry[kCGWindowNumber as String] as? NSNumber)?.uint32Value
+		})
+	}
+
 	private func windowInfo(windowId: UInt32) -> (pid: Int32, bounds: CGRect)? {
 		func matchingEntry(_ entries: [[String: Any]]?) -> [String: Any]? {
 			entries?.first {
@@ -3810,8 +3973,17 @@ final class Bridge {
 		optionalStringArg(request, "delivery") == "pid" ? "pid" : "hid"
 	}
 
-	private func postEvent(_ event: CGEvent, pid: Int32, delivery: String = "hid") {
+	/// `window`:只对 pid 投递的鼠标 / 滚轮事件有意义。没带窗口号的鼠标事件投给进程,App 的事件队列里收得到,
+	/// 但 NSEvent.window 是 nil,AppKit 直接丢掉 —— 上游记的「postToPid 对非 key 窗口会被丢掉」其实连 key 窗口也丢
+	/// (macOS 27 实测,scripts/pid-window.probe.mjs)。AppKit 认的是事件记录里的窗口号(字段 51,NSEvent 带窗口号
+	/// 造事件时写的就是它;公开的 91 / 92 填了不认)和另一份窗口内坐标(windowLocation,左上角原点),
+	/// 后者只能用未公开的 CGEventSetWindowLocation 写。⚠️顺序:改 location 会把 windowLocation 作废成 (-1,-1)。
+	private func postEvent(_ event: CGEvent, pid: Int32, delivery: String = "hid", window: PidWindow? = nil) {
 		if delivery == "pid" {
+			if let window, let setWindowLocation = Self.setWindowLocation {
+				setWindowLocation(event, CGPoint(x: event.location.x - window.origin.x, y: event.location.y - window.origin.y))
+				event.setIntegerValueField(Self.windowNumberField, value: Int64(window.id))
+			}
 			event.postToPid(pid)
 			return
 		}
@@ -3831,13 +4003,13 @@ final class Bridge {
 		event.post(tap: .cghidEventTap)
 	}
 
-	private func postMouseMove(to point: CGPoint, pid: Int32, delivery: String = "hid") throws {
+	private func postMouseMove(to point: CGPoint, pid: Int32, delivery: String = "hid", window: PidWindow? = nil) throws {
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		guard let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
 			throw BridgeFailure(message: "Failed to create mouse move event", code: "input_failed")
 		}
-		postEvent(move, pid: pid, delivery: delivery)
+		postEvent(move, pid: pid, delivery: delivery, window: window)
 	}
 
 	private func mouseButton(_ name: String) -> CGMouseButton {
@@ -3884,7 +4056,7 @@ final class Bridge {
 		}
 	}
 
-	private func postMouseClick(at point: CGPoint, pid: Int32, button: CGMouseButton = .left, clickCount: Int = 1, delivery: String = "hid") throws {
+	private func postMouseClick(at point: CGPoint, pid: Int32, button: CGMouseButton = .left, clickCount: Int = 1, delivery: String = "hid", window: PidWindow? = nil) throws {
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		// Tangu:HID 点击会把**用户的实物指针**挪到目标处并留在那里 —— 前台被抢已经够烦,
@@ -3901,7 +4073,7 @@ final class Bridge {
 				CGAssociateMouseAndMouseCursorPosition(1)
 			}
 		}
-		try postMouseMove(to: point, pid: pid, delivery: delivery)
+		try postMouseMove(to: point, pid: pid, delivery: delivery, window: window)
 		for index in 1...max(1, clickCount) {
 			guard let down = CGEvent(mouseEventSource: nil, mouseType: mouseDownType(for: button), mouseCursorPosition: point, mouseButton: button),
 				let up = CGEvent(mouseEventSource: nil, mouseType: mouseUpType(for: button), mouseCursorPosition: point, mouseButton: button)
@@ -3910,33 +4082,33 @@ final class Bridge {
 			}
 			down.setIntegerValueField(.mouseEventClickState, value: Int64(index))
 			up.setIntegerValueField(.mouseEventClickState, value: Int64(index))
-			postEvent(down, pid: pid, delivery: delivery)
+			postEvent(down, pid: pid, delivery: delivery, window: window)
 			usleep(12_000)
-			postEvent(up, pid: pid, delivery: delivery)
+			postEvent(up, pid: pid, delivery: delivery, window: window)
 			if index < clickCount {
 				usleep(70_000)
 			}
 		}
 	}
 
-	private func postMouseDrag(points: [CGPoint], pid: Int32, delivery: String = "hid") throws {
+	private func postMouseDrag(points: [CGPoint], pid: Int32, delivery: String = "hid", window: PidWindow? = nil) throws {
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		guard points.count >= 2, let first = points.first else {
 			throw BridgeFailure(message: "Drag requires at least two points", code: "invalid_args")
 		}
-		try postMouseMove(to: first, pid: pid, delivery: delivery)
+		try postMouseMove(to: first, pid: pid, delivery: delivery, window: window)
 		guard let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: first, mouseButton: .left) else {
 			throw BridgeFailure(message: "Failed to create mouse down event", code: "input_failed")
 		}
-		postEvent(down, pid: pid, delivery: delivery)
+		postEvent(down, pid: pid, delivery: delivery, window: window)
 		usleep(12_000)
 
 		for point in points.dropFirst() {
 			guard let drag = CGEvent(mouseEventSource: nil, mouseType: mouseDraggedType(for: .left), mouseCursorPosition: point, mouseButton: .left) else {
 				throw BridgeFailure(message: "Failed to create mouse drag event", code: "input_failed")
 			}
-			postEvent(drag, pid: pid, delivery: delivery)
+			postEvent(drag, pid: pid, delivery: delivery, window: window)
 			usleep(8_000)
 		}
 
@@ -3945,13 +4117,13 @@ final class Bridge {
 		else {
 			throw BridgeFailure(message: "Failed to create mouse up event", code: "input_failed")
 		}
-		postEvent(up, pid: pid, delivery: delivery)
+		postEvent(up, pid: pid, delivery: delivery, window: window)
 	}
 
-	private func postScrollWheel(at point: CGPoint, deltaX: Int, deltaY: Int, pid: Int32, delivery: String = "hid") throws {
+	private func postScrollWheel(at point: CGPoint, deltaX: Int, deltaY: Int, pid: Int32, delivery: String = "hid", window: PidWindow? = nil) throws {
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
-		try postMouseMove(to: point, pid: pid, delivery: delivery)
+		try postMouseMove(to: point, pid: pid, delivery: delivery, window: window)
 		guard let event = CGEvent(
 			scrollWheelEvent2Source: nil,
 			units: .pixel,
@@ -3963,7 +4135,7 @@ final class Bridge {
 			throw BridgeFailure(message: "Failed to create scroll event", code: "input_failed")
 		}
 		event.location = point
-		postEvent(event, pid: pid, delivery: delivery)
+		postEvent(event, pid: pid, delivery: delivery, window: window)
 	}
 
 	private func modifierFlag(_ key: String) -> CGEventFlags? {
@@ -4015,7 +4187,21 @@ final class Bridge {
 		return (flags, keys.last ?? "")
 	}
 
+	/// 物理按键只会落到最前面的 App。目标不在最前就不发:helper 自己是后台 App,系统(协作式激活)常拒绝它去激活别的 App,
+	/// 拒了还照发,字就打进了用户正在用的那个 App(10-17 live 实际发生过)。鼠标那边有 preflight 查遮挡,键盘这边就靠这一道。
+	private func requireFrontmostForKeys(pid: Int32) throws {
+		try requireUnlockedScreen()
+		let deadline = Date().addingTimeInterval(0.5)
+		while NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+			guard Date() < deadline else {
+				throw BridgeFailure(message: "The target app is not frontmost and macOS did not let it come forward, so the keys were NOT sent (they would have gone to another app). Click a visible point of the target window in the same act_ui call before typing.", code: "foreground_unavailable")
+			}
+			usleep(30_000)
+		}
+	}
+
 	private func postKeyPress(keys: [String], pid: Int32, delivery: String = "hid") throws {
+		if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		if let chord = keyChord(keys) {
@@ -4037,6 +4223,8 @@ final class Bridge {
 	}
 
 	private func postKey(_ key: String, flags: CGEventFlags, pid: Int32, delivery: String = "hid") throws {
+		// 每个键都再核一次:打到一半用户切走了 App,剩下的键不能跟过去
+		if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		guard let code = keyCode(key) else {
@@ -4059,6 +4247,7 @@ final class Bridge {
 	}
 
 	private func postUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
+		if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		for scalar in text.unicodeScalars {
@@ -4074,6 +4263,7 @@ final class Bridge {
 			}
 			setUnicodeString(event: down, text: char)
 			setUnicodeString(event: up, text: char)
+			if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
 			postEvent(down, pid: pid, delivery: delivery)
 			postEvent(up, pid: pid, delivery: delivery)
 			usleep(8_000)
@@ -4081,6 +4271,7 @@ final class Bridge {
 	}
 
 	private func postAtomicUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
+		if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),

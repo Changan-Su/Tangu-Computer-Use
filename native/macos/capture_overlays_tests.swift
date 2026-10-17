@@ -26,6 +26,39 @@ import Vision
 		check(overlayWindowIds(target: main, candidates: [win(7, 3, true, 40, 40, 1, 400)]).isEmpty, "a sliver window is left out")
 		check(overlayWindowIds(target: main, candidates: (1...12).map { win(UInt32(100 + $0), 3, true, 10, 40, 50, 50) }).count == 8, "at most eight windows are drawn in")
 
+		// 投给后台进程的点击要带上窗口号:点在 App 自己的弹出层里就投给弹出层,其余投给目标窗口;别人的窗口永远不选
+		check(pointerWindowId(target: main, candidates: [popup] + recorded, at: CGPoint(x: 100, y: 100)) == 8084, "a click inside the app's popup goes to the popup")
+		check(pointerWindowId(target: main, candidates: [popup] + recorded, at: CGPoint(x: 800, y: 600)) == 994, "a click outside the popup goes to the target window")
+		check(pointerWindowId(target: main, candidates: [win(5, 3, true, 0, 0, 1512, 982, pid: 99), main], at: CGPoint(x: 100, y: 100)) == 994, "another app's window covering the point is never picked")
+
+		let flat = render(["Play all (30)"]), same = render(["Play all (30)"]), other = render(["Paused"])
+		check(changedPixels(flat, same) == 0, "the same picture changes no pixels")
+		check(changedPixels(flat, other) > 12, "different text changes more pixels than the verdict threshold")
+		check(changedPixels(flat, render(["Play all (30)", "x"])) == Int.max, "a resized window counts as fully changed")
+		// 投之前就在变的那块(播放进度在走)整格不算:App 没收到点击、只有它在动,不能当成落下了
+		let ticking = [render(["Play all (30)", "01:23"]), render(["Play all (30)", "01:24"]), render(["Play all (30)", "01:25"])]
+		check(changedPixels(ticking[1], ticking[2]) > 12, "without the earlier shot the ticking clock looks like a change")
+		check(changedPixels(ticking[1], ticking[2], quiet: ticking[0]) <= 12, "with it, the cells that were already changing are left out")
+		check(changedPixels(ticking[1], render(["Paused", "01:25"]), quiet: ticking[0]) > 12, "a change outside those cells still counts")
+		// 点在正在动的那块旁边:有没有落下看不出来(点视频暂停这种),给 -2,不能拿来升前台重放
+		let clock = CGPoint(x: 90, y: Double(ticking[0].height) - 50) // 「01:2x」的最后一位
+		check(changedPixels(ticking[1], ticking[2], quiet: ticking[0], focus: clock) == -2, "a click next to cells that were already changing cannot be judged")
+		check(changedPixels(ticking[1], ticking[2], quiet: ticking[0], focus: CGPoint(x: 600, y: 20)) <= 12, "a click away from them still is")
+
+		// 物理点击落在这一点最上面那扇窗口上:别的 App 挡着就不是目标;helper 自己的光标窗口、菜单栏那几层不算
+		let cover = win(9, 0, true, 0, 0, 1512, 982, pid: 77), mine = win(10, 0, true, 0, 0, 1512, 982, pid: 55)
+		check(topWindowPid(at: CGPoint(x: 100, y: 100), candidates: [cover, main], helperPid: 55) == 77, "another app's window on top owns the click")
+		check(topWindowPid(at: CGPoint(x: 100, y: 100), candidates: [mine, main], helperPid: 55) == 6769, "the helper's own overlay is skipped")
+		check(topWindowPid(at: CGPoint(x: 100, y: 40), candidates: [win(11, 25, true, 0, 0, 1512, 60, pid: 88), main], helperPid: 55) == 6769, "the menu bar layer is skipped")
+		check(topWindowPid(at: CGPoint(x: 100, y: 960), candidates: [win(12, 20, true, 0, 940, 1512, 42, pid: 99), main], helperPid: 55) == 99, "the Dock covering the window counts")
+		// 10-17 量到的:Dock 自动隐藏时它那扇 20 层窗口铺满整块屏(0,0 1512x982,alpha 1),点击穿透
+		let screen = CGRect(x: 0, y: 0, width: 1512, height: 982), backdrop = win(13, 20, true, 0, 0, 1512, 982, pid: 99)
+		let hidden = DisplayArea(frame: screen, visible: CGRect(x: 0, y: 33, width: 1512, height: 949))
+		let pinned = DisplayArea(frame: screen, visible: CGRect(x: 0, y: 33, width: 1512, height: 880))
+		check(topWindowPid(at: CGPoint(x: 1167, y: 825), candidates: [backdrop, main], helperPid: 55, displays: [hidden], dockPid: 99) == 6769, "the Dock's full-screen backdrop does not cover the window")
+		check(topWindowPid(at: CGPoint(x: 1167, y: 950), candidates: [backdrop, main], helperPid: 55, displays: [pinned], dockPid: 99) == 99, "a pinned Dock strip below the visible frame does")
+		check(topWindowPid(at: CGPoint(x: 1167, y: 825), candidates: [backdrop, main], helperPid: 55, displays: [pinned], dockPid: 99) == 6769, "above the strip it does not")
+		check(topWindowPid(at: CGPoint(x: 1167, y: 825), candidates: [backdrop, main], helperPid: 55, displays: [hidden], dockPid: 98) == 99, "another app's full-screen window at the Dock level still covers (Codex review)")
 		check(foldFullwidthASCII("Did you push the fix？") == "Did you push the fix?", "full-width question mark folds")
 		check(foldFullwidthASCII("Play all （30）　Ａ１") == "Play all (30) A1", "full-width brackets, letters, digits and space fold")
 		check(foldFullwidthASCII("周末一起去看展吗？好，见") == "周末一起去看展吗?好,见", "CJK text keeps its characters, punctuation folds")

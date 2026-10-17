@@ -35,7 +35,7 @@ try {
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
-const { prepareAction, followsFocus, needsFrontmostProbe, targetIsFrontmost } = actions;
+const { prepareAction, followsFocus, needsFrontmostProbe, targetIsFrontmost, canRetryInForeground, isBackgroundPointer, pointerMissesAfter, keysFollow } = actions;
 
 // 6) 设置要活过 vendor 的重新加载。syncSettings 以前只改内存里的配置对象,而每次工具调用的 ensureReady 都会
 // loadComputerUseConfig(整个对象换新)—— 设置页里的「严格后台」因此从未生效,[foreground] 那行还在劝用户去开它。
@@ -223,22 +223,47 @@ assert.equal(message(() => prepareAction({ action: 'click' }, fresh(), env())), 
 assert.equal(message(() => prepareAction({ action: 'moveMouse' }, fresh({ clicked: true, frontmost: true }), env())), 'moveMouse requires either ref or both x and y.');
 console.log('✓ scroll:沿用本批 click / moveMouse 的位置、单独出现时的报错文案');
 
-// ── 5) 按坐标的 scroll / drag 是真实输入(走前台),按 ref 的仍走后台 ──
-// 反馈 55b984eb:微信里按坐标滚动投给进程(pid)没人理,outcome 又是 unknown,所以也没有任何重试。
+// ── 5) 按坐标的左键点击 / scroll 先投给后台(带窗口号),画面没变才上前台;drag 和右键照旧走前台 ──
+// 反馈 55b984eb:微信里按坐标滚动投给进程(pid)没人理 —— 根因是投出去的事件没带窗口号,AppKit 收到就丢
+// (helper 协议 17 起带上,见 scripts/pid-window.probe.mjs);helper 投完比截图,没变才报 didnt。
 {
-  const foreground = (action, e = env(), state = fresh()) => prepareAction(action, state, e).needsForeground;
+  const prep = (action, e = env(), state = fresh()) => prepareAction(action, state, e)
+  const foreground = (action, e) => prep(action, e).needsForeground
   const dragPath = [{ x: 400, y: 150 }, { x: 400, y: 500 }];
-  assert.equal(foreground({ action: 'scroll', x: 300, y: 200, scrollY: 600 }), true, 'a coordinate scroll is real input');
-  assert.equal(foreground({ action: 'drag', path: dragPath }), true, 'a drag is real input');
+  assert.equal(foreground({ action: 'scroll', x: 300, y: 200, scrollY: 600 }), false, 'a coordinate scroll goes to the background first');
+  assert.equal(foreground({ action: 'click', x: 300, y: 200 }), false, 'a coordinate left click goes to the background first');
+  assert.equal(foreground({ action: 'click', x: 300, y: 200, clickCount: 2 }), false, 'so does a double click');
+  assert.equal(foreground({ action: 'click', x: 300, y: 200, button: 'right' }), true, 'a right click was never measured in the background');
+  assert.equal(foreground({ action: 'drag', path: dragPath }), true, 'a drag is still foreground-only');
+  // 后面跟着打字的那一下点击走前台:按键只到最前面的 App,系统不让 helper 去激活别的 App,真点一下才激活(10-17 live 打错了 App)
+  const batch = [{ action: 'click', x: 300, y: 200 }, { action: 'typeText', text: 'hi' }];
+  assert.equal(keysFollow(batch, 0), true);
+  assert.equal(prep(batch[0], env(), { ...fresh(), keysFollow: keysFollow(batch, 0) }).needsForeground, true, 'a click that typing follows goes to the foreground');
+  assert.equal(keysFollow([{ action: 'click', x: 1, y: 1 }], 0), false, 'a click with nothing after it stays in the background');
+  assert.equal(keysFollow([{ action: 'click', x: 1, y: 1 }, { action: 'typeText', ref: '@e3', text: 'x' }], 0), false, 'typing into a named ref does not follow the focus');
+  assert.equal(keysFollow([{ action: 'typeText', text: 'x' }, { action: 'click', x: 1, y: 1 }], 1), false, 'keys before the click do not count');
+  assert.equal(prep(batch[0], env({ headless: true }), { ...fresh(), keysFollow: true }).needsForeground, false, 'strict background never takes the foreground (click before keys)');
   const state = fresh();
   prepareAction({ action: 'moveMouse', x: 5, y: 5 }, state, env());
-  assert.equal(prepareAction({ action: 'scroll', scrollY: 3 }, state, env()).needsForeground, true, 'a scroll that reuses the pointer position is a coordinate scroll too');
-  assert.equal(foreground({ action: 'scroll', ref: '@e2', scrollY: 3 }), false, 'a ref scroll keeps the background accessibility path');
+  assert.equal(isBackgroundPointer(prepareAction({ action: 'scroll', scrollY: 3 }, state, env())), true, 'a scroll that reuses the pointer position is a coordinate scroll too');
+  assert.equal(isBackgroundPointer(prep({ action: 'scroll', ref: '@e2', scrollY: 3 })), false, 'a ref scroll keeps the accessibility path');
   assert.equal(foreground({ action: 'moveMouse', x: 5, y: 5 }), false, 'moveMouse alone does not take the foreground');
   assert.equal(foreground({ action: 'scroll', x: 300, y: 200, scrollY: 600 }, env({ headless: true })), false, 'strict background never takes the foreground');
   assert.equal(foreground({ action: 'drag', path: dragPath }, env({ headless: true })), false, 'strict background never takes the foreground (drag)');
+  // 升前台只认 didnt(画面确实没变);unknown 升了会在后台那下其实落了的地方再点一次
+  const click = prep({ action: 'click', x: 300, y: 200 });
+  assert.equal(canRetryInForeground(click, 'didnt', false), true, 'nothing changed on screen → retry in the foreground');
+  assert.equal(canRetryInForeground(click, 'unknown', false), false, 'unknown never escalates (it may have landed)');
+  assert.equal(canRetryInForeground(click, 'worked', false), false);
+  assert.equal(canRetryInForeground(click, 'didnt', true), false, 'strict background never escalates');
+  assert.equal(canRetryInForeground(prep({ action: 'click', ref: '@e1' }), 'didnt', false), false, 'a ref click is judged by its value, not escalated');
+  // 连续两次后台没落下才记住走前台:中间夹一次 unknown(可能落下了)/ worked 都从头数
+  const misses = (outcomes) => outcomes.reduce((n, o) => pointerMissesAfter(n, o), 0);
+  assert.equal(misses(['didnt', 'didnt']), 2);
+  assert.equal(misses(['didnt', 'unknown', 'didnt']), 1, 'an unknown in between breaks the run (Codex review)');
+  assert.equal(misses(['didnt', 'worked', 'didnt']), 1);
 }
-console.log('✓ 按坐标的 scroll / drag 走前台,按 ref 的 scroll 与严格后台不变');
+console.log('✓ 按坐标的左键点击 / scroll 先走后台、画面没变才上前台;drag、右键、按 ref 的与严格后台不变');
 
 // ── 4) 判据 ──
 assert.equal(followsFocus({ action: 'keypress', keys: ['UP'] }), true);

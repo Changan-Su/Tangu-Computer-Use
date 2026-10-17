@@ -11,8 +11,8 @@
  *   - delivery==='hid'(真实物理输入)
  *   - deliveryPolicy==='foreground'(直奔前台,如 needsForeground 路径不置 escalated 标记)
  *
- * ⚠️但 delivery==='ax' 一票否决 policy:坐标点击在 TS 层**永远**被判 needsForeground(actions.ts),
- * 于是 policy 恒为 foreground;而 helper 现在会先做 AX 命中测试、命中就在后台按下去,压根没动焦点。
+ * ⚠️但 delivery==='ax' 一票否决 policy:按坐标的右键 / 拖拽,以及后台画面没变、升到前台的点击,policy 是
+ * foreground;而 helper 会先做 AX 命中测试、命中就在后台按下去,压根没动焦点。
  * 不否决的话,每一次成功的后台盲点都会倒过来跟用户说"我抢了你的前台"。但 rootDelta 里实际聚焦的证据优先于送达方式。
  */
 
@@ -150,7 +150,9 @@ export function scrollNote(actions: unknown, execution: unknown, platform: strin
   const list = Array.isArray(actions) ? actions as Array<{ action?: string }> : [];
   const exec = execution as ExecStep | undefined;
   const steps = exec && Array.isArray(exec.steps) && exec.steps.length ? exec.steps : undefined;
-  if (!list.some((a, i) => a?.action === 'scroll' && tookForeground(steps ? steps[i] : exec))) return '';
+  // 投给后台窗口的滚轮(pid,helper 协议 17 起带窗口号、真能落下)和前台的一样过鼠标工具,距离、方向一样不保证
+  const wheel = (step: ExecStep | undefined) => tookForeground(step) || step?.delivery === 'pid';
+  if (!list.some((a, i) => a?.action === 'scroll' && wheel(steps ? steps[i] : exec))) return '';
   return '\n[scroll] This scroll went out as real wheel input: positive scrollY scrolls down. The distance is approximate, and a mouse utility on this Mac may change the distance or the direction, so read where the view ended up off the screenshot before scrolling again.';
 }
 

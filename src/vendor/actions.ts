@@ -26,6 +26,13 @@ export interface ActionState {
 	frontmost?: boolean;
 	/** Where the last click / press / moveMouse / scroll of this batch landed; a scroll that names no target reuses it. */
 	pointer?: ActionTarget;
+	/** Keyboard input that follows the focus comes later in this batch (`keysFollow`); set per action by the caller. */
+	keysFollow?: boolean;
+}
+
+/** Whether a keypress / typeText that names no ref, and so follows the focus, comes after actions[index]. */
+export function keysFollow(actions: readonly UiAction[], index: number): boolean {
+	return actions.slice(index + 1).some((action) => isKeyboard(action.action) && !action.ref?.trim());
 }
 
 export interface ActionEnvironment {
@@ -154,10 +161,15 @@ export function prepareAction(action: UiAction, state: ActionState, env: ActionE
 	if (isClick(operation) || operation === "moveMouse" || operation === "scroll") state.pointer = target;
 	if (isClick(operation)) state.frontmost = false;
 	const establishesFocus = !env.headless && Boolean(action.ref) && isClick(operation) && containsEditable(env.node(action.ref!));
-	// Coordinate-targeted pointer input is real input. A scroll or drag posted to the pid is silently
-	// ignored by apps that draw their own UI (WeChat: no accessibility tree, so coordinates are the only
-	// way in), and its outcome is "unknown", so nothing ever retried it in the foreground.
-	const needsForeground = !env.headless && "x" in target && (isClick(operation) || operation === "scroll" || operation === "drag");
+	// Coordinate-targeted pointer input. A left click or a scroll goes to the target pid first, carrying the
+	// window number (helper protocol 17; AppKit drops pid-posted mouse events without one, which is why they used
+	// to go straight to the foreground). The helper compares screenshots, so "didnt" means nothing moved on
+	// screen and canRetryInForeground() takes it to the foreground. Drags and right / middle clicks have not been
+	// measured in the background and stay foreground-only. So does a click that keys follow in this batch: keys
+	// only reach the frontmost app, macOS refuses the helper's own requests to activate another app, and a real
+	// click on the window is what activates it (10-17 live: a background click left Chatter inactive and the
+	// typing went to whatever app was in front).
+	const needsForeground = !env.headless && "x" in target && (operation === "drag" || (isClick(operation) && (mouseButton(action.button) !== "left" || state.keysFollow === true)));
 
 	switch (operation) {
 		case "press":
@@ -172,7 +184,17 @@ export function prepareAction(action: UiAction, state: ActionState, env: ActionE
 }
 
 export function canRetryInForeground(action: PreparedAction, outcome: "worked" | "didnt" | "unknown", headless: boolean): boolean {
-	return !headless && outcome === "didnt" && (action.action === "typeText" || action.action === "keypress");
+	return !headless && outcome === "didnt" && (action.action === "typeText" || action.action === "keypress" || isBackgroundPointer(action));
+}
+
+/** A coordinate left click or scroll that goes to the background first (see needsForeground in prepareAction). */
+/** Background pointer misses in a row once this outcome is in: "didnt" adds one, anything else ("worked", or "unknown", which may have landed) starts over. */
+export function pointerMissesAfter(misses: number, outcome: string): number {
+	return outcome === "didnt" ? misses + 1 : 0;
+}
+
+export function isBackgroundPointer(action: PreparedAction): boolean {
+	return (action.action === "click" || action.action === "press" || action.action === "scroll") && "x" in action.target && !action.needsForeground;
 }
 
 export function outcomeAfterCheck(current: "worked" | "didnt" | "unknown", check: "verified" | "preexisting" | "failed"): "worked" | "didnt" | "unknown" {
