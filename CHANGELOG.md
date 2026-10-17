@@ -1,5 +1,23 @@
 # 更新日志
 
+## 0.7.2-jev.5 — 2026-10-17（开发实验 / development experiment）
+
+- 反馈 69651ff8 的 helper 那一半（要和插件一起发版才到位，dev 用不了生产那份 helper）：
+  - 截图把同一个 App 叠在目标窗口上面、层级更高、和它相交的窗口一起画进来（搜索结果下拉、弹层、浮动面板），照屏幕上的样子：按屏幕截、只留这几扇（按屏幕截时系统缺省会连子窗口一起画，关掉；这个开关 macOS 14.2 起才有，14.0 / 14.1 上关不掉，有叠窗时子窗口里的字可能挂错）、裁成目标窗口那块，图的大小和坐标与原来一样。别的 App 的窗口、同一个 App 同层的窗口（目标被提到最前后会沉下去）不画；窗口横跨两块屏时照旧只截它自己。最多画 8 扇。
+  - helper 在图上报 `overlays`（画进了几扇），`[image]` 那句照实说，并提示那块按坐标点、别按被盖住那一行的 ref 点；`find_roots` 的 `no_screenshot` 改成「自己截不到；叠在同一个 App 的另一扇窗口上面时，那扇的截图里有它」。
+  - 文字识别读到叠窗那块的字时，挂在大纲根下当图片文字，不挂进下面被盖住的节点、也不和它们去重 —— 否则被盖住的那一行会带上下拉里的名字，按 ref 点就点到了被盖住的那一行。
+  - 文字识别加上中文：语言设成简体、繁体中文和英文（原来没设，Vision 只认英文，中文读成「жлa」「฿ёx#t」）。中文模型给英文配全角标点，识别结果里的全角 ASCII 折回半角，英文和原来逐字一样。自动检测没用：中英混排的名字（「Sakura 粉丝群」）照样读烂。
+  - 提示词 / 技能：叠窗画进截图时看着下拉里的名字按坐标点对的那一行；截图里也没有结果时才改去看得见的列表里找。
+- 替身 Chatter 加 `--popup`：搜索结果在一扇单独的浮动窗口里（`.floating` 层、不抢键盘、配不上窗口号，和微信那扇一样），排在前面的是两个群（「Sakura 粉丝群」「Sakura 读书会」），回车开第一个、↓ + 回车开第二个，盲按都落在群上；Sakura 不在聊天列表里，只能搜出来。冒烟加这一页：主窗口截图里要有下拉（`overlays = 1`，第一行的浅绿、第二行的白落在对应位置）；只截主窗口的老 helper 在这里失败。
+- 新检查 `check:capture-overlays`（不要授权）：哪些窗口要画进来（拿 10-16 量到的微信窗口表当夹具）、全角折半角、Vision 用 helper 的语言设置读一张自己画的中英文图。
+- The helper half of feedback 69651ff8 (ships with the plugin; dev cannot use the production helper for it):
+  - A window's screenshot also draws the windows of the same app that sit on a higher layer and overlap it (a search results dropdown, a popup, a floating panel), as on screen: a display capture of just those windows, cropped to the target window, so the image size and coordinates stay the same. Other apps' windows and same-layer windows of the app are never drawn in; a window spanning two displays is captured alone. At most eight.
+  - The image reports `overlays`; the `[image]` note says so and to click there by x / y, never by the ref of a row it covers; `no_screenshot` now says such a root shows in the screenshot of the window under it.
+  - OCR text inside a drawn-in window hangs at the outline root as picture-only text instead of on the covered nodes.
+  - OCR reads Simplified and Traditional Chinese as well as English; full-width ASCII in its output is folded to half-width, so English reads exactly as before.
+- Chatter stand-in `--popup`: search results in a separate floating window, two groups first (Return opens the first, Down + Return the second); the smoke checks the popup is in the main window's screenshot.
+- New offline check `check:capture-overlays`.
+
 ## 0.7.2-jev.4 — 2026-10-16（开发实验 / development experiment）
 
 - 反馈 69651ff8：微信里找不到 Sakura。这一版是插件这一侧能修的部分；搜索结果下拉本身截不到，要等 helper 一起改（截图带上叠在上面的窗口）：

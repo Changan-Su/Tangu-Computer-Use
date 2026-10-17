@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { deflateSync } from 'node:zlib';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const outfile = path.join(root, 'tangu-plugins/computer-use/dist/jev-check.mjs');
-await build({ stdin: { contents: 'export * from "./src/jev.ts"; export * from "./src/jevRun.ts"; export {render} from "./src/tools.ts"; export {expectCannotMatch, formatWindowLine} from "./src/vendor/bridge.ts";', resolveDir: root }, outfile, bundle: true, platform: 'node', format: 'esm', target: 'node20', alias: { '@earendil-works/pi-coding-agent': path.join(root, 'src/pi-compat.ts') }, banner: { js: 'import {createRequire} from "node:module";const require=createRequire(import.meta.url);' } });
+await build({ stdin: { contents: 'export * from "./src/jev.ts"; export * from "./src/jevRun.ts"; export {render} from "./src/tools.ts"; export {expectCannotMatch, formatWindowLine} from "./src/vendor/bridge.ts"; export {parseLookResponse} from "./src/vendor/outline.ts";', resolveDir: root }, outfile, bundle: true, platform: 'node', format: 'esm', target: 'node20', alias: { '@earendil-works/pi-coding-agent': path.join(root, 'src/pi-compat.ts') }, banner: { js: 'import {createRequire} from "node:module";const require=createRequire(import.meta.url);' } });
 const j = await import(pathToFileURL(outfile));
 let passed = 0;
 const test = async (name, run) => { await run(); passed++; console.log(`PASS ${name}`); };
@@ -423,6 +423,12 @@ try {
     assert.equal(row().includes('no_screenshot'), process.platform === 'darwin', 'macOS captures by window id; elsewhere a root may lack one and still be captured');
     assert(!row({ windowId: 994 }).includes('no_screenshot'));
     assert(!row({ kind: 'menu' }).includes('no_screenshot'), 'menus are read from the accessibility tree');
+    if (process.platform === 'darwin') assert.match(row(), /that window's screenshot shows it and its \[image\] note says so/, 'a popup above another window of the app shows in that screenshot');
+    // 69651ff8:helper 把同一个 App 叠在上面的窗口一起画进截图时报 image.overlays;老 helper 不报
+    const look = (image) => j.parseLookResponse({ lookId: 'L1', window: { windowId: 994, framePoints: { x: 0, y: 33, w: 1512, h: 949 }, scaleFactor: 2 }, outline: { ref: 'w1', role: 'AXWindow', title: 'Weixin', frame: { x: 0, y: 0, w: 900, h: 564 }, children: [] }, image: { jpegBase64: 'x', width: 900, height: 564, ...image } });
+    assert.equal(look({ overlays: 1 }).image.overlays, 1);
+    assert.equal(look({}).image.overlays, undefined, 'older helpers send none');
+    assert.equal(look({ overlays: 0 }).image.overlays, undefined);
     const n = (role, title, extra = {}) => ({ role, title, value: '', description: '', pictureOnly: false, canSetValue: false, isTextInput: false, children: [], ...extra });
     const win = n('AXWindow', 'Weixin'), chrome = [n('AXButton', ''), n('AXButton', ''), n('AXGroup', '')];
     const canvas = (...more) => ({ root: win, nodes: [win, ...chrome, ...more] });

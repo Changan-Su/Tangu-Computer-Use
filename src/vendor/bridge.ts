@@ -87,6 +87,8 @@ interface ComputerUseDetails {
 		scaleFactor: number;
 		timestamp: number;
 		coordinateSpace: "window-relative-screenshot-pixels";
+		/** windows of the same app drawn over the target in this screenshot */
+		overlays?: number;
 	};
 	lookId?: string;
 	view: "full" | "diff";
@@ -607,7 +609,7 @@ export function formatWindowLine(window: ListWindowsDetails["windows"][number]):
 		// 69651ff8: WeChat's search results open in a window of their own that pairs with no window id. The macOS helper
 		// captures by window id ("Window 0 is not available for capture"), and the screenshot of the window under it
 		// leaves it out. Windows / Linux roots may lack an id and still be captured, so this is macOS only.
-		process.platform === "darwin" && !window.windowId && window.kind !== "menu" ? "no_screenshot (a window of its own without a window id: it cannot be captured, and screenshots of the window under it leave it out; observe_ui semantic may still read it)" : undefined,
+		process.platform === "darwin" && !window.windowId && window.kind !== "menu" ? "no_screenshot (a window of its own without a window id: it cannot be captured by itself; when it sits above another window of the app, that window's screenshot shows it and its [image] note says so; observe_ui semantic may still read it)" : undefined,
 		window.isFocused ? "focused" : undefined,
 		window.isMain ? "main" : undefined,
 		window.isModal ? "modal" : undefined,
@@ -964,6 +966,7 @@ function captureForLook(look: LookResponse): CurrentCapture {
 		height: look.image?.height ?? 0,
 		scaleFactor: look.window.scaleFactor,
 		timestamp: Date.now(),
+		...(look.image?.overlays ? { overlays: look.image.overlays } : {}),
 	};
 }
 
@@ -1052,6 +1055,7 @@ async function buildToolResult(
 			scaleFactor: result.capture.scaleFactor,
 			timestamp: result.capture.timestamp,
 			coordinateSpace: "window-relative-screenshot-pixels",
+			...(result.capture.overlays ? { overlays: result.capture.overlays } : {}),
 		},
 		lookId: result.look.lookId,
 		view: useDiff ? "diff" : "full",

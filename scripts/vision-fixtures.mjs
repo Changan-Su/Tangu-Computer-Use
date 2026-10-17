@@ -152,9 +152,9 @@ export async function quitFixture(stateOrPid) {
  * 进程内自检:直接跑可执行文件 `--selftest`(不显示窗口、不经系统、不发任何真实输入),
  * 把各个输入处理函数按流程调一遍。返回 {pass, failures, ...}。
  */
-export async function selfTestFixture(app, statePath, { timeoutMs = 60_000 } = {}) {
+export async function selfTestFixture(app, statePath, { timeoutMs = 60_000, args = [] } = {}) {
   fs.rmSync(statePath, { force: true })
-  const result = await execFileP(fixtureExecutable(app), [statePath, '--selftest'], { timeout: timeoutMs })
+  const result = await execFileP(fixtureExecutable(app), [statePath, '--selftest', ...args], { timeout: timeoutMs })
     .then(({ stdout }) => ({ stdout, code: 0 }), (error) => ({ stdout: error.stdout ?? '', code: error.code ?? 1, error }))
   const line = result.stdout.trim().split('\n').filter(Boolean).pop()
   let report

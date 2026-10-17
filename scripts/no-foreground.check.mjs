@@ -77,7 +77,14 @@ async function unitTests() {
   assert.equal(imageNote(capture, false), '', 'no screenshot attached this time → empty');
   assert.equal(imageNote({ capture: { width: 0, height: 0 } }, true), '', 'outline-only look → empty');
   assert.equal(imageNote(undefined, true), '', 'no details → empty');
-  console.log('✓ unit: imageNote 判据 8 项全过');
+  // 反馈 69651ff8:同一个 App 叠在上面的窗口(搜索结果下拉)一起画进来时照实说,并说清那块按坐标点、别按被盖住那一行的 ref 点
+  assert.match(image, /shows only the target window/, 'nothing drawn over it → the old wording');
+  const popup = imageNote({ capture: { width: 900, height: 564, overlays: 1 } }, true, 'darwin');
+  assert.match(popup, /with a window of the same app drawn over it/, 'one popup drawn in');
+  assert.match(popup, /click what that window shows by x \/ y, never by the ref of a row it covers/, 'click it by coordinates');
+  assert.doesNotMatch(popup, /shows only the target window/);
+  assert.match(imageNote({ capture: { width: 900, height: 564, overlays: 2 } }, true, 'darwin'), /with 2 windows of the same app/, 'several');
+  console.log('✓ unit: imageNote 判据 13 项全过');
 
   // expect 的结果:没满足要说、本来就满足要说、满足了不说。
   const exec = (verification, imageReason) => ({ execution: { verification }, imageReason });

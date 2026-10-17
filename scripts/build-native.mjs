@@ -16,6 +16,7 @@ const macosSourcePaths = [
 	"live_stream.swift",
 	"activity_recorder.swift",
 	"hotkey_monitor.swift",
+	"capture_overlays.swift",
 	"bridge.swift",
 ].map((file) => path.join(rootDir, "native", "macos", file));
 const windowsCrateDir = path.join(rootDir, "native", "windows", "bridge-rs");

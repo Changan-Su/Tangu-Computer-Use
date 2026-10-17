@@ -12,6 +12,9 @@
  *      发出去的气泡是绿的……)。框偏了几个点就会取到背景色而失败 —— 这就是 layout 当「目标真实位置」的底气
  *   ③ helper 报的窗口位置 = 状态里的 window(左上角原点的换算没错)
  * 外加 SIGUSR1 收起窗口后状态里 visible 变成 false。
+ * Chatter 的 --popup 那一页(反馈 69651ff8):搜索结果在一扇单独的浮动窗口里,主窗口的截图里必须有它
+ * (helper 报 image.overlays = 1,浮窗第一行的浅绿、第二行的白落在主窗口截图的对应位置)。只截主窗口的老 helper 在这里失败。
+ * ⚠️这一页的浮窗在 .floating 层,截图那一两秒会浮在用户的窗口上面(主窗口照旧在最后面)。
  *
  * ⚠️不发任何鼠标 / 键盘输入、不抢前台:替身用 `open -g -n` 起,窗口放到所有窗口后面(--behind,截图走
  * desktopIndependentWindow 不受遮挡);截图用一个私有 socket 上单独起的 helper 实例(只调只读的 look),
@@ -49,6 +52,7 @@ const VARIANTS = {
   chatter: [
     { page: 'list' }, { page: 'chat:Sakura' }, { page: 'chat:Sakura', sent: '好呀,周六上午十点美术馆门口见' },
     { page: 'search:saku' }, { page: 'chat:项目群 · Forsion' }, { page: 'chat:文件传输助手' }, { hold: true },
+    { page: 'search:Sakura', popup: true },
   ],
 }
 const COMMON_KEYS = ['pid', 'windowNumber', 'visible', 'clicks', 'doubleClicks', 'scrolls', 'keys', 'window', 'content', 'events', 'layout', 'titlebarHeight']
@@ -136,6 +140,7 @@ const isGreen = ([r, g, b]) => g > 150 && g > r + 40 && g > b + 50
 const isBlue = ([r, g, b]) => b > 150 && b > r + 30
 const isWhite = (c) => Math.min(...c) > 244
 const isColourful = (c) => Math.max(...c) - Math.min(...c) > 40
+const isPopupSel = ([r, g, b]) => g > 215 && g > r + 20 && g > b + 12
 const avg = (c) => (c[0] + c[1] + c[2]) / 3
 const find = (s, kind, pred) => s.layout.find((it) => it.kind === kind && (typeof pred === 'string' ? it.label === pred : pred(it)))
 /** 每一页的探针:[说明, layout 条目, 框内取点的偏移(点), 颜色判断] */
@@ -170,13 +175,17 @@ function probesFor(name, v, s) {
       const send = find(s, 'button', '发送(S)')
       add(send?.enabled ? 'send button is green' : 'send button is grey', send, 5, midY, send?.enabled ? isGreen : (c) => avg(c) > 222 && !isColourful(c))
     }
+    if (v.popup) {
+      add('popup: the highlighted first result is light green', s.popup?.rows?.[0], 8, midY, isPopupSel)
+      add('popup: the second result is white', s.popup?.rows?.[1], 8, midY, isWhite)
+    }
     const field = find(s, 'field', '搜索')
     add(field?.focused ? 'focused search field is white' : 'search field is grey', field, 4, midY, field?.focused ? isWhite : (c) => avg(c) > 210 && avg(c) < 236)
   }
   return out
 }
 
-const slug = (v) => v.hold ? 'selftest-hold' : [v.page, v.play && `play${v.play}`, v.sent && 'sent'].filter(Boolean).join('-').replace(/[^\w一-鿿-]+/g, '_')
+const slug = (v) => v.hold ? 'selftest-hold' : [v.page, v.play && `play${v.play}`, v.sent && 'sent', v.popup && 'popup'].filter(Boolean).join('-').replace(/[^\w一-鿿-]+/g, '_')
 const shots = []
 const failures = []
 const running = new Set()
@@ -193,6 +202,11 @@ try {
     const r = await selfTestFixture(apps[name], path.join(stateDir, `${name}-selftest.json`))
     console.log(`selftest ${name}: ${r.pass ? 'PASS' : 'FAIL'}${r.loadingMs ? ` (loading ${r.loadingMs.join('/')}ms)` : ''}`)
     if (!r.pass) failures.push(`${name} selftest: ${r.failures.join('; ')}`)
+    if (name === 'chatter') {
+      const p = await selfTestFixture(apps[name], path.join(stateDir, `${name}-popup-selftest.json`), { args: ['--popup'] })
+      console.log(`selftest ${name} --popup: ${p.pass ? 'PASS' : 'FAIL'}`)
+      if (!p.pass) failures.push(`${name} --popup selftest: ${p.failures.join('; ')}`)
+    }
   }
 
   const diag = await startHelper()
@@ -206,7 +220,7 @@ try {
       let s
       try {
         s = await launchFixture(apps[name], statePath, {
-          frame: { x: 40, y: 60, w, h }, page: v.page, play: v.play, sent: v.sent, behind: true, args: v.hold ? ['--selftest', '--hold'] : [],
+          frame: { x: 40, y: 60, w, h }, page: v.page, play: v.play, sent: v.sent, behind: true, args: [...(v.popup ? ['--popup'] : []), ...(v.hold ? ['--selftest', '--hold'] : [])],
         })
         running.add(s.pid)
         if (v.hold) s = await waitForState(statePath, (x) => x.selftest, { timeoutMs: 20_000 })
@@ -219,6 +233,20 @@ try {
         assert.ok(fp && ['x', 'y', 'w', 'h'].every((k) => Math.abs(fp[k] - s.window[k]) <= 1),
           `${label}: helper frame ${JSON.stringify(fp)} != state window ${JSON.stringify(s.window)}`)
         assert.ok(look.image?.jpegBase64, `${label}: look returned no image`)
+        if (v.popup) {
+          assert.ok(s.popup?.visible && s.popup?.onScreen, `${label}: the results popup should be on screen: ${JSON.stringify(s.popup)}`)
+          assert.equal(look.image.overlays, 1, `${label}: the helper should draw the results popup into the main window's screenshot (image.overlays)`)
+          // 叠窗那块识别出的字挂在根下当图片文字(不挂进被盖住的节点),中文读得出(OCR 语言)
+          const read = await ask('look', { windowId: s.windowNumber, maxDimension: 1600, readText: 'always', includeImage: false })
+          const pics = (read.outline?.children ?? []).filter((c) => c.pictureOnly).map((c) => c.title)
+          assert.ok(['粉丝群', '读书会'].every((w) => pics.some((t) => t.includes(w))), `${label}: the popup's text should hang at the outline root as picture-only text: ${pics.join(' | ')}`)
+          const deeper = []
+          const walkText = (n, depth) => { if (!n) return; if (depth > 0 && !n.pictureOnly && JSON.stringify(n.text ?? []).includes('粉丝群')) deeper.push(n.role); for (const c of n.children ?? []) walkText(c, depth + 1) }
+          walkText(read.outline, 0)
+          assert.equal(deeper.length, 0, `${label}: the popup's text must not attach to the nodes it covers (${deeper.join(', ')})`)
+        } else {
+          assert.equal(look.image.overlays, undefined, `${label}: nothing is drawn over the window`)
+        }
         // ① 无障碍树:只许有窗口和标题栏按钮
         const nodes = []
         const walk = (n) => { if (!n) return; nodes.push(n); for (const c of n.children ?? []) walk(c) }

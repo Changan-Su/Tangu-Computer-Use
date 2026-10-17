@@ -27,6 +27,7 @@ export interface CurrentCapture {
 	height: number;
 	scaleFactor: number;
 	timestamp: number;
+	overlays?: number;
 }
 
 export interface OperationState {

@@ -209,6 +209,21 @@ Action tools (`act_ui`, `launch/navigate/evaluate_browser`) require approval (sa
 observation tools do not. `observe_ui` screenshots are fed back to the model as images. Oversized tool
 output is truncated with an `@o` continuation ref you read back through `read_text`.
 
+### Screenshots and text recognition / 截图与文字识别（macOS）
+
+A window's screenshot also draws the windows of the same app that sit on a higher layer and overlap it
+(a search results dropdown, a popup, a floating panel) the way they look on screen, and the `[image]`
+note says how many. A click on those pixels lands on them, so click them by x / y; their recognised text
+is listed as picture-only text at the root of the outline, not on the rows they cover. Other apps'
+windows and same-layer windows of the app are never drawn in, and a window spanning two displays is
+captured alone. Text recognition reads Simplified and Traditional Chinese as well as English; full-width
+ASCII punctuation in its output is folded to half-width so it matches accessibility text and search terms.
+
+窗口截图会把同一个 App 叠在它上面、层级更高的窗口（搜索结果下拉、弹层、浮动面板）照屏幕上的样子一起画进来，
+`[image]` 那句会说画进了几扇。点在这些像素上落到的是上面那扇窗口，所以按坐标点；它们的字作为图片文字挂在大纲根下，
+不挂在被盖住的那几行上。别的 App 的窗口、同一个 App 同层的窗口都不画进来；窗口横跨两块屏时只截它自己。
+文字识别认简体、繁体中文和英文；识别结果里的全角 ASCII 标点折回半角，好和无障碍文字、搜索词对上。
+
 ## Seeing what the agent is doing
 
 - **Edge glow** — the window currently being acted on gets a glowing border drawn by the native helper
@@ -297,9 +312,9 @@ Verify with `npm run check:hotkey-logic` (state machine and subscription tests, 
 
 ### Window image / 窗口截图（`windowImage`, protocol 16, macOS）
 
-`{"id":"…","cmd":"windowImage","windowId":4211,"maxDimension":1600}` returns `{"jpegBase64":"…","width":…,"height":…}`: the window's current content as a JPEG, longest side at most `maxDimension` (default 1600). Forsion Desktop attaches it when the user references a window with the global shortcut. It only captures: no Accessibility tree, no AXEnhancedUserInterface, and a covered window is still captured because ScreenCaptureKit captures by window. Without the Screen Recording permission it answers `screen_recording_denied` and never touches ScreenCaptureKit, so the call can't raise the system permission prompt. Other errors: `invalid_args`, `window_not_found`, `capture_timeout`, `capture_failed`, `encoding_failed`. Windows doesn't need this command: Desktop captures the HWND itself.
+`{"id":"…","cmd":"windowImage","windowId":4211,"maxDimension":1600}` returns `{"jpegBase64":"…","width":…,"height":…}`: the window's current content as a JPEG, longest side at most `maxDimension` (default 1600). Forsion Desktop attaches it when the user references a window with the global shortcut. It only captures: no Accessibility tree, no AXEnhancedUserInterface, and a covered window is still captured because ScreenCaptureKit captures by window. Windows of the same app on a higher layer that overlap it (a popup, a dropdown) are drawn in as on screen; other apps' windows never are. Without the Screen Recording permission it answers `screen_recording_denied` and never touches ScreenCaptureKit, so the call can't raise the system permission prompt. Other errors: `invalid_args`, `window_not_found`, `capture_timeout`, `capture_failed`, `encoding_failed`. Windows doesn't need this command: Desktop captures the HWND itself.
 
-`windowImage` 返回一扇窗口此刻的画面（JPEG，长边不超过 `maxDimension`，缺省 1600），Forsion 桌面端用全局快捷键引用窗口时当图片附件挂上。只截图：不碰辅助功能树、不开 AXEnhancedUserInterface；窗口被挡住也截得到。没有屏幕录制授权时回 `screen_recording_denied`，不去碰 ScreenCaptureKit，所以不会弹系统授权框。Windows 上桌面端自己按窗口句柄截，不需要这条命令。
+`windowImage` 返回一扇窗口此刻的画面（JPEG，长边不超过 `maxDimension`，缺省 1600），Forsion 桌面端用全局快捷键引用窗口时当图片附件挂上。只截图：不碰辅助功能树、不开 AXEnhancedUserInterface；窗口被挡住也截得到。同一个 App 叠在上面、层级更高的窗口（弹层、下拉）照屏幕上的样子画进来，别的 App 的窗口不会。没有屏幕录制授权时回 `screen_recording_denied`，不去碰 ScreenCaptureKit，所以不会弹系统授权框。Windows 上桌面端自己按窗口句柄截，不需要这条命令。
 
 ### macOS installation and signing / 安装与签名
 

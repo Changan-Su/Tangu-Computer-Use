@@ -101,12 +101,17 @@ export function selfWindowNote(details: unknown, hostPid: number = process.ppid)
  * 读的是 details.capture.width / height(= look 图的像素尺寸,越界校验用的就是它);形状变了就静默返回空串。
  */
 export function imageNote(details: unknown, attached: boolean, platform: string = process.platform): string {
-  const capture = (details as { capture?: { width?: unknown; height?: unknown } } | null | undefined)?.capture;
+  const capture = (details as { capture?: { width?: unknown; height?: unknown; overlays?: unknown } } | null | undefined)?.capture;
   const w = Number(capture?.width), h = Number(capture?.height);
   if (!attached || !(w > 0) || !(h > 0)) return '';
+  // 反馈 69651ff8:同一个 App 叠在上面的窗口(搜索结果下拉)会一起画进来;那块的字挂在根下的图片文字里,不在它盖住的行上
+  const n = Math.trunc(Number(capture?.overlays));
+  const shows = n > 0
+    ? `shows the target window with ${n === 1 ? 'a window' : `${n} windows`} of the same app drawn over it (a popup, a dropdown, a results list): click what that window shows by x / y, never by the ref of a row it covers`
+    : 'shows only the target window';
   // 滚动距离只在 macOS 上折算成截图像素(别的平台的滚轮单位不是像素,vendor 原样传),所以那半句只在 macOS 说。
   const distance = platform === 'darwin' ? '; the scrollX / scrollY distance of a coordinate scroll is in the same pixels' : '';
-  return `\n[image] The attached screenshot is ${w}x${h} px and shows only the target window. x / y for act_ui (click, moveMouse, scroll, drag) are pixels in this screenshot, origin top-left: x 0-${w - 1}, y 0-${h - 1}${distance}. Read positions straight off it; do not convert to screen points or to the window frame size.`;
+  return `\n[image] The attached screenshot is ${w}x${h} px and ${shows}. x / y for act_ui (click, moveMouse, scroll, drag) are pixels in this screenshot, origin top-left: x 0-${w - 1}, y 0-${h - 1}${distance}. Read positions straight off it; do not convert to screen points or to the window frame size.`;
 }
 
 interface Verification { status?: string; text?: string; role?: string; value?: string; gone?: boolean; timeoutMs?: number }
