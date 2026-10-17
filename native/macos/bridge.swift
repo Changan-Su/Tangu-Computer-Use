@@ -2336,10 +2336,10 @@ final class Bridge {
 		/// 不是就先试着把目标拿到前面;系统不让(协作式激活)就不点 —— 点下去会落到挡着的那个 App 上(10-17 Codex 复核)。
 		func requireUncovered(_ point: CGPoint) throws {
 			try requireUnlockedScreen()
-			let displays = displayAreas()
+			let displays = displayAreas(), dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first?.processIdentifier
 			var top: Int32?
 			for attempt in 0..<3 {
-				top = topWindowPid(at: point, candidates: onScreenWindows(), helperPid: getpid(), displays: displays)
+				top = topWindowPid(at: point, candidates: onScreenWindows(), helperPid: getpid(), displays: displays, dockPid: dock)
 				if top == pid { return }
 				if attempt < 2 { focusTargetForPhysicalInput(); usleep(80_000) }
 			}

@@ -57,11 +57,12 @@ struct DisplayArea {
 /// 物理鼠标事件会落到这一点最上面的那扇窗口上:它属于哪个进程。candidates 按 CGWindowList 的前后顺序(最前在先);
 /// 跳过 helper 自己的窗口(虚拟光标、高亮)和菜单栏及以上的层(菜单栏、状态栏图标、系统提示)。
 /// Dock 层(20)铺满整块屏的那扇是 Dock 的底板(自动隐藏时一直在,点击穿透它;10-17 把每一下物理点击都判成被挡):
-/// 只有它在左 / 右 / 下三边让出来的 Dock 条挡点击。ponytail: 自动隐藏的 Dock 被鼠标叫出来那一会儿看不出来。
-func topWindowPid(at point: CGPoint, candidates: [OverlayCandidate], helperPid: Int32, displays: [DisplayArea] = []) -> Int32? {
+/// 只有它在左 / 右 / 下三边让出来的 Dock 条挡点击。只认 Dock 进程(dockPid)的:别的 App 铺满整屏的 20 层窗口照样算挡着。
+/// ponytail: 自动隐藏的 Dock 被鼠标叫出来那一会儿看不出来;要防就在这一点上对 Dock 做 AX 命中测试。
+func topWindowPid(at point: CGPoint, candidates: [OverlayCandidate], helperPid: Int32, displays: [DisplayArea] = [], dockPid: Int32? = nil) -> Int32? {
 	candidates.first { window in
 		guard window.onScreen, window.pid != helperPid, window.layer < 24, window.frame.contains(point) else { return false }
-		guard window.layer == 20, let display = displays.first(where: { $0.frame == window.frame }) else { return true }
+		guard window.layer == 20, window.pid == dockPid, let display = displays.first(where: { $0.frame == window.frame }) else { return true }
 		return point.y >= display.visible.maxY || point.x < display.visible.minX || point.x >= display.visible.maxX
 	}?.pid
 }
