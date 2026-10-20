@@ -10,6 +10,7 @@ public class WindowsVisionFixture : Form {
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd, int command);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(uint pid);
     [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
     readonly string stateFile, commandFile;
     readonly ListBox list = new ListBox();
@@ -20,6 +21,17 @@ public class WindowsVisionFixture : Form {
     Point start, last;
     int drags, presses;
     bool dragging;
+    static void ActivateForTest(Form window) {
+        ShowWindow(window.Handle, 9);
+        // Dedicated runner bootstrap: a hidden PowerShell process otherwise
+        // cannot grant the native helper permission to switch between our two
+        // test windows. No fixture activation occurs during agent actions.
+        keybd_event(0x12, 0, 0, UIntPtr.Zero);
+        keybd_event(0x87, 0, 0, UIntPtr.Zero); keybd_event(0x87, 0, 2, UIntPtr.Zero);
+        keybd_event(0x12, 0, 2, UIntPtr.Zero);
+        SetForegroundWindow(window.Handle); window.Activate();
+        AllowSetForegroundWindow(0xffffffff);
+    }
     public WindowsVisionFixture(string state, string commands) {
         stateFile = state; commandFile = commands;
         Text = "Forsion CU Windows Fixture";
@@ -48,20 +60,13 @@ public class WindowsVisionFixture : Form {
         timer.Tick += (s, e) => {
             // The PowerShell console starts hidden. Explicitly show this test
             // GUI after startup, rather than inheriting SW_HIDE for its first window.
-            if (!IsWindowVisible(Handle)) { ShowWindow(Handle, 1); ActiveControl = list; list.Focus(); }
+            if (!IsWindowVisible(Handle)) { ActivateForTest(this); ActiveControl = list; list.Focus(); }
             if (File.Exists(commandFile)) {
                 string command = File.ReadAllText(commandFile).Trim(); File.Delete(commandFile);
                 if (command == "cover") {
-                    cover.Show(); ShowWindow(cover.Handle, 9);
-                    // Dedicated runner only: match the existing recorder probe's
-                    // Alt/F24 foreground-lock workaround. This is fixture setup,
-                    // before testing whether the agent preserves its foreground.
-                    keybd_event(0x12, 0, 0, UIntPtr.Zero);
-                    keybd_event(0x87, 0, 0, UIntPtr.Zero); keybd_event(0x87, 0, 2, UIntPtr.Zero);
-                    keybd_event(0x12, 0, 2, UIntPtr.Zero);
-                    SetForegroundWindow(cover.Handle); cover.Activate();
+                    cover.Show(); ActivateForTest(cover);
                 }
-                if (command == "target") Activate();
+                if (command == "target") { ActivateForTest(this); ActiveControl = list; list.Focus(); }
                 if (command == "close") { Close(); return; }
             }
             var client = PointToScreen(Point.Empty);
