@@ -222,7 +222,7 @@ mod native {
         SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
     };
     use windows::Win32::UI::Accessibility::*;
-    use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetDlgCtrlID, GetParent, GetWindowLongW, SendMessageTimeoutW, GWL_STYLE, SMTO_ABORTIFHUNG, SMTO_BLOCK, WM_COMMAND, WM_SETTEXT, WS_DISABLED};
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClassNameW, GetWindowLongW, SendMessageTimeoutW, GA_PARENT, GWL_STYLE, SMTO_ABORTIFHUNG, SMTO_BLOCK, WM_SETTEXT, WS_DISABLED};
 
     const MAX_ELEMENTS: usize = 200;
     const MAX_TRUNCATION_SCAN: usize = 1_000;
@@ -536,11 +536,13 @@ mod native {
         Selected(bool),
         Expanded,
         LegacyDefaultAction,
+        RequiresForeground,
         NoPattern,
     }
 
     pub enum SetTextResult {
         Set { value: String },
+        Uncertain,
         NoPattern,
     }
 
@@ -578,24 +580,15 @@ mod native {
         background_only: bool,
     ) -> Result<PressResult, String> {
         let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
-        // The legacy WinForms UIA Invoke provider activates its parent even
-        // under ax_only. Deliver the native push-button notification directly;
-        // unlike BM_CLICK it does not synthesize mouse messages or select it.
-        if background_only {
-            if let Some(control) = winforms_control(&element, "BUTTON") {
-                let style = unsafe { GetWindowLongW(control, GWL_STYLE) } as u32;
-                if (style & 0xf) <= 1 {
-                    if style & WS_DISABLED.0 != 0 { return Err("Native button is disabled".to_owned()); }
-                    let parent = unsafe { GetParent(control) }.map_err(|e| format!("GetParent: {e}"))?;
-                    let id = unsafe { GetDlgCtrlID(control) } as usize & 0xffff;
-                    send_control_message(parent, WM_COMMAND, WPARAM(id), LPARAM(control.0 as isize))?;
-                    return Ok(PressResult::Invoked);
-                }
-            }
-        }
         if let Ok(pattern) = unsafe {
             element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
         } {
+            // Legacy WinForms Invoke selects/activates the window. Refuse that
+            // provider in background policy; synthesizing BN_CLICKED would
+            // bypass the app's normal focus/validation gates.
+            if background_only && winforms_control(&element, "BUTTON").is_some() {
+                return Ok(PressResult::RequiresForeground);
+            }
             unsafe {
                 pattern.Invoke().map_err(|e| format!("Invoke: {e}"))?;
             }
@@ -653,6 +646,9 @@ mod native {
                     .unwrap_or_default()
             };
             if !default_action.trim().is_empty() {
+                if background_only && winforms_control(&element, "BUTTON").is_some() {
+                    return Ok(PressResult::RequiresForeground);
+                }
                 unsafe {
                     pattern
                         .DoDefaultAction()
@@ -707,11 +703,13 @@ mod native {
                         return Err("Native input is read-only".to_owned());
                     }
                     let style = unsafe { GetWindowLongW(control, GWL_STYLE) } as u32;
-                    if style & WS_DISABLED.0 != 0 { return Err("Native input is disabled".to_owned()); }
+                    ensure_control_enabled(control)?;
                     if style & 0x0800 != 0 { return Err("Native input is read-only".to_owned()); } // ES_READONLY
                     if text.contains('\0') { return Err("Native input text contains a NUL".to_owned()); }
                     let value: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
-                    let result = send_control_message(control, WM_SETTEXT, WPARAM(0), LPARAM(value.as_ptr() as isize))?;
+                    let Some(result) = send_control_message(control, WM_SETTEXT, WPARAM(0), LPARAM(value.as_ptr() as isize))? else {
+                        return Ok(SetTextResult::Uncertain);
+                    };
                     if result == 0 { return Err("Native input did not accept the text".to_owned()); }
                     let value = unsafe { pattern.CurrentValue() }.map_err(|e| format!("CurrentValue: {e}"))?.to_string();
                     return Ok(SetTextResult::Set { value });
@@ -743,11 +741,31 @@ mod native {
         name.starts_with(&format!("WindowsForms10.{kind}.")).then_some(hwnd)
     }
 
-    fn send_control_message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Result<usize, String> {
+    fn ensure_control_enabled(mut hwnd: HWND) -> Result<(), String> {
+        // GetAncestor(GA_PARENT) follows real parents, not the disabled owner
+        // of an enabled modal dialog (which GetParent would also return).
+        while !hwnd.0.is_null() {
+            if (unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32) & WS_DISABLED.0 != 0 {
+                return Err("Native input or its parent is disabled".to_owned());
+            }
+            let parent = unsafe { GetAncestor(hwnd, GA_PARENT) };
+            if parent == hwnd { break; }
+            hwnd = parent;
+        }
+        Ok(())
+    }
+
+    fn send_control_message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Result<Option<usize>, String> {
         let mut result = 0usize;
         let sent = unsafe { SendMessageTimeoutW(hwnd, message, wparam, lparam, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1500, Some(&mut result)) };
-        if sent.0 == 0 { return Err(format!("Native control message failed: {:?}", unsafe { GetLastError() })); }
-        Ok(result)
+        if sent.0 == 0 {
+            let error = unsafe { GetLastError() };
+            // A timed-out receiver may still be running its TextChanged handler.
+            // Never label it undelivered and invite a repeated side effect.
+            if error == ERROR_TIMEOUT || error == ERROR_SUCCESS { return Ok(None); }
+            return Err(format!("Native control message failed: {error:?}"));
+        }
+        Ok(Some(result))
     }
 
     pub fn focus(
@@ -1004,11 +1022,13 @@ pub enum PressResult {
     Selected(bool),
     Expanded,
     LegacyDefaultAction,
+    RequiresForeground,
     NoPattern,
 }
 #[cfg(not(windows))]
 pub enum SetTextResult {
     Set { value: String },
+    Uncertain,
     NoPattern,
 }
 #[cfg(not(windows))]

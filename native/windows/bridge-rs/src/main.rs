@@ -992,6 +992,10 @@ fn act_on_ref(
             windows_bridge::uia::PressResult::NoPattern => {
                 coordinate_fallback(args, parsed, &element)
             }
+            windows_bridge::uia::PressResult::RequiresForeground => Err(ProtocolError::new(
+                "This legacy WinForms Invoke provider activates its window; background policy refuses it before input",
+                ErrorCode::ForegroundRequired,
+            )),
         },
         "setText" => {
             let text = parsed
@@ -1028,6 +1032,10 @@ fn act_on_ref(
                     );
                     coordinate_fallback(args, parsed, &element)
                 }
+                windows_bridge::uia::SetTextResult::Uncertain => Ok(json!({
+                    "outcome": "unknown", "performed": { "grounding": "description", "delivery": "ax" },
+                    "evidence": { "reason": "Native text delivery timed out after dispatch; the value may have changed. Observe before retrying." }
+                })),
             }
         }
         "scroll" => {

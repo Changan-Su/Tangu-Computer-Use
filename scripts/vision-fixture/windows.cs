@@ -11,6 +11,8 @@ public class WindowsVisionFixture : Form {
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd, int command);
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hwnd);
     [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(uint pid);
+    [DllImport("user32.dll")] static extern bool EnableWindow(IntPtr hwnd, bool enabled);
+    [DllImport("user32.dll")] static extern bool IsWindowEnabled(IntPtr hwnd);
     [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
     readonly string stateFile, commandFile;
     readonly ListView list = new ListView();
@@ -43,6 +45,7 @@ public class WindowsVisionFixture : Form {
         var disabled = new Button { Text = "Disabled control", AccessibleName = "Disabled control", Enabled = false, Location = new Point(470, 15), Size = new Size(160, 35) };
         disabled.Click += (s, e) => presses++;
         input.AccessibleName = "Fixture input"; input.Text = "Initial";
+        input.TextChanged += (s, e) => { if (input.Text == "Slow background value") System.Threading.Thread.Sleep(2500); };
         input.Location = new Point(200, 20); input.Size = new Size(250, 30);
         list.AccessibleName = "Native scroll list";
         list.Location = new Point(20, 85); list.Size = new Size(270, 350);
@@ -50,7 +53,7 @@ public class WindowsVisionFixture : Form {
         // Several full viewports suffice for real wheel / ScrollPattern checks.
         // Walking 400 native UIA list items can exceed a 700ms expect's helper
         // transport deadline before it can report the intentionally absent text.
-        for (int i = 0; i < 80; i++) list.Items.Add("Fixture row " + i);
+        for (int i = 0; i < 40; i++) list.Items.Add("Fixture row " + i);
         canvas.AccessibleName = "Native drawing canvas";
         canvas.Location = new Point(330, 85); canvas.Size = new Size(290, 350); canvas.BackColor = Color.White;
         canvas.MouseDown += (s, e) => { start = last = e.Location; dragging = true; canvas.Capture = true; };
@@ -62,7 +65,11 @@ public class WindowsVisionFixture : Form {
         canvas.MouseUp += (s, e) => { if (dragging && Math.Abs(e.X - start.X) + Math.Abs(e.Y - start.Y) > 30) drags++; dragging = false; canvas.Capture = false; };
         readOnly.AccessibleName = "Read-only input"; readOnly.Text = "Read-only baseline"; readOnly.ReadOnly = true;
         readOnly.Location = new Point(20, 440); readOnly.Size = new Size(270, 24);
-        Controls.AddRange(new Control[] { button, input, list, canvas, disabled, readOnly });
+        var wpfButton = new System.Windows.Controls.Button { Content = "Background button" };
+        System.Windows.Automation.AutomationProperties.SetName(wpfButton, "Background button");
+        wpfButton.Click += (s, e) => presses++;
+        var wpfHost = new System.Windows.Forms.Integration.ElementHost { Child = wpfButton, Location = new Point(330, 440), Size = new Size(290, 24) };
+        Controls.AddRange(new Control[] { button, input, disabled, readOnly, wpfHost, list, canvas });
         cover.Text = "Forsion CU Cover"; cover.StartPosition = FormStartPosition.Manual;
         cover.Location = new Point(800, 100); cover.Size = new Size(200, 180);
         timer.Interval = 100;
@@ -76,11 +83,13 @@ public class WindowsVisionFixture : Form {
                     cover.Show(); ActivateForTest(cover);
                 }
                 if (command == "target") { ActivateForTest(this); ActiveControl = list; list.Focus(); }
+                if (command == "disable") EnableWindow(Handle, false);
+                if (command == "enable") EnableWindow(Handle, true);
                 if (command == "close") { Close(); return; }
             }
             var client = PointToScreen(Point.Empty);
             string text = input.Text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", "\\n");
-            File.WriteAllText(stateFile + ".tmp", "{\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + ",\"hwnd\":" + Handle.ToInt64() + ",\"visible\":" + (IsWindowVisible(Handle) ? "true" : "false") + ",\"listFocused\":" + (list.Focused ? "true" : "false") + ",\"cover\":" + (cover.IsHandleCreated ? cover.Handle.ToInt64() : 0) + ",\"left\":" + Left + ",\"top\":" + Top + ",\"width\":" + Width + ",\"height\":" + Height + ",\"clientX\":" + client.X + ",\"clientY\":" + client.Y + ",\"topIndex\":" + (list.TopItem == null ? 0 : list.TopItem.Index) + ",\"drags\":" + drags + ",\"presses\":" + presses + ",\"readOnly\":\"" + readOnly.Text + "\",\"input\":\"" + text + "\"}");
+            File.WriteAllText(stateFile + ".tmp", "{\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + ",\"hwnd\":" + Handle.ToInt64() + ",\"visible\":" + (IsWindowVisible(Handle) ? "true" : "false") + ",\"enabled\":" + (IsWindowEnabled(Handle) ? "true" : "false") + ",\"listFocused\":" + (list.Focused ? "true" : "false") + ",\"cover\":" + (cover.IsHandleCreated ? cover.Handle.ToInt64() : 0) + ",\"left\":" + Left + ",\"top\":" + Top + ",\"width\":" + Width + ",\"height\":" + Height + ",\"clientX\":" + client.X + ",\"clientY\":" + client.Y + ",\"topIndex\":" + (list.TopItem == null ? 0 : list.TopItem.Index) + ",\"drags\":" + drags + ",\"presses\":" + presses + ",\"readOnly\":\"" + readOnly.Text + "\",\"input\":\"" + text + "\"}");
             if (File.Exists(stateFile)) File.Replace(stateFile + ".tmp", stateFile, null);
             else File.Move(stateFile + ".tmp", stateFile);
         };
