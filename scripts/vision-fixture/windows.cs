@@ -13,7 +13,7 @@ public class WindowsVisionFixture : Form {
     [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(uint pid);
     [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
     readonly string stateFile, commandFile;
-    readonly ListBox list = new ListBox();
+    readonly ListView list = new ListView();
     readonly TextBox input = new TextBox();
     readonly Panel canvas = new Panel();
     readonly Form cover = new Form();
@@ -43,6 +43,7 @@ public class WindowsVisionFixture : Form {
         input.Location = new Point(200, 20); input.Size = new Size(250, 30);
         list.AccessibleName = "Native scroll list";
         list.Location = new Point(20, 85); list.Size = new Size(270, 350);
+        list.View = View.Details; list.Columns.Add("Rows", 240); list.FullRowSelect = true;
         for (int i = 0; i < 400; i++) list.Items.Add("Fixture row " + i);
         canvas.AccessibleName = "Native drawing canvas";
         canvas.Location = new Point(330, 85); canvas.Size = new Size(290, 350); canvas.BackColor = Color.White;
@@ -71,7 +72,7 @@ public class WindowsVisionFixture : Form {
             }
             var client = PointToScreen(Point.Empty);
             string text = input.Text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", "\\n");
-            File.WriteAllText(stateFile + ".tmp", "{\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + ",\"hwnd\":" + Handle.ToInt64() + ",\"visible\":" + (IsWindowVisible(Handle) ? "true" : "false") + ",\"listFocused\":" + (list.Focused ? "true" : "false") + ",\"cover\":" + (cover.IsHandleCreated ? cover.Handle.ToInt64() : 0) + ",\"left\":" + Left + ",\"top\":" + Top + ",\"width\":" + Width + ",\"height\":" + Height + ",\"clientX\":" + client.X + ",\"clientY\":" + client.Y + ",\"topIndex\":" + list.TopIndex + ",\"drags\":" + drags + ",\"presses\":" + presses + ",\"input\":\"" + text + "\"}");
+            File.WriteAllText(stateFile + ".tmp", "{\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + ",\"hwnd\":" + Handle.ToInt64() + ",\"visible\":" + (IsWindowVisible(Handle) ? "true" : "false") + ",\"listFocused\":" + (list.Focused ? "true" : "false") + ",\"cover\":" + (cover.IsHandleCreated ? cover.Handle.ToInt64() : 0) + ",\"left\":" + Left + ",\"top\":" + Top + ",\"width\":" + Width + ",\"height\":" + Height + ",\"clientX\":" + client.X + ",\"clientY\":" + client.Y + ",\"topIndex\":" + (list.TopItem == null ? 0 : list.TopItem.Index) + ",\"drags\":" + drags + ",\"presses\":" + presses + ",\"input\":\"" + text + "\"}");
             if (File.Exists(stateFile)) File.Replace(stateFile + ".tmp", stateFile, null);
             else File.Move(stateFile + ".tmp", stateFile);
         };

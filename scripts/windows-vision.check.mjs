@@ -134,9 +134,18 @@ try {
   const button = outline.split('\n').find(line => line.includes('Fixture button'))?.match(/@e\d+/)?.[0];
   check('native accessibility button has a reference', !!button, outline);
   const presses = state().presses;
-  await act(await observe(), [{ action: 'click', ref: button }]);
+  const refClick = await act(await observe(), [{ action: 'click', ref: button }]);
   await until('strict background reference click works', s => s.presses > presses);
-  check('reference click keeps the cover foreground', (await front())?.windowId === state().cover);
+  const clickStep = refClick.details.execution.steps[0];
+  check('strict reference click uses accessibility without foreground escalation', clickStep.delivery === 'ax' && clickStep.deliveryPolicy === 'ax_only' && !refClick.details.execution.escalatedToForeground, refClick.said);
+  // WinForms' native accessibility Invoke activates its own window. That is
+  // app behavior, unlike the helper's forbidden coordinate activation. Keep
+  // the truthful foreground notice and establish a fresh cover for setText.
+  if ((await front())?.windowId !== state().cover) {
+    check('an app activation caused by accessibility Invoke is reported', refClick.said.includes('[foreground]'));
+    console.log('NOTE native WinForms accessibility Invoke activated its app; no helper foreground escalation was used');
+  }
+  await cover();
   seen = await observe();
   const input = seen.details.renderedOutline.split('\n').find(line => line.includes('Fixture input'))?.match(/@e\d+/)?.[0];
   check('native text input has a reference', !!input);
