@@ -39,8 +39,21 @@ let settings = { headless: false, browser_use: false, cursor_overlay: false };
 const store = { getScopeSettings: () => settings, isPluginEnabledSync: () => true };
 const sync = () => cu.syncSettings(store);
 const collected = [];
+function imageSize(bytes) {
+  if (bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return { width: bytes.readUInt32BE(16), height: bytes.readUInt32BE(20) };
+  assert.equal(bytes.readUInt16BE(0), 0xffd8, 'screenshot must be JPEG or PNG');
+  let offset = 2;
+  while (offset + 8 < bytes.length) {
+    assert.equal(bytes[offset++], 0xff, 'JPEG marker');
+    while (bytes[offset] === 0xff) offset++;
+    const marker = bytes[offset++], length = bytes.readUInt16BE(offset);
+    if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) return { height: bytes.readUInt16BE(offset + 3), width: bytes.readUInt16BE(offset + 5) };
+    assert.ok(length >= 2); offset += length;
+  }
+  throw new Error('JPEG screenshot has no size marker');
+}
 const tcx = { collectImage: image => { collected.push(image); fs.writeFileSync(path.join(home, `screen-${collected.length}.jpg`), Buffer.from(image.url.split(',')[1], 'base64')); } };
-const shown = (result, args) => { result.said = cu.render(result, tcx, args); fs.writeFileSync(path.join(home, `tool-${Date.now()}.json`), JSON.stringify({ said: result.said, details: result.details }, null, 2)); return result; };
+const shown = (result, args) => { const before = collected.length; result.said = cu.render(result, tcx, args); if (collected.length > before) result.actualImageSize = imageSize(Buffer.from(collected.at(-1).url.split(',')[1], 'base64')); fs.writeFileSync(path.join(home, `tool-${Date.now()}.json`), JSON.stringify({ said: result.said, details: result.details, actualImageSize: result.actualImageSize }, null, 2)); return result; };
 const front = async () => { const roots = await cu.windowsHelper.command('listRoots'); return (Array.isArray(roots) ? roots : roots.roots).find(row => row.isFocused); };
 let rootRef;
 const observe = async () => shown(await cu.executeObserve('', { root: rootRef, mode: 'visual' }, undefined, undefined, ctx), {});
@@ -50,6 +63,15 @@ const act = async (seen, actions, expect) => {
 };
 const cover = async () => {
   fs.writeFileSync(commandFile, 'cover');
+  let root;
+  await until('native cover appears', async s => {
+    const result = await cu.windowsHelper.command('listRoots');
+    root = (Array.isArray(result) ? result : result.roots).find(window => window.windowId === s.cover);
+    return !!root;
+  });
+  // WinForms Activate alone can be denied by Windows' foreground lock on CI.
+  // Establish the test precondition through the real helper's focus command.
+  await cu.windowsHelper.command('focusWindow', { rootRef: root.rootRef });
   await until('cover foreground', async s => (await front())?.windowId === s.cover);
 };
 try {
@@ -70,10 +92,10 @@ try {
   });
   check('real Windows helper finds the fixture', !!rootRef);
   let seen = await observe();
-  check('visual image note uses the actual screenshot dimensions', collected.length > 0 && seen.said.includes(`[image] The attached screenshot is ${seen.details.capture.width}x${seen.details.capture.height} px`), seen.said);
+  check('visual image note uses the actual screenshot dimensions', seen.actualImageSize?.width === seen.details.capture.width && seen.actualImageSize?.height === seen.details.capture.height && seen.said.includes(`[image] The attached screenshot is ${seen.actualImageSize.width}x${seen.actualImageSize.height} px`), seen.said);
   check('Windows image note does not claim pixel scroll distances', !seen.said.includes('scrollX / scrollY distance'));
   const point = (x, y) => {
-    const s = state(), scale = seen.details.capture.width / s.width;
+    const s = state(), scale = seen.actualImageSize.width / s.width;
     return { x: Math.round((s.clientX - s.left + x) * scale), y: Math.round((s.clientY - s.top + y) * scale) };
   };
   await cover();
@@ -92,10 +114,13 @@ try {
   check('unsatisfied expect is reported after a delivered action', absent.said.includes('[expect] NOT satisfied') && state().presses > 0, absent.said);
   settings = { ...settings, headless: true, cursor_overlay: true }; sync();
   await cover(); seen = await observe();
+  const strictIndex = state().topIndex;
   const strict = await act(seen, [{ action: 'scroll', ...point(120, 210), scrollY: 3 }]).catch(error => {
     assert.match(error.message, /Background policy blocks global Windows coordinate\/raw input grounding/);
-    return { said: error.message };
+    return { said: error.message, blocked: true };
   });
+  const strictErrors = strict.details?.execution?.steps?.map(step => step.error?.code) || [];
+  check('strict background rejects coordinate input without native scrolling', (strict.blocked || strictErrors.includes('coordinate_blocked')) && state().topIndex === strictIndex, JSON.stringify(strict.details?.execution));
   check('strict background survives tool config reload', !strict.said.includes('[foreground]') && (await front())?.windowId === state().cover, strict.said);
   seen = await observe();
   const outline = seen.details.renderedOutline || '';
@@ -123,8 +148,12 @@ try {
   const resumed = await act(seen, [{ action: 'scroll', ...point(120, 210), scrollY: 3 }]);
   check('disabling strict background restores foreground routing', resumed.said.includes('[foreground]'), resumed.said);
 } finally {
-  fs.writeFileSync(path.join(out, 'results.json'), JSON.stringify({ checks, home }, null, 2));
-  cu.windowsHelper.dispose();
-  if (fixture.exitCode === null) { fs.writeFileSync(commandFile, 'close'); await Promise.race([new Promise(resolve => fixture.once('exit', resolve)), sleep(3000)]); }
-  if (fixture.exitCode === null) fixture.kill();
+  try { fs.writeFileSync(path.join(out, 'results.json'), JSON.stringify({ checks, home }, null, 2)); }
+  finally {
+    try { cu.windowsHelper.dispose(); }
+    finally {
+      try { if (fixture.exitCode === null) { fs.writeFileSync(commandFile, 'close'); await Promise.race([new Promise(resolve => fixture.once('exit', resolve)), sleep(3000)]); } }
+      finally { if (fixture.exitCode === null) fixture.kill(); }
+    }
+  }
 }

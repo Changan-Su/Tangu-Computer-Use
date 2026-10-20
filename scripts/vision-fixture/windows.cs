@@ -55,7 +55,9 @@ public class WindowsVisionFixture : Form {
             }
             var client = PointToScreen(Point.Empty);
             string text = input.Text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", "\\n");
-            File.WriteAllText(stateFile, "{\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + ",\"hwnd\":" + Handle.ToInt64() + ",\"visible\":" + (IsWindowVisible(Handle) ? "true" : "false") + ",\"cover\":" + (cover.IsHandleCreated ? cover.Handle.ToInt64() : 0) + ",\"left\":" + Left + ",\"top\":" + Top + ",\"width\":" + Width + ",\"height\":" + Height + ",\"clientX\":" + client.X + ",\"clientY\":" + client.Y + ",\"topIndex\":" + list.TopIndex + ",\"drags\":" + drags + ",\"presses\":" + presses + ",\"input\":\"" + text + "\"}");
+            File.WriteAllText(stateFile + ".tmp", "{\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + ",\"hwnd\":" + Handle.ToInt64() + ",\"visible\":" + (IsWindowVisible(Handle) ? "true" : "false") + ",\"cover\":" + (cover.IsHandleCreated ? cover.Handle.ToInt64() : 0) + ",\"left\":" + Left + ",\"top\":" + Top + ",\"width\":" + Width + ",\"height\":" + Height + ",\"clientX\":" + client.X + ",\"clientY\":" + client.Y + ",\"topIndex\":" + list.TopIndex + ",\"drags\":" + drags + ",\"presses\":" + presses + ",\"input\":\"" + text + "\"}");
+            if (File.Exists(stateFile)) File.Replace(stateFile + ".tmp", stateFile, null);
+            else File.Move(stateFile + ".tmp", stateFile);
         };
         Shown += (s, e) => timer.Start();
         FormClosed += (s, e) => { timer.Stop(); cover.Dispose(); };
