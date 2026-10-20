@@ -222,6 +222,7 @@ mod native {
         SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
     };
     use windows::Win32::UI::Accessibility::*;
+    use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetDlgCtrlID, GetParent, GetWindowLongW, SendMessageTimeoutW, GWL_STYLE, SMTO_ABORTIFHUNG, SMTO_BLOCK, WM_COMMAND, WM_SETTEXT, WS_DISABLED};
 
     const MAX_ELEMENTS: usize = 200;
     const MAX_TRUNCATION_SCAN: usize = 1_000;
@@ -574,8 +575,24 @@ mod native {
         hwnd: isize,
         runtime_id_target: &[i32],
         automation_id: &str,
+        background_only: bool,
     ) -> Result<PressResult, String> {
         let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
+        // The legacy WinForms UIA Invoke provider activates its parent even
+        // under ax_only. Deliver the native push-button notification directly;
+        // unlike BM_CLICK it does not synthesize mouse messages or select it.
+        if background_only {
+            if let Some(control) = winforms_control(&element, "BUTTON") {
+                let style = unsafe { GetWindowLongW(control, GWL_STYLE) } as u32;
+                if (style & 0xf) <= 1 {
+                    if style & WS_DISABLED.0 != 0 { return Err("Native button is disabled".to_owned()); }
+                    let parent = unsafe { GetParent(control) }.map_err(|e| format!("GetParent: {e}"))?;
+                    let id = unsafe { GetDlgCtrlID(control) } as usize & 0xffff;
+                    send_control_message(parent, WM_COMMAND, WPARAM(id), LPARAM(control.0 as isize))?;
+                    return Ok(PressResult::Invoked);
+                }
+            }
+        }
         if let Ok(pattern) = unsafe {
             element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
         } {
@@ -678,11 +695,28 @@ mod native {
         runtime_id_target: &[i32],
         automation_id: &str,
         text: &str,
+        background_only: bool,
     ) -> Result<SetTextResult, String> {
         let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
         if let Ok(pattern) =
             unsafe { element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }
         {
+            if background_only {
+                if let Some(control) = winforms_control(&element, "EDIT") {
+                    if unsafe { pattern.CurrentIsReadOnly() }.map_err(|e| format!("IsReadOnly: {e}"))?.as_bool() {
+                        return Err("Native input is read-only".to_owned());
+                    }
+                    let style = unsafe { GetWindowLongW(control, GWL_STYLE) } as u32;
+                    if style & WS_DISABLED.0 != 0 { return Err("Native input is disabled".to_owned()); }
+                    if style & 0x0800 != 0 { return Err("Native input is read-only".to_owned()); } // ES_READONLY
+                    if text.contains('\0') { return Err("Native input text contains a NUL".to_owned()); }
+                    let value: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+                    let result = send_control_message(control, WM_SETTEXT, WPARAM(0), LPARAM(value.as_ptr() as isize))?;
+                    if result == 0 { return Err("Native input did not accept the text".to_owned()); }
+                    let value = unsafe { pattern.CurrentValue() }.map_err(|e| format!("CurrentValue: {e}"))?.to_string();
+                    return Ok(SetTextResult::Set { value });
+                }
+            }
             let value = BSTR::from(text);
             unsafe {
                 pattern
@@ -698,6 +732,22 @@ mod native {
             return Ok(SetTextResult::Set { value });
         }
         Ok(SetTextResult::NoPattern)
+    }
+
+    fn winforms_control(element: &IUIAutomationElement, kind: &str) -> Option<HWND> {
+        let hwnd = unsafe { element.CurrentNativeWindowHandle().ok()? };
+        if hwnd.0.is_null() { return None; }
+        let mut name = [0u16; 256];
+        let len = unsafe { GetClassNameW(hwnd, &mut name) };
+        let name = String::from_utf16_lossy(&name[..len.max(0) as usize]);
+        name.starts_with(&format!("WindowsForms10.{kind}.")).then_some(hwnd)
+    }
+
+    fn send_control_message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Result<usize, String> {
+        let mut result = 0usize;
+        let sent = unsafe { SendMessageTimeoutW(hwnd, message, wparam, lparam, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1500, Some(&mut result)) };
+        if sent.0 == 0 { return Err(format!("Native control message failed: {:?}", unsafe { GetLastError() })); }
+        Ok(result)
     }
 
     pub fn focus(
@@ -991,6 +1041,7 @@ pub fn press(
     _hwnd: isize,
     _runtime_id: &[i32],
     _automation_id: &str,
+    _background_only: bool,
 ) -> Result<PressResult, String> {
     Err("UIA is only supported on Windows".to_owned())
 }
@@ -1000,6 +1051,7 @@ pub fn set_text(
     _runtime_id: &[i32],
     _automation_id: &str,
     _text: &str,
+    _background_only: bool,
 ) -> Result<SetTextResult, String> {
     Err("UIA is only supported on Windows".to_owned())
 }

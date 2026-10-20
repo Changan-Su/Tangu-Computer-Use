@@ -138,20 +138,22 @@ try {
   await until('strict background reference click works', s => s.presses > presses);
   const clickStep = refClick.details.execution.steps[0];
   check('strict reference click uses accessibility without foreground escalation', clickStep.delivery === 'ax' && clickStep.deliveryPolicy === 'ax_only' && !refClick.details.execution.escalatedToForeground, refClick.said);
-  // WinForms' native accessibility Invoke activates its own window. That is
-  // app behavior, unlike the helper's forbidden coordinate activation. Keep
-  // the truthful foreground notice and establish a fresh cover for setText.
-  if ((await front())?.windowId !== state().cover) {
-    check('an app activation caused by accessibility Invoke is reported', refClick.said.includes('[foreground]'));
-    console.log('NOTE native WinForms accessibility Invoke activated its app; no helper foreground escalation was used');
-  }
-  await cover();
+  check('reference click keeps the cover foreground', !refClick.said.includes('[foreground]') && (await front())?.windowId === state().cover, refClick.said);
   seen = await observe();
   const input = seen.details.renderedOutline.split('\n').find(line => line.includes('Fixture input'))?.match(/@e\d+/)?.[0];
   check('native text input has a reference', !!input);
   await act(seen, [{ action: 'setText', ref: input, text: 'Windows background text' }]);
   await until('strict background setText changes the native input', s => s.input === 'Windows background text');
   check('setText keeps the cover foreground', (await front())?.windowId === state().cover);
+  seen = await observe();
+  const disabled = seen.details.renderedOutline.split('\n').find(line => line.includes('Disabled control'))?.match(/@e\d+/)?.[0];
+  const disabledBefore = state().presses;
+  const refused = await act(seen, [{ action: 'click', ref: disabled }]).catch(error => ({ said: error.message, rejected: true }));
+  check('disabled native button is not invoked or activated', state().presses === disabledBefore && (refused.rejected || refused.details.execution.steps.some(step => step.outcome === 'didnt')) && (await front())?.windowId === state().cover, refused.said);
+  seen = await observe();
+  const readOnly = seen.details.renderedOutline.split('\n').find(line => line.includes('Read-only input'))?.match(/@e\d+/)?.[0];
+  const protectedWrite = await act(seen, [{ action: 'setText', ref: readOnly, text: 'Must not write' }]).catch(error => ({ said: error.message, rejected: true }));
+  check('read-only native text is not changed or activated', state().readOnly === 'Read-only baseline' && (protectedWrite.rejected || protectedWrite.details.execution.steps.some(step => step.outcome === 'didnt')) && (await front())?.windowId === state().cover, protectedWrite.said);
   seen = await observe();
   const list = seen.details.renderedOutline.split('\n').find(line => line.includes('Native scroll list'))?.match(/@e\d+/)?.[0];
   check('native scroll list has a reference', !!list);

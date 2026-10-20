@@ -970,6 +970,7 @@ fn act_on_ref(
             element.hwnd,
             &element.runtime_id,
             &element.automation_id,
+            parsed.policy != "foreground",
         )
         .map_err(stale_ref_from_uia)?
         {
@@ -1003,6 +1004,7 @@ fn act_on_ref(
                 &element.runtime_id,
                 &element.automation_id,
                 text,
+                parsed.policy != "foreground",
             )
             .map_err(stale_ref_from_uia)?
             {

@@ -15,6 +15,7 @@ public class WindowsVisionFixture : Form {
     readonly string stateFile, commandFile;
     readonly ListView list = new ListView();
     readonly TextBox input = new TextBox();
+    readonly TextBox readOnly = new TextBox();
     readonly Panel canvas = new Panel();
     readonly Form cover = new Form();
     readonly Timer timer = new Timer();
@@ -39,6 +40,8 @@ public class WindowsVisionFixture : Form {
         ClientSize = new Size(660, 470);
         var button = new Button { Text = "Fixture button", AccessibleName = "Fixture button", Location = new Point(20, 15), Size = new Size(160, 35) };
         button.Click += (s, e) => presses++;
+        var disabled = new Button { Text = "Disabled control", AccessibleName = "Disabled control", Enabled = false, Location = new Point(470, 15), Size = new Size(160, 35) };
+        disabled.Click += (s, e) => presses++;
         input.AccessibleName = "Fixture input"; input.Text = "Initial";
         input.Location = new Point(200, 20); input.Size = new Size(250, 30);
         list.AccessibleName = "Native scroll list";
@@ -57,7 +60,9 @@ public class WindowsVisionFixture : Form {
             last = e.Location;
         };
         canvas.MouseUp += (s, e) => { if (dragging && Math.Abs(e.X - start.X) + Math.Abs(e.Y - start.Y) > 30) drags++; dragging = false; canvas.Capture = false; };
-        Controls.AddRange(new Control[] { button, input, list, canvas });
+        readOnly.AccessibleName = "Read-only input"; readOnly.Text = "Read-only baseline"; readOnly.ReadOnly = true;
+        readOnly.Location = new Point(20, 440); readOnly.Size = new Size(270, 24);
+        Controls.AddRange(new Control[] { button, input, list, canvas, disabled, readOnly });
         cover.Text = "Forsion CU Cover"; cover.StartPosition = FormStartPosition.Manual;
         cover.Location = new Point(800, 100); cover.Size = new Size(200, 180);
         timer.Interval = 100;
@@ -75,7 +80,7 @@ public class WindowsVisionFixture : Form {
             }
             var client = PointToScreen(Point.Empty);
             string text = input.Text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", "\\n");
-            File.WriteAllText(stateFile + ".tmp", "{\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + ",\"hwnd\":" + Handle.ToInt64() + ",\"visible\":" + (IsWindowVisible(Handle) ? "true" : "false") + ",\"listFocused\":" + (list.Focused ? "true" : "false") + ",\"cover\":" + (cover.IsHandleCreated ? cover.Handle.ToInt64() : 0) + ",\"left\":" + Left + ",\"top\":" + Top + ",\"width\":" + Width + ",\"height\":" + Height + ",\"clientX\":" + client.X + ",\"clientY\":" + client.Y + ",\"topIndex\":" + (list.TopItem == null ? 0 : list.TopItem.Index) + ",\"drags\":" + drags + ",\"presses\":" + presses + ",\"input\":\"" + text + "\"}");
+            File.WriteAllText(stateFile + ".tmp", "{\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + ",\"hwnd\":" + Handle.ToInt64() + ",\"visible\":" + (IsWindowVisible(Handle) ? "true" : "false") + ",\"listFocused\":" + (list.Focused ? "true" : "false") + ",\"cover\":" + (cover.IsHandleCreated ? cover.Handle.ToInt64() : 0) + ",\"left\":" + Left + ",\"top\":" + Top + ",\"width\":" + Width + ",\"height\":" + Height + ",\"clientX\":" + client.X + ",\"clientY\":" + client.Y + ",\"topIndex\":" + (list.TopItem == null ? 0 : list.TopItem.Index) + ",\"drags\":" + drags + ",\"presses\":" + presses + ",\"readOnly\":\"" + readOnly.Text + "\",\"input\":\"" + text + "\"}");
             if (File.Exists(stateFile)) File.Replace(stateFile + ".tmp", stateFile, null);
             else File.Move(stateFile + ".tmp", stateFile);
         };
