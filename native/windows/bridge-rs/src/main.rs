@@ -785,6 +785,10 @@ fn handle_act(args: &Value) -> Result<Value, ProtocolError> {
                     ErrorCode::CoordinateUnavailableForRoot,
                 ));
             }
+            // Reject forbidden raw input before activation or agent-input
+            // bookkeeping. Strict background must preserve the user's window
+            // even when the requested coordinate action cannot be delivered.
+            input::policy_allows_raw_input(&parsed)?;
             let mut executable = args.clone();
             executable["resolvedPoint"] = json!(screen_point(&record, *x, *y));
             if parsed.action == "drag" {
@@ -1714,6 +1718,26 @@ mod tests {
         assert!(!action_may_use_physical_input(&ax_only, &record));
         let coordinates = json!({"lookId":"look","action":"click","policy":"foreground","target":{"x":1,"y":2},"params":{}});
         assert!(action_may_use_physical_input(&coordinates, &record));
+    }
+
+    #[test]
+    fn rejected_coordinate_input_never_reaches_foreground_activation() {
+        let look_id = "policy-before-foreground";
+        let mut record = look_with_element(1.0);
+        record.has_image = true;
+        record.hwnd = 0; // Invalid on purpose: attempting focus would yield target_not_found.
+        helper_state().lock().unwrap().insert_look(look_id.to_owned(), record);
+        for (policy, code) in [("ax_only", ErrorCode::CoordinateBlocked), ("background", ErrorCode::ForegroundRequired)] {
+            let error = handle_act(&json!({
+                "lookId": look_id, "action": "scroll", "policy": policy,
+                "target": { "x": 20, "y": 20 }, "params": { "scrollY": 3 },
+                "deferRootDelta": true
+            })).expect_err("background coordinate input must be rejected before focus");
+            assert_eq!(error.code, code);
+        }
+        let mut state = helper_state().lock().unwrap();
+        state.looks.remove(look_id);
+        state.look_order.retain(|id| id != look_id);
     }
 
     #[test]
