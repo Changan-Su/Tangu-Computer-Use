@@ -1032,9 +1032,9 @@ fn act_on_ref(
                     );
                     coordinate_fallback(args, parsed, &element)
                 }
-                windows_bridge::uia::SetTextResult::Uncertain => Ok(json!({
+                windows_bridge::uia::SetTextResult::Uncertain { reason } => Ok(json!({
                     "outcome": "unknown", "performed": { "grounding": "description", "delivery": "ax" },
-                    "evidence": { "reason": "Native text delivery timed out after dispatch; the value may have changed. Observe before retrying." }
+                    "evidence": { "reason": reason }
                 })),
             }
         }

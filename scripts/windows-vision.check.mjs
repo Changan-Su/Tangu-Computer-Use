@@ -185,6 +185,14 @@ try {
   await until('reference scroll changes the native list', s => s.topIndex > at);
   check('reference scroll stays in the background', !refScroll.said.includes('[foreground]') && (await front())?.windowId === state().cover, refScroll.said);
   settings = { ...settings, headless: false, cursor_overlay: false }; sync();
+  await cover();
+  seen = await observe();
+  const normalizedInput = seen.details.renderedOutline.split('\n').find(line => line.includes('Fixture input'))?.match(/@e\d+/)?.[0];
+  check('normalizing native input is observed', !!normalizedInput);
+  const writesBefore = state().writes;
+  const normalized = await act(seen, [{ action: 'setText', ref: normalizedInput, text: 'normalize value' }]);
+  await until('native input normalizes its value', s => s.input === 'NORMALIZE VALUE');
+  check('native normalization does not repeat or escalate the write', normalized.details.execution.steps[0].outcome === 'unknown' && normalized.details.execution.steps[0].evidence?.reason?.includes('normalized') && state().writes - writesBefore === 2 && (await front())?.windowId === state().cover, normalized.said);
   seen = await observe();
   const resumed = await act(seen, [{ action: 'scroll', ...point(120, 210), scrollY: 3 }]);
   check('disabling strict background restores foreground routing', resumed.said.includes('[foreground]'), resumed.said);

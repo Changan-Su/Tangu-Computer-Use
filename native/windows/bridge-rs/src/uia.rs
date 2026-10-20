@@ -542,7 +542,7 @@ mod native {
 
     pub enum SetTextResult {
         Set { value: String },
-        Uncertain,
+        Uncertain { reason: &'static str },
         NoPattern,
     }
 
@@ -708,10 +708,14 @@ mod native {
                     if text.contains('\0') { return Err("Native input text contains a NUL".to_owned()); }
                     let value: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
                     let Some(result) = send_control_message(control, WM_SETTEXT, WPARAM(0), LPARAM(value.as_ptr() as isize))? else {
-                        return Ok(SetTextResult::Uncertain);
+                        return Ok(SetTextResult::Uncertain { reason: "Native text delivery timed out after dispatch; the value may have changed. Observe before retrying." });
                     };
-                    if result == 0 { return Err("Native input did not accept the text".to_owned()); }
-                    let value = unsafe { pattern.CurrentValue() }.map_err(|e| format!("CurrentValue: {e}"))?.to_string();
+                    if result == 0 { return Ok(SetTextResult::Uncertain { reason: "Native text delivery did not acknowledge completion; observe the value before retrying." }); }
+                    let Ok(value) = (unsafe { pattern.CurrentValue() }) else {
+                        return Ok(SetTextResult::Uncertain { reason: "Native text was dispatched but readback failed; observe before retrying." });
+                    };
+                    let value = value.to_string();
+                    if value != text { return Ok(SetTextResult::Uncertain { reason: "The native input changed or normalized the dispatched value; observe before retrying." }); }
                     return Ok(SetTextResult::Set { value });
                 }
             }
@@ -1028,7 +1032,7 @@ pub enum PressResult {
 #[cfg(not(windows))]
 pub enum SetTextResult {
     Set { value: String },
-    Uncertain,
+    Uncertain { reason: &'static str },
     NoPattern,
 }
 #[cfg(not(windows))]

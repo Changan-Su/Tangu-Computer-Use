@@ -22,7 +22,7 @@ public class WindowsVisionFixture : Form {
     readonly Form cover = new Form();
     readonly Timer timer = new Timer();
     Point start, last;
-    int drags, presses;
+    int drags, presses, writes;
     bool dragging;
     static void ActivateForTest(Form window) {
         ShowWindow(window.Handle, 9);
@@ -45,7 +45,7 @@ public class WindowsVisionFixture : Form {
         var disabled = new Button { Text = "Disabled control", AccessibleName = "Disabled control", Enabled = false, Location = new Point(470, 15), Size = new Size(160, 35) };
         disabled.Click += (s, e) => presses++;
         input.AccessibleName = "Fixture input"; input.Text = "Initial";
-        input.TextChanged += (s, e) => { if (input.Text == "Slow background value") System.Threading.Thread.Sleep(2500); };
+        input.TextChanged += (s, e) => { writes++; if (input.Text == "Slow background value") System.Threading.Thread.Sleep(2500); if (input.Text == "normalize value") input.Text = input.Text.ToUpperInvariant(); };
         input.Location = new Point(200, 20); input.Size = new Size(250, 30);
         list.AccessibleName = "Native scroll list";
         list.Location = new Point(20, 85); list.Size = new Size(270, 350);
@@ -89,7 +89,7 @@ public class WindowsVisionFixture : Form {
             }
             var client = PointToScreen(Point.Empty);
             string text = input.Text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", "\\n");
-            File.WriteAllText(stateFile + ".tmp", "{\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + ",\"hwnd\":" + Handle.ToInt64() + ",\"visible\":" + (IsWindowVisible(Handle) ? "true" : "false") + ",\"enabled\":" + (IsWindowEnabled(Handle) ? "true" : "false") + ",\"listFocused\":" + (list.Focused ? "true" : "false") + ",\"cover\":" + (cover.IsHandleCreated ? cover.Handle.ToInt64() : 0) + ",\"left\":" + Left + ",\"top\":" + Top + ",\"width\":" + Width + ",\"height\":" + Height + ",\"clientX\":" + client.X + ",\"clientY\":" + client.Y + ",\"topIndex\":" + (list.TopItem == null ? 0 : list.TopItem.Index) + ",\"drags\":" + drags + ",\"presses\":" + presses + ",\"readOnly\":\"" + readOnly.Text + "\",\"input\":\"" + text + "\"}");
+            File.WriteAllText(stateFile + ".tmp", "{\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + ",\"hwnd\":" + Handle.ToInt64() + ",\"visible\":" + (IsWindowVisible(Handle) ? "true" : "false") + ",\"enabled\":" + (IsWindowEnabled(Handle) ? "true" : "false") + ",\"listFocused\":" + (list.Focused ? "true" : "false") + ",\"cover\":" + (cover.IsHandleCreated ? cover.Handle.ToInt64() : 0) + ",\"left\":" + Left + ",\"top\":" + Top + ",\"width\":" + Width + ",\"height\":" + Height + ",\"clientX\":" + client.X + ",\"clientY\":" + client.Y + ",\"topIndex\":" + (list.TopItem == null ? 0 : list.TopItem.Index) + ",\"drags\":" + drags + ",\"presses\":" + presses + ",\"writes\":" + writes + ",\"readOnly\":\"" + readOnly.Text + "\",\"input\":\"" + text + "\"}");
             if (File.Exists(stateFile)) File.Replace(stateFile + ".tmp", stateFile, null);
             else File.Move(stateFile + ".tmp", stateFile);
         };
