@@ -1725,7 +1725,7 @@ mod tests {
         let look_id = "policy-before-foreground";
         let mut record = look_with_element(1.0);
         record.has_image = true;
-        record.hwnd = 0; // Invalid on purpose: attempting focus would yield target_not_found.
+        record.hwnd = -1; // Invalid HWND, also distinct from a temporarily null foreground.
         helper_state().lock().unwrap().insert_look(look_id.to_owned(), record);
         for (policy, code) in [("ax_only", ErrorCode::CoordinateBlocked), ("background", ErrorCode::ForegroundRequired)] {
             let error = handle_act(&json!({
