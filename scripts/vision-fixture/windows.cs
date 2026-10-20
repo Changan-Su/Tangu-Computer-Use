@@ -9,6 +9,8 @@ using System.Runtime.InteropServices;
 public class WindowsVisionFixture : Form {
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd, int command);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern void keybd_event(byte key, byte scan, uint flags, UIntPtr extra);
     readonly string stateFile, commandFile;
     readonly ListBox list = new ListBox();
     readonly TextBox input = new TextBox();
@@ -49,7 +51,16 @@ public class WindowsVisionFixture : Form {
             if (!IsWindowVisible(Handle)) ShowWindow(Handle, 1);
             if (File.Exists(commandFile)) {
                 string command = File.ReadAllText(commandFile).Trim(); File.Delete(commandFile);
-                if (command == "cover") { cover.Show(); cover.Activate(); }
+                if (command == "cover") {
+                    cover.Show(); ShowWindow(cover.Handle, 9);
+                    // Dedicated runner only: match the existing recorder probe's
+                    // Alt/F24 foreground-lock workaround. This is fixture setup,
+                    // before testing whether the agent preserves its foreground.
+                    keybd_event(0x12, 0, 0, UIntPtr.Zero);
+                    keybd_event(0x87, 0, 0, UIntPtr.Zero); keybd_event(0x87, 0, 2, UIntPtr.Zero);
+                    keybd_event(0x12, 0, 2, UIntPtr.Zero);
+                    SetForegroundWindow(cover.Handle); cover.Activate();
+                }
                 if (command == "target") Activate();
                 if (command == "close") { Close(); return; }
             }

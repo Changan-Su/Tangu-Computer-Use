@@ -332,6 +332,10 @@ Release builds are signed with the project's fixed self-signed certificate (`rel
 
 Offline platform regression: `npm run build && npm run check:platform` checks tool visibility and guidance in isolated processes without starting a helper or controlling a UI. Native Windows acceptance still requires verifying helper startup, window discovery, observation and actions on Windows hardware.
 
+`npm run check:vision:windows` 在独占的 GitHub Actions Windows 桌面启动原生 WinForms 夹具，直接调用真实 bridge / helper 验证坐标滚动、拖拽、截图尺寸、expect、严格后台、ref 输入与设置开关。脚本拒绝在正在使用的开发者桌面运行；`windows-checks` 自动执行，日志 / 原生控件状态 / 截图作为 artifact 保存，不发布软件。
+
+`npm run check:vision:windows` runs a native WinForms fixture through the real bridge/helper on a dedicated GitHub Actions Windows desktop. It checks coordinate scroll/drag, decoded screenshot dimensions, expect, strict background, reference input and settings. It refuses to run on an occupied developer desktop. The `windows-checks` workflow retains logs, native control state and screenshots without publishing a package.
+
 Genesis 的自动 Mini 依赖 helper socket 同目录的 `foreground.json`。升级 helper 行为时必须提升捆绑包版本并重建所有随包 native 产物；桌面按 manifest 版本播种，不覆盖同版本副本。0.5.2 起自动更新成功后重启常驻 helper，避免协议号与路径相同但内存中仍为旧版本。
 
 运行 `npm run check:helper-refresh` 检查升级顺序，`npm run check:helper-signal` 启动随包真实二进制并检查初始闲置信号；后者可追加已安装的可执行文件路径。完整前台触发与 Mini 过渡在 Genesis desktop 的 `npm run check:mininative` 中验证，需要已安装并授权的 macOS helper。该测试只操作隔离测试窗口。
