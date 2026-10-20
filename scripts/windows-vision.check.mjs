@@ -1,0 +1,101 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { spawn } from 'node:child_process';
+import { build } from 'esbuild';
+
+// This check deliberately uses foreground native input. Never run it on the
+// developer's occupied desktop; a dedicated runner owns the whole desktop.
+if (process.platform !== 'win32' || process.env.GITHUB_ACTIONS !== 'true') throw new Error('Windows vision input check requires a dedicated GitHub Actions Windows desktop');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const out = path.join(root, 'outputs/windows-vision'); fs.mkdirSync(out, { recursive: true });
+const home = fs.mkdtempSync(path.join(out, 'run-'));
+const stateFile = path.join(home, 'state.json'), commandFile = path.join(home, 'command');
+process.env.PI_COMPUTER_USE_WINDOWS_HELPER_PATH = path.join(home, 'helper/windows-bridge.exe');
+const bundle = path.join(root, 'tangu-plugins/computer-use/dist', `.windows-vision-${process.pid}.mjs`);
+await build({ stdin: { contents: [
+  "export { executeFind, executeObserve, executeAct } from './src/vendor/bridge.ts'",
+  "export { syncSettings, render } from './src/tools.ts'",
+  "export { windowsHelper } from './src/vendor/platform/windows/helper.ts'",
+].join('\n'), resolveDir: root, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', target: 'node20', outfile: bundle,
+  external: ['node:*'], alias: { '@earendil-works/pi-coding-agent': path.join(root, 'src/pi-compat.ts') },
+  banner: { js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);" } });
+let cu; try { cu = await import(pathToFileURL(bundle).href); } finally { fs.rmSync(bundle, { force: true }); }
+const quote = value => "'" + value.replaceAll("'", "''") + "'";
+const script = `Add-Type -AssemblyName System.Windows.Forms; Add-Type -TypeDefinition (Get-Content -LiteralPath ${quote(path.join(root, 'scripts/vision-fixture/windows.cs'))} -Raw) -ReferencedAssemblies System.Windows.Forms,System.Drawing; [WindowsVisionFixture]::Run(${quote(stateFile)},${quote(commandFile)})`;
+const fixture = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: ['ignore', 'inherit', 'inherit'] });
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const state = () => { try { return JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch { return null; } };
+async function until(name, predicate, timeout = 15000) {
+  const end = Date.now() + timeout;
+  while (Date.now() < end) { const current = state(); if (current && await predicate(current)) return current; await sleep(100); }
+  throw new Error(`${name}: last state ${JSON.stringify(state())}`);
+}
+const checks = [];
+const check = (name, ok, detail = '') => { checks.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name} ${detail}`); assert.ok(ok, name); };
+const ctx = { cwd: root, hasUI: false, ui: { notify() {}, select: async () => undefined }, sessionManager: { getBranch: () => [] } };
+let settings = { headless: false, browser_use: false, cursor_overlay: false };
+const sync = () => cu.syncSettings({ getScopeSettings: () => settings });
+const collected = [];
+const tcx = { collectImage: image => collected.push(image) };
+const shown = (result, args) => { result.said = cu.render(result, tcx, args); fs.writeFileSync(path.join(home, `tool-${Date.now()}.json`), JSON.stringify({ said: result.said, details: result.details }, null, 2)); return result; };
+const front = async () => (await cu.windowsHelper.command('listRoots')).find(row => row.isFocused);
+let rootRef;
+const observe = async () => shown(await cu.executeObserve('', { root: rootRef, mode: 'visual' }, undefined, undefined, ctx), {});
+const act = async (seen, actions, expect) => {
+  const args = { stateId: seen.details.capture.stateId, actions, ...(expect ? { expect } : {}) };
+  return shown(await cu.executeAct('', args, undefined, undefined, ctx), args);
+};
+const cover = async () => {
+  fs.writeFileSync(commandFile, 'cover');
+  await until('cover foreground', async s => (await front())?.windowId === s.cover);
+};
+try {
+  const boot = await until('native fixture started', s => s.hwnd > 0);
+  sync();
+  const found = await cu.executeFind('', { pid: boot.pid, title: 'Forsion CU Windows Fixture' }, undefined, undefined, ctx);
+  rootRef = found.content.filter(block => block.type === 'text').map(block => block.text).join('\n').match(/@r\d+/)?.[0];
+  check('real Windows helper finds the fixture', !!rootRef);
+  let seen = await observe();
+  check('visual image note uses the actual screenshot dimensions', collected.length > 0 && seen.said.includes(`[image] The attached screenshot is ${seen.details.capture.width}x${seen.details.capture.height} px`), seen.said);
+  check('Windows image note does not claim pixel scroll distances', !seen.said.includes('scrollX / scrollY distance'));
+  const point = (x, y) => {
+    const s = state(), scale = seen.details.capture.width / s.width;
+    return { x: Math.round((s.clientX - s.left + x) * scale), y: Math.round((s.clientY - s.top + y) * scale) };
+  };
+  await cover();
+  const before = state().topIndex;
+  const scrolled = await act(seen, [{ action: 'scroll', ...point(120, 210), scrollY: 3 }]);
+  await until('coordinate scroll changes native list position', s => s.topIndex > before);
+  check('coordinate scroll uses foreground native input', scrolled.said.includes('[foreground]'), scrolled.said);
+  check('Windows scroll does not show macOS scroll note', !scrolled.said.includes('[scroll]'));
+  seen = await observe();
+  const drags = state().drags;
+  const dragged = await act(seen, [{ action: 'drag', path: [point(360, 140), point(540, 300)] }]);
+  await until('coordinate drag draws a native line', s => s.drags > drags);
+  check('coordinate drag uses foreground native input', dragged.said.includes('[foreground]'), dragged.said);
+  seen = await observe();
+  const absent = await act(seen, [{ action: 'click', ...point(80, 32) }], { text: 'IMPOSSIBLE_WINDOWS_EXPECT_MARKER', timeoutMs: 700 });
+  check('unsatisfied expect is reported after a delivered action', absent.said.includes('[expect] NOT satisfied') && state().presses > 0, absent.said);
+  settings = { ...settings, headless: true, cursor_overlay: true }; sync();
+  await cover(); seen = await observe();
+  const strict = await act(seen, [{ action: 'scroll', ...point(120, 210), scrollY: 3 }]);
+  check('strict background survives tool config reload', !strict.said.includes('[foreground]') && (await front())?.windowId === state().cover, strict.said);
+  const outline = seen.details.renderedOutline || '';
+  const button = outline.split('\n').find(line => line.includes('Fixture button'))?.match(/@e\d+/)?.[0];
+  check('native accessibility button has a reference', !!button, outline);
+  const presses = state().presses;
+  await act(await observe(), [{ action: 'click', ref: button }]);
+  await until('strict background reference click works', s => s.presses > presses);
+  check('reference click keeps the cover foreground', (await front())?.windowId === state().cover);
+  settings = { ...settings, headless: false, cursor_overlay: false }; sync();
+  seen = await observe();
+  const resumed = await act(seen, [{ action: 'scroll', ...point(120, 210), scrollY: 3 }]);
+  check('disabling strict background restores foreground routing', resumed.said.includes('[foreground]'), resumed.said);
+} finally {
+  fs.writeFileSync(path.join(out, 'results.json'), JSON.stringify({ checks, home }, null, 2));
+  cu.windowsHelper.dispose();
+  if (fixture.exitCode === null) { fs.writeFileSync(commandFile, 'close'); await Promise.race([new Promise(resolve => fixture.once('exit', resolve)), sleep(3000)]); }
+  if (fixture.exitCode === null) fixture.kill();
+}
