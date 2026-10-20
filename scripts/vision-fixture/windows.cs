@@ -70,7 +70,7 @@ public class WindowsVisionFixture : Form {
             if (File.Exists(stateFile)) File.Replace(stateFile + ".tmp", stateFile, null);
             else File.Move(stateFile + ".tmp", stateFile);
         };
-        Shown += (s, e) => timer.Start();
+        Shown += (s, e) => { list.Focus(); timer.Start(); };
         FormClosed += (s, e) => { timer.Stop(); cover.Dispose(); };
     }
     public static void Run(string state, string commands) {
