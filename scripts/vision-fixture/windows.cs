@@ -44,7 +44,10 @@ public class WindowsVisionFixture : Form {
         list.AccessibleName = "Native scroll list";
         list.Location = new Point(20, 85); list.Size = new Size(270, 350);
         list.View = View.Details; list.Columns.Add("Rows", 240); list.FullRowSelect = true;
-        for (int i = 0; i < 400; i++) list.Items.Add("Fixture row " + i);
+        // Several full viewports suffice for real wheel / ScrollPattern checks.
+        // Walking 400 native UIA list items can exceed a 700ms expect's helper
+        // transport deadline before it can report the intentionally absent text.
+        for (int i = 0; i < 80; i++) list.Items.Add("Fixture row " + i);
         canvas.AccessibleName = "Native drawing canvas";
         canvas.Location = new Point(330, 85); canvas.Size = new Size(290, 350); canvas.BackColor = Color.White;
         canvas.MouseDown += (s, e) => { start = last = e.Location; dragging = true; canvas.Capture = true; };
