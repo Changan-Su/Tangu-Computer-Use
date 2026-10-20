@@ -16,7 +16,7 @@ process.env.PI_COMPUTER_USE_WINDOWS_HELPER_PATH = path.join(home, 'helper/window
 const bundle = path.join(root, 'tangu-plugins/computer-use/dist', `.windows-vision-${process.pid}.mjs`);
 await build({ stdin: { contents: [
   "export { executeFind, executeObserve, executeAct } from './src/vendor/bridge.ts'",
-  "export { syncSettings, render } from './src/tools.ts'",
+  "export { syncSettings, render, buildToolProvider } from './src/tools.ts'",
   "export { windowsHelper } from './src/vendor/platform/windows/helper.ts'",
 ].join('\n'), resolveDir: root, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', target: 'node20', outfile: bundle,
   external: ['node:*'], alias: { '@earendil-works/pi-coding-agent': path.join(root, 'src/pi-compat.ts') },
@@ -36,9 +36,10 @@ const checks = [];
 const check = (name, ok, detail = '') => { checks.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name} ${detail}`); assert.ok(ok, name); };
 const ctx = { cwd: root, hasUI: false, ui: { notify() {}, select: async () => undefined }, sessionManager: { getBranch: () => [] } };
 let settings = { headless: false, browser_use: false, cursor_overlay: false };
-const sync = () => cu.syncSettings({ getScopeSettings: () => settings });
+const store = { getScopeSettings: () => settings, isPluginEnabledSync: () => true };
+const sync = () => cu.syncSettings(store);
 const collected = [];
-const tcx = { collectImage: image => collected.push(image) };
+const tcx = { collectImage: image => { collected.push(image); fs.writeFileSync(path.join(home, `screen-${collected.length}.jpg`), Buffer.from(image.url.split(',')[1], 'base64')); } };
 const shown = (result, args) => { result.said = cu.render(result, tcx, args); fs.writeFileSync(path.join(home, `tool-${Date.now()}.json`), JSON.stringify({ said: result.said, details: result.details }, null, 2)); return result; };
 const front = async () => (await cu.windowsHelper.command('listRoots')).find(row => row.isFocused);
 let rootRef;
@@ -54,6 +55,12 @@ const cover = async () => {
 try {
   const boot = await until('native fixture started', s => s.hwnd > 0);
   sync();
+  const provider = cu.buildToolProvider(store);
+  const browserTools = () => provider.tools().filter(tool => tool.isEnabledFor({ capabilities: { hostExec: true } })).filter(tool => /_browser$/.test(tool.name));
+  check('browser tools are hidden before any tool call when disabled', browserTools().length === 0);
+  settings = { ...settings, browser_use: true };
+  check('enabling browser tools restores their definitions', browserTools().some(tool => tool.name === 'navigate_browser'));
+  settings = { ...settings, browser_use: false }; sync();
   const found = await cu.executeFind('', { pid: boot.pid, title: 'Forsion CU Windows Fixture' }, undefined, undefined, ctx);
   rootRef = found.content.filter(block => block.type === 'text').map(block => block.text).join('\n').match(/@r\d+/)?.[0];
   check('real Windows helper finds the fixture', !!rootRef);
@@ -80,8 +87,12 @@ try {
   check('unsatisfied expect is reported after a delivered action', absent.said.includes('[expect] NOT satisfied') && state().presses > 0, absent.said);
   settings = { ...settings, headless: true, cursor_overlay: true }; sync();
   await cover(); seen = await observe();
-  const strict = await act(seen, [{ action: 'scroll', ...point(120, 210), scrollY: 3 }]);
+  const strict = await act(seen, [{ action: 'scroll', ...point(120, 210), scrollY: 3 }]).catch(error => {
+    assert.match(error.message, /Background policy blocks global Windows coordinate\/raw input grounding/);
+    return { said: error.message };
+  });
   check('strict background survives tool config reload', !strict.said.includes('[foreground]') && (await front())?.windowId === state().cover, strict.said);
+  seen = await observe();
   const outline = seen.details.renderedOutline || '';
   const button = outline.split('\n').find(line => line.includes('Fixture button'))?.match(/@e\d+/)?.[0];
   check('native accessibility button has a reference', !!button, outline);
@@ -89,6 +100,19 @@ try {
   await act(await observe(), [{ action: 'click', ref: button }]);
   await until('strict background reference click works', s => s.presses > presses);
   check('reference click keeps the cover foreground', (await front())?.windowId === state().cover);
+  seen = await observe();
+  const input = seen.details.renderedOutline.split('\n').find(line => line.includes('Fixture input'))?.match(/@e\d+/)?.[0];
+  check('native text input has a reference', !!input);
+  await act(seen, [{ action: 'setText', ref: input, text: 'Windows background text' }]);
+  await until('strict background setText changes the native input', s => s.input === 'Windows background text');
+  check('setText keeps the cover foreground', (await front())?.windowId === state().cover);
+  seen = await observe();
+  const list = seen.details.renderedOutline.split('\n').find(line => line.includes('Native scroll list'))?.match(/@e\d+/)?.[0];
+  check('native scroll list has a reference', !!list);
+  const at = state().topIndex;
+  const refScroll = await act(seen, [{ action: 'scroll', ref: list, scrollY: 3 }]);
+  await until('reference scroll changes the native list', s => s.topIndex > at);
+  check('reference scroll stays in the background', !refScroll.said.includes('[foreground]') && (await front())?.windowId === state().cover, refScroll.said);
   settings = { ...settings, headless: false, cursor_overlay: false }; sync();
   seen = await observe();
   const resumed = await act(seen, [{ action: 'scroll', ...point(120, 210), scrollY: 3 }]);
