@@ -41,7 +41,7 @@ const sync = () => cu.syncSettings(store);
 const collected = [];
 const tcx = { collectImage: image => { collected.push(image); fs.writeFileSync(path.join(home, `screen-${collected.length}.jpg`), Buffer.from(image.url.split(',')[1], 'base64')); } };
 const shown = (result, args) => { result.said = cu.render(result, tcx, args); fs.writeFileSync(path.join(home, `tool-${Date.now()}.json`), JSON.stringify({ said: result.said, details: result.details }, null, 2)); return result; };
-const front = async () => (await cu.windowsHelper.command('listRoots')).find(row => row.isFocused);
+const front = async () => { const roots = await cu.windowsHelper.command('listRoots'); return (Array.isArray(roots) ? roots : roots.roots).find(row => row.isFocused); };
 let rootRef;
 const observe = async () => shown(await cu.executeObserve('', { root: rootRef, mode: 'visual' }, undefined, undefined, ctx), {});
 const act = async (seen, actions, expect) => {
@@ -53,7 +53,7 @@ const cover = async () => {
   await until('cover foreground', async s => (await front())?.windowId === s.cover);
 };
 try {
-  const boot = await until('native fixture started', s => s.hwnd > 0);
+  const boot = await until('native fixture started and visible to Windows', s => s.hwnd > 0 && s.visible);
   sync();
   const provider = cu.buildToolProvider(store);
   const browserTools = () => provider.tools().filter(tool => tool.isEnabledFor({ capabilities: { hostExec: true } })).filter(tool => /_browser$/.test(tool.name));
@@ -61,8 +61,13 @@ try {
   settings = { ...settings, browser_use: true };
   check('enabling browser tools restores their definitions', browserTools().some(tool => tool.name === 'navigate_browser'));
   settings = { ...settings, browser_use: false }; sync();
-  const found = await cu.executeFind('', { pid: boot.pid, title: 'Forsion CU Windows Fixture' }, undefined, undefined, ctx);
-  rootRef = found.content.filter(block => block.type === 'text').map(block => block.text).join('\n').match(/@r\d+/)?.[0];
+  let found;
+  await until('fixture discoverable through real find_roots', async () => {
+    found = await cu.executeFind('', { pid: boot.pid, text: 'Forsion CU Windows Fixture' }, undefined, undefined, ctx);
+    fs.writeFileSync(path.join(home, 'find-roots.json'), JSON.stringify(found, null, 2));
+    rootRef = found.details?.windows?.find(window => window.pid === boot.pid && window.windowTitle === 'Forsion CU Windows Fixture')?.windowRef;
+    return !!rootRef;
+  });
   check('real Windows helper finds the fixture', !!rootRef);
   let seen = await observe();
   check('visual image note uses the actual screenshot dimensions', collected.length > 0 && seen.said.includes(`[image] The attached screenshot is ${seen.details.capture.width}x${seen.details.capture.height} px`), seen.said);

@@ -2,10 +2,13 @@ using System;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
+using System.Runtime.InteropServices;
 
 // Only launched by the dedicated GitHub Windows desktop check. All observable
 // outcomes come from native controls / mouse events, never a mocked helper.
 public class WindowsVisionFixture : Form {
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd, int command);
     readonly string stateFile, commandFile;
     readonly ListBox list = new ListBox();
     readonly TextBox input = new TextBox();
@@ -41,6 +44,9 @@ public class WindowsVisionFixture : Form {
         cover.Location = new Point(800, 100); cover.Size = new Size(200, 180);
         timer.Interval = 100;
         timer.Tick += (s, e) => {
+            // The PowerShell console starts hidden. Explicitly show this test
+            // GUI after startup, rather than inheriting SW_HIDE for its first window.
+            if (!IsWindowVisible(Handle)) ShowWindow(Handle, 1);
             if (File.Exists(commandFile)) {
                 string command = File.ReadAllText(commandFile).Trim(); File.Delete(commandFile);
                 if (command == "cover") { cover.Show(); cover.Activate(); }
@@ -49,7 +55,7 @@ public class WindowsVisionFixture : Form {
             }
             var client = PointToScreen(Point.Empty);
             string text = input.Text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", "\\n");
-            File.WriteAllText(stateFile, "{\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + ",\"hwnd\":" + Handle.ToInt64() + ",\"cover\":" + (cover.IsHandleCreated ? cover.Handle.ToInt64() : 0) + ",\"left\":" + Left + ",\"top\":" + Top + ",\"width\":" + Width + ",\"height\":" + Height + ",\"clientX\":" + client.X + ",\"clientY\":" + client.Y + ",\"topIndex\":" + list.TopIndex + ",\"drags\":" + drags + ",\"presses\":" + presses + ",\"input\":\"" + text + "\"}");
+            File.WriteAllText(stateFile, "{\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + ",\"hwnd\":" + Handle.ToInt64() + ",\"visible\":" + (IsWindowVisible(Handle) ? "true" : "false") + ",\"cover\":" + (cover.IsHandleCreated ? cover.Handle.ToInt64() : 0) + ",\"left\":" + Left + ",\"top\":" + Top + ",\"width\":" + Width + ",\"height\":" + Height + ",\"clientX\":" + client.X + ",\"clientY\":" + client.Y + ",\"topIndex\":" + list.TopIndex + ",\"drags\":" + drags + ",\"presses\":" + presses + ",\"input\":\"" + text + "\"}");
         };
         Shown += (s, e) => timer.Start();
         FormClosed += (s, e) => { timer.Stop(); cover.Dispose(); };
