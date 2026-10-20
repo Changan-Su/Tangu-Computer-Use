@@ -98,6 +98,13 @@ try {
     const s = state(), scale = seen.actualImageSize.width / s.width;
     return { x: Math.round((s.clientX - s.left + x) * scale), y: Math.round((s.clientY - s.top + y) * scale) };
   };
+  // Windows Server routes the wheel to the focused child control. Establish
+  // that native precondition with a real agent click, rather than assuming a
+  // hidden PowerShell launch honored WinForms' initial ActiveControl.
+  await act(seen, [{ action: 'click', ...point(120, 210) }]);
+  await until('coordinate click focuses the native scroll list', s => s.listFocused);
+  check('coordinate click focuses the native scroll list', state().listFocused);
+  seen = await observe();
   await cover();
   const before = state().topIndex;
   const scrolled = await act(seen, [{ action: 'scroll', ...point(120, 210), scrollY: 3 }]);
