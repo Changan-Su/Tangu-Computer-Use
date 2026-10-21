@@ -1055,6 +1055,7 @@ fn act_on_ref(
                 &element.automation_id,
                 sx,
                 sy,
+                parsed.policy != "foreground",
             )
             .map_err(stale_ref_from_uia)?
             {
@@ -1064,6 +1065,14 @@ fn act_on_ref(
                 windows_bridge::uia::ScrollResult::NoPattern => {
                     coordinate_fallback(args, parsed, &element)
                 }
+                windows_bridge::uia::ScrollResult::Uncertain { reason } => Ok(json!({
+                    "outcome": "unknown", "performed": { "grounding": "description", "delivery": "ax" },
+                    "evidence": { "reason": reason }
+                })),
+                windows_bridge::uia::ScrollResult::RequiresForeground => Err(ProtocolError::new(
+                    "This UIA Scroll provider can activate its window; background policy refuses it before input",
+                    ErrorCode::ForegroundRequired,
+                )),
             }
         }
         _ => coordinate_fallback(args, parsed, &element),

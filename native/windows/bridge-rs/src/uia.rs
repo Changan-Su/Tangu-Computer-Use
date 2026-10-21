@@ -222,7 +222,7 @@ mod native {
         SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
     };
     use windows::Win32::UI::Accessibility::*;
-    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClassNameW, GetWindowLongW, SendMessageTimeoutW, GA_PARENT, GWL_STYLE, SMTO_ABORTIFHUNG, SMTO_BLOCK, WM_SETTEXT, WS_DISABLED};
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClassNameW, GetClientRect, GetWindowLongW, SendMessageTimeoutW, GA_PARENT, GWL_STYLE, SMTO_ABORTIFHUNG, SMTO_BLOCK, WM_SETTEXT, WS_DISABLED};
 
     const MAX_ELEMENTS: usize = 200;
     const MAX_TRUNCATION_SCAN: usize = 1_000;
@@ -548,6 +548,8 @@ mod native {
 
     pub enum ScrollResult {
         Scrolled,
+        Uncertain { reason: &'static str },
+        RequiresForeground,
         NoPattern,
     }
 
@@ -591,7 +593,7 @@ mod native {
             // Legacy WinForms Invoke selects/activates the window. Refuse that
             // provider in background policy; synthesizing BN_CLICKED would
             // bypass the app's normal focus/validation gates.
-            if background_only && activating_invoke_provider(hwnd, &element) {
+            if background_only && winforms_root(hwnd) {
                 return Ok(PressResult::RequiresForeground);
             }
             unsafe {
@@ -651,7 +653,7 @@ mod native {
                     .unwrap_or_default()
             };
             if !default_action.trim().is_empty() {
-                if background_only && activating_invoke_provider(hwnd, &element) {
+                if background_only && winforms_root(hwnd) {
                     return Ok(PressResult::RequiresForeground);
                 }
                 unsafe {
@@ -750,12 +752,11 @@ mod native {
         name.starts_with(&format!("WindowsForms10.{kind}.")).then_some(hwnd)
     }
 
-    fn activating_invoke_provider(hwnd: isize, element: &IUIAutomationElement) -> bool {
+    fn winforms_root(hwnd: isize) -> bool {
         let mut name = [0u16; 256];
         let len = unsafe { GetClassNameW(HWND(hwnd as *mut _), &mut name) };
         // ElementHost's WPF Invoke also activates its WinForms root. The leaf
         // has no native HWND, so checking only WindowsForms10.BUTTON misses it.
-        let _ = element;
         String::from_utf16_lossy(&name[..len.max(0) as usize]).starts_with("WindowsForms10.")
     }
 
@@ -801,8 +802,36 @@ mod native {
         automation_id: &str,
         x: f64,
         y: f64,
+        background_only: bool,
     ) -> Result<ScrollResult, String> {
         let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
+        if background_only {
+            if let Some(control) = winforms_control(&element, "SysListView32") {
+                ensure_control_enabled(control)?;
+                // Only the native report view has the measured line-scroll
+                // contract. LVM messages carry integers, never remote pointers.
+                if (unsafe { GetWindowLongW(control, GWL_STYLE) } as u32) & 3 != 1 {
+                    return Ok(ScrollResult::RequiresForeground);
+                }
+                let rows = send_control_message(control, 0x1028, WPARAM(0), LPARAM(0))?; // LVM_GETCOUNTPERPAGE
+                let Some(rows) = rows.filter(|count| *count > 0) else {
+                    return Err("Native list viewport is unavailable; no scroll was dispatched".to_owned());
+                };
+                let mut rect = RECT::default();
+                unsafe { GetClientRect(control, &mut rect) }.map_err(|e| format!("GetClientRect: {e}"))?;
+                let line = ((rect.bottom - rect.top) / rows.min(i32::MAX as usize) as i32).max(1);
+                let dx = (x.signum() * 48.0) as isize;
+                let dy = (y.signum() * f64::from(line)) as isize;
+                let sent = send_control_message(control, 0x1014, WPARAM(dx as usize), LPARAM(dy))?; // LVM_SCROLL
+                if sent.is_none() || sent == Some(0) {
+                    return Ok(ScrollResult::Uncertain { reason: "Native list scrolling was dispatched without completion confirmation; observe before retrying." });
+                }
+                return Ok(ScrollResult::Scrolled);
+            }
+            if winforms_root(hwnd) || unsafe { element.CurrentFrameworkId() }.map(|id| id.to_string() == "WPF").unwrap_or(false) {
+                return Ok(ScrollResult::RequiresForeground);
+            }
+        }
         if let Ok(pattern) = unsafe {
             element.GetCurrentPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId)
         } {
@@ -1052,6 +1081,8 @@ pub enum SetTextResult {
 #[cfg(not(windows))]
 pub enum ScrollResult {
     Scrolled,
+    Uncertain { reason: &'static str },
+    RequiresForeground,
     NoPattern,
 }
 #[cfg(not(windows))]
@@ -1104,6 +1135,7 @@ pub fn scroll(
     _automation_id: &str,
     _x: f64,
     _y: f64,
+    _background_only: bool,
 ) -> Result<ScrollResult, String> {
     Err("UIA is only supported on Windows".to_owned())
 }
