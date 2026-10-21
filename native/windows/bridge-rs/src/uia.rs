@@ -222,6 +222,7 @@ mod native {
         SafeArrayGetElement, SafeArrayGetLBound, SafeArrayGetUBound,
     };
     use windows::Win32::UI::Accessibility::*;
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, GetClassNameW, GetClientRect, GetWindowLongW, SendMessageTimeoutW, GA_PARENT, GWL_STYLE, SMTO_ABORTIFHUNG, SMTO_BLOCK, WM_SETTEXT, WS_DISABLED};
 
     const MAX_ELEMENTS: usize = 200;
     const MAX_TRUNCATION_SCAN: usize = 1_000;
@@ -535,16 +536,20 @@ mod native {
         Selected(bool),
         Expanded,
         LegacyDefaultAction,
+        RequiresForeground,
         NoPattern,
     }
 
     pub enum SetTextResult {
         Set { value: String },
+        Uncertain { reason: &'static str },
         NoPattern,
     }
 
     pub enum ScrollResult {
         Scrolled,
+        Uncertain { reason: &'static str },
+        RequiresForeground,
         NoPattern,
     }
 
@@ -574,11 +579,23 @@ mod native {
         hwnd: isize,
         runtime_id_target: &[i32],
         automation_id: &str,
+        background_only: bool,
     ) -> Result<PressResult, String> {
         let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
+        // Both Invoke and Toggle of the stock Framework WPF provider activated
+        // the target in real Windows checks. Refuse before either pattern runs.
+        if background_only && unsafe { element.CurrentFrameworkId() }.map(|id| id.to_string() == "WPF").unwrap_or(false) {
+            return Ok(PressResult::RequiresForeground);
+        }
         if let Ok(pattern) = unsafe {
             element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
         } {
+            // Legacy WinForms Invoke selects/activates the window. Refuse that
+            // provider in background policy; synthesizing BN_CLICKED would
+            // bypass the app's normal focus/validation gates.
+            if background_only && winforms_invoke_provider(hwnd, &element) {
+                return Ok(PressResult::RequiresForeground);
+            }
             unsafe {
                 pattern.Invoke().map_err(|e| format!("Invoke: {e}"))?;
             }
@@ -636,6 +653,9 @@ mod native {
                     .unwrap_or_default()
             };
             if !default_action.trim().is_empty() {
+                if background_only && winforms_invoke_provider(hwnd, &element) {
+                    return Ok(PressResult::RequiresForeground);
+                }
                 unsafe {
                     pattern
                         .DoDefaultAction()
@@ -678,11 +698,34 @@ mod native {
         runtime_id_target: &[i32],
         automation_id: &str,
         text: &str,
+        background_only: bool,
     ) -> Result<SetTextResult, String> {
         let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
         if let Ok(pattern) =
             unsafe { element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }
         {
+            if background_only {
+                if let Some(control) = winforms_control(&element, "EDIT") {
+                    if unsafe { pattern.CurrentIsReadOnly() }.map_err(|e| format!("IsReadOnly: {e}"))?.as_bool() {
+                        return Err("Native input is read-only".to_owned());
+                    }
+                    let style = unsafe { GetWindowLongW(control, GWL_STYLE) } as u32;
+                    ensure_control_enabled(control)?;
+                    if style & 0x0800 != 0 { return Err("Native input is read-only".to_owned()); } // ES_READONLY
+                    if text.contains('\0') { return Err("Native input text contains a NUL".to_owned()); }
+                    let value: Vec<u16> = text.encode_utf16().chain(Some(0)).collect();
+                    let Some(result) = send_control_message(control, WM_SETTEXT, WPARAM(0), LPARAM(value.as_ptr() as isize))? else {
+                        return Ok(SetTextResult::Uncertain { reason: "Native text delivery timed out after dispatch; the value may have changed. Observe before retrying." });
+                    };
+                    if result == 0 { return Ok(SetTextResult::Uncertain { reason: "Native text delivery did not acknowledge completion; observe the value before retrying." }); }
+                    let Ok(value) = (unsafe { pattern.CurrentValue() }) else {
+                        return Ok(SetTextResult::Uncertain { reason: "Native text was dispatched but readback failed; observe before retrying." });
+                    };
+                    let value = value.to_string();
+                    if value != text { return Ok(SetTextResult::Uncertain { reason: "The native input changed or normalized the dispatched value; observe before retrying." }); }
+                    return Ok(SetTextResult::Set { value });
+                }
+            }
             let value = BSTR::from(text);
             unsafe {
                 pattern
@@ -700,6 +743,58 @@ mod native {
         Ok(SetTextResult::NoPattern)
     }
 
+    fn winforms_control(element: &IUIAutomationElement, kind: &str) -> Option<HWND> {
+        let hwnd = unsafe { element.CurrentNativeWindowHandle().ok()? };
+        if hwnd.0.is_null() { return None; }
+        let mut name = [0u16; 256];
+        let len = unsafe { GetClassNameW(hwnd, &mut name) };
+        let name = String::from_utf16_lossy(&name[..len.max(0) as usize]);
+        name.starts_with(&format!("WindowsForms10.{kind}.")).then_some(hwnd)
+    }
+
+    fn winforms_root(hwnd: isize) -> bool {
+        let mut name = [0u16; 256];
+        let len = unsafe { GetClassNameW(HWND(hwnd as *mut _), &mut name) };
+        // ElementHost's WPF Invoke also activates its WinForms root. The leaf
+        // has no native HWND, so checking only WindowsForms10.BUTTON misses it.
+        String::from_utf16_lossy(&name[..len.max(0) as usize]).starts_with("WindowsForms10.")
+    }
+
+    fn winforms_invoke_provider(hwnd: isize, element: &IUIAutomationElement) -> bool {
+        // WindowsFormsHost can embed a WinForms button beneath a WPF root.
+        // Root class alone cannot identify the activating leaf provider.
+        winforms_root(hwnd)
+            || winforms_control(element, "BUTTON").is_some()
+            || unsafe { element.CurrentFrameworkId() }.map(|id| id.to_string() == "WinForm").unwrap_or(false)
+    }
+
+    fn ensure_control_enabled(mut hwnd: HWND) -> Result<(), String> {
+        // GetAncestor(GA_PARENT) follows real parents, not the disabled owner
+        // of an enabled modal dialog (which GetParent would also return).
+        while !hwnd.0.is_null() {
+            if (unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32) & WS_DISABLED.0 != 0 {
+                return Err("Native input or its parent is disabled".to_owned());
+            }
+            let parent = unsafe { GetAncestor(hwnd, GA_PARENT) };
+            if parent == hwnd { break; }
+            hwnd = parent;
+        }
+        Ok(())
+    }
+
+    fn send_control_message(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> Result<Option<usize>, String> {
+        let mut result = 0usize;
+        let sent = unsafe { SendMessageTimeoutW(hwnd, message, wparam, lparam, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1500, Some(&mut result)) };
+        if sent.0 == 0 {
+            let error = unsafe { GetLastError() };
+            // A timed-out receiver may still be running its TextChanged handler.
+            // Never label it undelivered and invite a repeated side effect.
+            if error == ERROR_TIMEOUT || error == ERROR_SUCCESS { return Ok(None); }
+            return Err(format!("Native control message failed: {error:?}"));
+        }
+        Ok(Some(result))
+    }
+
     pub fn focus(
         hwnd: isize,
         runtime_id_target: &[i32],
@@ -715,8 +810,36 @@ mod native {
         automation_id: &str,
         x: f64,
         y: f64,
+        background_only: bool,
     ) -> Result<ScrollResult, String> {
         let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
+        if background_only {
+            if let Some(control) = winforms_control(&element, "SysListView32") {
+                ensure_control_enabled(control)?;
+                // Only the native report view has the measured line-scroll
+                // contract. LVM messages carry integers, never remote pointers.
+                if (unsafe { GetWindowLongW(control, GWL_STYLE) } as u32) & 3 != 1 {
+                    return Ok(ScrollResult::RequiresForeground);
+                }
+                let rows = send_control_message(control, 0x1028, WPARAM(0), LPARAM(0))?; // LVM_GETCOUNTPERPAGE
+                let Some(rows) = rows.filter(|count| *count > 0) else {
+                    return Err("Native list viewport is unavailable; no scroll was dispatched".to_owned());
+                };
+                let mut rect = RECT::default();
+                unsafe { GetClientRect(control, &mut rect) }.map_err(|e| format!("GetClientRect: {e}"))?;
+                let line = ((rect.bottom - rect.top) / rows.min(i32::MAX as usize) as i32).max(1);
+                let dx = if x > 0.0 { 48isize } else if x < 0.0 { -48isize } else { 0 };
+                let dy = if y > 0.0 { line as isize } else if y < 0.0 { -(line as isize) } else { 0 };
+                let sent = send_control_message(control, 0x1014, WPARAM(dx as usize), LPARAM(dy))?; // LVM_SCROLL
+                if sent.is_none() || sent == Some(0) {
+                    return Ok(ScrollResult::Uncertain { reason: "Native list scrolling was dispatched without completion confirmation; observe before retrying." });
+                }
+                return Ok(ScrollResult::Scrolled);
+            }
+            if winforms_invoke_provider(hwnd, &element) || unsafe { element.CurrentFrameworkId() }.map(|id| id.to_string() == "WPF").unwrap_or(false) {
+                return Ok(ScrollResult::RequiresForeground);
+            }
+        }
         if let Ok(pattern) = unsafe {
             element.GetCurrentPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId)
         } {
@@ -954,16 +1077,20 @@ pub enum PressResult {
     Selected(bool),
     Expanded,
     LegacyDefaultAction,
+    RequiresForeground,
     NoPattern,
 }
 #[cfg(not(windows))]
 pub enum SetTextResult {
     Set { value: String },
+    Uncertain { reason: &'static str },
     NoPattern,
 }
 #[cfg(not(windows))]
 pub enum ScrollResult {
     Scrolled,
+    Uncertain { reason: &'static str },
+    RequiresForeground,
     NoPattern,
 }
 #[cfg(not(windows))]
@@ -991,6 +1118,7 @@ pub fn press(
     _hwnd: isize,
     _runtime_id: &[i32],
     _automation_id: &str,
+    _background_only: bool,
 ) -> Result<PressResult, String> {
     Err("UIA is only supported on Windows".to_owned())
 }
@@ -1000,6 +1128,7 @@ pub fn set_text(
     _runtime_id: &[i32],
     _automation_id: &str,
     _text: &str,
+    _background_only: bool,
 ) -> Result<SetTextResult, String> {
     Err("UIA is only supported on Windows".to_owned())
 }
@@ -1014,6 +1143,7 @@ pub fn scroll(
     _automation_id: &str,
     _x: f64,
     _y: f64,
+    _background_only: bool,
 ) -> Result<ScrollResult, String> {
     Err("UIA is only supported on Windows".to_owned())
 }

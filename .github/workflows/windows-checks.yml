@@ -28,6 +28,17 @@ jobs:
         run: cargo test --manifest-path native/windows/bridge-rs/Cargo.toml --locked
       - name: Build native Windows helper
         run: cargo build --release --manifest-path native/windows/bridge-rs/Cargo.toml --locked
+      - name: Verify native coordinate input and strict background
+        run: |
+          New-Item -ItemType Directory -Force prebuilt/windows | Out-Null
+          Copy-Item native/windows/bridge-rs/target/release/windows-bridge.exe prebuilt/windows/windows-bridge.exe
+          node scripts/windows-vision.check.mjs
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-vision-evidence
+          path: outputs/windows-vision/
       - uses: actions/upload-artifact@v4
         with:
           name: windows-bridge
