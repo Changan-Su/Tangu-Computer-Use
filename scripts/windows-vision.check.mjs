@@ -164,8 +164,8 @@ try {
   const toggled = await act(seen, [{ action: 'click', ref: toggle }]);
   check('strict WPF Toggle is refused before activation or input', toggled.details.execution.steps.some(step => step.error?.code === 'foreground_required') && state().presses === presses && (await front())?.windowId === state().cover, toggled.said);
   seen = await observe(wpfRoot);
-  const mixedSearch = shown(await cu.executeSearchUi('', { stateId: seen.details.capture.stateId, text: 'Hosted legacy button' }, undefined, undefined, ctx), {});
-  const mixed = mixedSearch.details.matches?.find(match => match.label === 'Hosted legacy button')?.ref;
+  const mixedSearch = shown(await cu.executeSearchUi('', { stateId: seen.details.capture.stateId, text: 'Hosted legacy button', role: 'button' }, undefined, undefined, ctx), {});
+  const mixed = mixedSearch.details.matches?.find(match => match.label === 'Hosted legacy button' && match.role === 'button')?.ref;
   check('mixed-host legacy button has an observed reference', !!mixed, mixedSearch.said);
   seen.details.capture.stateId = mixedSearch.details.stateId;
   const mixedRefused = await act(seen, [{ action: 'click', ref: mixed }]);

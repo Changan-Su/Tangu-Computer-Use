@@ -336,6 +336,10 @@ Offline platform regression: `npm run build && npm run check:platform` checks to
 
 `npm run check:vision:windows` runs a native WinForms fixture through the real bridge/helper on a dedicated GitHub Actions Windows desktop. It checks coordinate scroll/drag, decoded screenshot dimensions, expect, strict background, reference input and settings. It refuses to run on an occupied developer desktop. The `windows-checks` workflow retains logs, native control state and screenshots without publishing a package.
 
+Windows strict background refuses known activating WinForms Invoke and Framework WPF press providers before input, including mixed hosts. Supported WinForms EDIT writes and report-list scrolling use verified native control handles without global input. Read-only or effectively disabled controls remain protected; timed-out or normalized writes report uncertain delivery and do not trigger a foreground retry. These are provider-specific capabilities, not a promise that arbitrary accessibility actions cannot activate an app. See [Windows acceptance evidence](docs/windows-vision-2026-10-21.md).
+
+Windows 严格后台在输入前拒绝已知会激活窗口的 WinForms Invoke / Framework WPF press 提供方，包含混合宿主。受支持的 WinForms EDIT 写入与报表列表滚动使用验证后的原生控件句柄，不发送全局输入；只读和祖先禁用保护保留。超时或被应用归一化的写入标记为不确定，不自动转前台重写。能力取决于控件提供方，不能把任意无障碍动作视为天然不抢焦点；详见上面的验收记录。
+
 Genesis 的自动 Mini 依赖 helper socket 同目录的 `foreground.json`。升级 helper 行为时必须提升捆绑包版本并重建所有随包 native 产物；桌面按 manifest 版本播种，不覆盖同版本副本。0.5.2 起自动更新成功后重启常驻 helper，避免协议号与路径相同但内存中仍为旧版本。
 
 运行 `npm run check:helper-refresh` 检查升级顺序，`npm run check:helper-signal` 启动随包真实二进制并检查初始闲置信号；后者可追加已安装的可执行文件路径。完整前台触发与 Mini 过渡在 Genesis desktop 的 `npm run check:mininative` 中验证，需要已安装并授权的 macOS helper。该测试只操作隔离测试窗口。
