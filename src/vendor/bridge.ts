@@ -1903,7 +1903,9 @@ async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget
 		actionState.keysFollow = keysFollow(actions, index);
 		const step = await dispatchUiAction(action, target, look, headless, actionState, signal);
 		steps.push(step);
-		if (step.outcome === "didnt") break;
+		// A partially delivered gesture can remain unknown while its release
+		// failed. Its error must halt the sequence before any later input.
+		if (step.outcome === "didnt" || step.error) break;
 	}
 	return aggregateExecutions(steps);
 }

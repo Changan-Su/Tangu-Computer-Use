@@ -137,11 +137,42 @@ fn invalid(message: impl Into<String>) -> ProtocolError {
     ProtocolError::new(message.into(), ErrorCode::InvalidRequest)
 }
 
+// SendInput absolute coordinates address the whole physical virtual desktop,
+// including monitors left of the primary. Aim at the centre of each pixel.
+#[cfg(any(windows, test))]
+fn absolute_axis(pixel: i32, origin: i32, extent: i32) -> i32 {
+    (((pixel as i64 - origin as i64) * 65536 + 32768) / extent as i64)
+        .clamp(0, 65535) as i32
+}
+
+#[cfg(any(windows, test))]
+fn drag_motion(points: &[(i32, i32)]) -> Vec<(i32, i32)> {
+    let mut motion = Vec::new();
+    for segment in points.windows(2) {
+        let (x, y) = segment[0];
+        let dx = segment[1].0 as f64 - x as f64;
+        let dy = segment[1].1 as f64 - y as f64;
+        // Small initial movements let native drag sources enter their drag loop
+        // before the pointer reaches the destination. Preserve every vertex.
+        let steps = (dx.hypot(dy) / 12.0).ceil().clamp(1.0, 64.0) as usize;
+        for step in 1..=steps {
+            let fraction = step as f64 / steps as f64;
+            motion.push(((x as f64 + dx * fraction).round() as i32,
+                         (y as f64 + dy * fraction).round() as i32));
+        }
+    }
+    motion
+}
+
 #[cfg(windows)]
 mod native {
     use super::*;
+    use std::time::{Duration, Instant};
     use windows::Win32::UI::Input::KeyboardAndMouse::*;
-    use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, SetCursorPos, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+        SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    };
 
     pub fn open_browser_location(url: &str) -> Result<(), ProtocolError> {
         hotkey(&[VK_CONTROL], VK_L)?;
@@ -183,8 +214,13 @@ mod native {
                     .iter()
                     .map(point_value_required)
                     .collect::<Result<Vec<_>, _>>()?;
-                drag(&points)?;
-                ok("unknown", "coordinates", "hid")
+                let uncertain = drag(&points)?;
+                let mut response = ok("unknown", "coordinates", "hid")?;
+                if let Some(error) = uncertain {
+                    response["evidence"]["reason"] = json!(error.message);
+                    response["error"] = json!(error);
+                }
+                Ok(response)
             }
             "scroll" => {
                 let (x, y) = point.ok_or_else(|| invalid("scroll requires resolvedPoint"))?;
@@ -333,16 +369,61 @@ mod native {
         send(&[mouse(down, 0), mouse(up, 0)])
     }
 
-    fn drag(points: &[(i32, i32)]) -> Result<(), ProtocolError> {
+    fn drag(points: &[(i32, i32)]) -> Result<Option<ProtocolError>, ProtocolError> {
         if points.len() < 2 {
             return Err(invalid("drag requires at least two points"));
         }
-        unsafe { SetCursorPos(points[0].0, points[0].1) }.map_err(input_failed)?;
-        send(&[mouse(MOUSEEVENTF_LEFTDOWN, 0)])?;
-        for &(x, y) in &points[1..] {
-            unsafe { SetCursorPos(x, y) }.map_err(input_failed)?;
+        // Do not take over or release a button that was already held by a user.
+        if unsafe { GetAsyncKeyState(VK_LBUTTON.0 as i32) } < 0 {
+            return Err(invalid("drag requires the left mouse button to be released"));
         }
-        send(&[mouse(MOUSEEVENTF_LEFTUP, 0)])
+        let (left, top, width, height) = unsafe {
+            (GetSystemMetrics(SM_XVIRTUALSCREEN), GetSystemMetrics(SM_YVIRTUALSCREEN),
+             GetSystemMetrics(SM_CXVIRTUALSCREEN), GetSystemMetrics(SM_CYVIRTUALSCREEN))
+        };
+        if width <= 0 || height <= 0 {
+            return Err(input_failed("Virtual desktop has no usable bounds"));
+        }
+        let motion = drag_motion(points);
+        let move_to = |(x, y): (i32, i32)| {
+            send(&[INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: INPUT_0 {
+                    mi: MOUSEINPUT {
+                        dx: absolute_axis(x, left, width),
+                        dy: absolute_axis(y, top, height),
+                        dwFlags: MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE
+                            | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE_NOCOALESCE,
+                        ..Default::default()
+                    },
+                },
+            }])
+        };
+        move_to(points[0])?;
+        send(&[mouse(MOUSEEVENTF_LEFTDOWN, 0)])?;
+        let moved = (|| {
+            std::thread::sleep(Duration::from_millis(40));
+            let started = Instant::now();
+            for (index, &point) in motion.iter().enumerate() {
+                // A single bounded timeline avoids per-point sleep rounding
+                // accumulating into a helper timeout on long caller paths.
+                let due = Duration::from_secs_f64(0.4 * (index + 1) as f64 / motion.len() as f64);
+                if let Some(wait) = due.checked_sub(started.elapsed()) {
+                    std::thread::sleep(wait);
+                }
+                move_to(point)?;
+            }
+            std::thread::sleep(Duration::from_millis(40));
+            Ok::<(), ProtocolError>(())
+        })();
+        // Release even after a movement failure. Once down was dispatched, the
+        // gesture may have affected the app: report unknown, never undelivered.
+        let released = send(&[mouse(MOUSEEVENTF_LEFTUP, 0)]);
+        Ok(match (moved, released) {
+            (Ok(()), Ok(())) => None,
+            (Err(move_error), Ok(())) => Some(input_failed(format!("Drag partially dispatched: {move_error}"))),
+            (_, Err(release_error)) => Some(input_failed(format!("Drag release uncertain: {release_error}"))),
+        })
     }
 
     fn scroll(x: i32, y: i32, dx: f64, dy: f64) -> Result<(), ProtocolError> {
@@ -443,6 +524,29 @@ mod native {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn absolute_drag_coordinates_cover_negative_monitor_origins() {
+        for (origin, width) in [(-1920, 3840), (-3200, 3200), (0, 1920), (0, 1)] {
+            for pixel in [origin, origin + width / 2, origin + width - 1] {
+                let absolute = absolute_axis(pixel, origin, width);
+                assert_eq!(origin + ((absolute as i64 * width as i64) / 65536) as i32, pixel);
+            }
+        }
+        assert_eq!(absolute_axis(i32::MIN, 0, 1920), 0);
+        assert_eq!(absolute_axis(i32::MAX, 0, 1920), 65535);
+    }
+
+    #[test]
+    fn drag_motion_keeps_bends_and_endpoint_with_held_intermediate_moves() {
+        let motion = drag_motion(&[(0, 0), (120, 0), (120, -120)]);
+        assert_eq!(motion.len(), 20);
+        assert_eq!(motion[0], (12, 0));
+        assert_eq!(motion[9], (120, 0));
+        assert_eq!(motion.last(), Some(&(120, -120)));
+        assert_eq!(drag_motion(&[(5, 6), (5, 6)]), vec![(5, 6)]);
+        assert_eq!(drag_motion(&[(i32::MIN, 0), (i32::MAX, 0)]).len(), 64);
+    }
 
     #[test]
     fn parses_discriminated_click_request() {
