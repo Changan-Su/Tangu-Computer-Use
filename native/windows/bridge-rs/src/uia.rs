@@ -820,8 +820,8 @@ mod native {
                 let mut rect = RECT::default();
                 unsafe { GetClientRect(control, &mut rect) }.map_err(|e| format!("GetClientRect: {e}"))?;
                 let line = ((rect.bottom - rect.top) / rows.min(i32::MAX as usize) as i32).max(1);
-                let dx = (x.signum() * 48.0) as isize;
-                let dy = (y.signum() * f64::from(line)) as isize;
+                let dx = if x > 0.0 { 48isize } else if x < 0.0 { -48isize } else { 0 };
+                let dy = if y > 0.0 { line as isize } else if y < 0.0 { -(line as isize) } else { 0 };
                 let sent = send_control_message(control, 0x1014, WPARAM(dx as usize), LPARAM(dy))?; // LVM_SCROLL
                 if sent.is_none() || sent == Some(0) {
                     return Ok(ScrollResult::Uncertain { reason: "Native list scrolling was dispatched without completion confirmation; observe before retrying." });
