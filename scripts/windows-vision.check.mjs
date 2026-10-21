@@ -164,6 +164,7 @@ try {
     const stopped = await act(seen, [{ action: 'drag', path: [point(360, 140), point(540, 300)] }, { action: 'click', ...point(80, 32) }]);
     check('uncertain drag release stops later physical input while retaining unknown delivery', stopped.details.execution.steps.length === 1 && stopped.details.execution.steps[0].outcome === 'unknown' && stopped.details.execution.steps[0].error?.message?.includes('release uncertain') && followupClicks === 0 && state().presses === beforeFailedRelease, stopped.said);
   } finally { cu.windowsHelper.command = originalCommand; }
+  seen = await observe();
   const absent = await act(seen, [{ action: 'click', ...point(80, 32) }], { text: 'IMPOSSIBLE_WINDOWS_EXPECT_MARKER', timeoutMs: 700 });
   check('unsatisfied expect is reported after a delivered action', absent.said.includes('[expect] NOT satisfied') && state().presses > 0, absent.said);
   settings = { ...settings, headless: true, cursor_overlay: true }; sync();
