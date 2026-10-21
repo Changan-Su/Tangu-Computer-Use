@@ -24,12 +24,19 @@ await build({ stdin: { contents: [
 let cu; try { cu = await import(pathToFileURL(bundle).href); } finally { fs.rmSync(bundle, { force: true }); }
 const quote = value => "'" + value.replaceAll("'", "''") + "'";
 const script = `Add-Type -AssemblyName System.Windows.Forms,WindowsFormsIntegration,PresentationFramework,PresentationCore,WindowsBase,System.Xaml; $refs=@([System.Windows.Forms.Form].Assembly.Location,[System.Drawing.Bitmap].Assembly.Location,[System.Windows.Forms.Integration.ElementHost].Assembly.Location,[System.Windows.Controls.Button].Assembly.Location,[System.Windows.Media.Visual].Assembly.Location,[System.Windows.DependencyObject].Assembly.Location,[System.Xaml.XamlReader].Assembly.Location); Add-Type -TypeDefinition (Get-Content -LiteralPath ${quote(path.join(root, 'scripts/vision-fixture/windows.cs'))} -Raw) -ReferencedAssemblies $refs; [WindowsVisionFixture]::Run(${quote(stateFile)},${quote(commandFile)})`;
-const fixture = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: ['ignore', 'inherit', 'inherit'] });
+const fixture = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-STA', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+for (const [stream, name, relay] of [[fixture.stdout, 'fixture.stdout.log', process.stdout], [fixture.stderr, 'fixture.stderr.log', process.stderr]]) {
+  stream.on('data', data => { fs.appendFileSync(path.join(home, name), data); relay.write(data); });
+}
+fixture.once('exit', (code, signal) => fs.writeFileSync(path.join(home, 'fixture-exit.json'), JSON.stringify({ code, signal })));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const state = () => { try { return JSON.parse(fs.readFileSync(stateFile, 'utf8')); } catch { return null; } };
 async function until(name, predicate, timeout = 15000) {
   const end = Date.now() + timeout;
-  while (Date.now() < end) { const current = state(); if (current && await predicate(current)) return current; await sleep(100); }
+  while (Date.now() < end) {
+    if (fixture.exitCode !== null) throw new Error(`${name}: native fixture exited (${fixture.exitCode}); see fixture.stderr.log`);
+    const current = state(); if (current && await predicate(current)) return current; await sleep(100);
+  }
   throw new Error(`${name}: last state ${JSON.stringify(state())}`);
 }
 const checks = [];
@@ -75,7 +82,7 @@ const cover = async () => {
   await until('cover foreground', async s => (await front())?.windowId === s.cover);
 };
 try {
-  const boot = await until('native fixture started and visible to Windows', s => s.hwnd > 0 && s.visible);
+  const boot = await until('native fixture started and visible to Windows', s => s.hwnd > 0 && s.visible, 60000);
   sync();
   const provider = cu.buildToolProvider(store);
   const browserTools = () => provider.tools().filter(tool => tool.isEnabledFor({ capabilities: { hostExec: true } })).filter(tool => /_browser$/.test(tool.name));

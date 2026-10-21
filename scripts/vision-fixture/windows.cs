@@ -38,6 +38,7 @@ public class WindowsVisionFixture : Form {
     }
     public WindowsVisionFixture(string state, string commands) {
         stateFile = state; commandFile = commands;
+        File.AppendAllText(stateFile + ".startup.log", "constructing controls\n");
         Text = "Forsion CU Windows Fixture";
         StartPosition = FormStartPosition.Manual; Location = new Point(80, 80);
         ClientSize = new Size(660, 470);
@@ -83,7 +84,7 @@ public class WindowsVisionFixture : Form {
         legacyHostedButton.Click += (s, e) => presses++;
         backgroundPanel.Children.Add(new System.Windows.Forms.Integration.WindowsFormsHost { Child = legacyHostedButton, Height = 40 });
         backgroundWindow.Content = backgroundPanel;
-        backgroundWindow.Show();
+        File.AppendAllText(stateFile + ".startup.log", "mixed control tree constructed\n");
         Controls.AddRange(new Control[] { button, input, disabled, readOnly, wpfHost, list, canvas });
         cover.Text = "Forsion CU Cover"; cover.StartPosition = FormStartPosition.Manual;
         cover.Location = new Point(800, 100); cover.Size = new Size(200, 180);
@@ -108,7 +109,14 @@ public class WindowsVisionFixture : Form {
             if (File.Exists(stateFile)) File.Replace(stateFile + ".tmp", stateFile, null);
             else File.Move(stateFile + ".tmp", stateFile);
         };
-        Shown += (s, e) => { list.Focus(); timer.Start(); };
+        Shown += (s, e) => {
+            File.AppendAllText(stateFile + ".startup.log", "main form shown\n");
+            // Create the mixed WPF / WinForms top-level host after the native
+            // application pump exists, rather than inside Form construction.
+            backgroundWindow.Show();
+            list.Focus(); timer.Start();
+            File.AppendAllText(stateFile + ".startup.log", "background host shown; state timer started\n");
+        };
         FormClosed += (s, e) => { timer.Stop(); cover.Dispose(); backgroundWindow.Close(); };
     }
     public static void Run(string state, string commands) {
