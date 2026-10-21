@@ -20,7 +20,7 @@ public class WindowsVisionFixture : Form {
     readonly TextBox readOnly = new TextBox();
     readonly Panel canvas = new Panel();
     readonly Form cover = new Form();
-    readonly System.Windows.Window backgroundWindow = new System.Windows.Window { Title = "Forsion CU Background Fixture", Width = 290, Height = 130, Left = 400, Top = 600, ShowActivated = false };
+    readonly System.Windows.Window backgroundWindow = new System.Windows.Window { Title = "Forsion CU Background Fixture", Width = 290, Height = 190, Left = 400, Top = 600, ShowActivated = false };
     readonly Timer timer = new Timer();
     Point start, last;
     int drags, presses, writes;
@@ -79,6 +79,9 @@ public class WindowsVisionFixture : Form {
         var backgroundPanel = new System.Windows.Controls.StackPanel();
         backgroundButton.Height = 40;
         backgroundPanel.Children.Add(backgroundButton); backgroundPanel.Children.Add(toggle);
+        var legacyHostedButton = new Button { Text = "Hosted legacy button", AccessibleName = "Hosted legacy button" };
+        legacyHostedButton.Click += (s, e) => presses++;
+        backgroundPanel.Children.Add(new System.Windows.Forms.Integration.WindowsFormsHost { Child = legacyHostedButton, Height = 40 });
         backgroundWindow.Content = backgroundPanel;
         backgroundWindow.Show();
         Controls.AddRange(new Control[] { button, input, disabled, readOnly, wpfHost, list, canvas });

@@ -593,7 +593,7 @@ mod native {
             // Legacy WinForms Invoke selects/activates the window. Refuse that
             // provider in background policy; synthesizing BN_CLICKED would
             // bypass the app's normal focus/validation gates.
-            if background_only && winforms_root(hwnd) {
+            if background_only && winforms_invoke_provider(hwnd, &element) {
                 return Ok(PressResult::RequiresForeground);
             }
             unsafe {
@@ -653,7 +653,7 @@ mod native {
                     .unwrap_or_default()
             };
             if !default_action.trim().is_empty() {
-                if background_only && winforms_root(hwnd) {
+                if background_only && winforms_invoke_provider(hwnd, &element) {
                     return Ok(PressResult::RequiresForeground);
                 }
                 unsafe {
@@ -760,6 +760,14 @@ mod native {
         String::from_utf16_lossy(&name[..len.max(0) as usize]).starts_with("WindowsForms10.")
     }
 
+    fn winforms_invoke_provider(hwnd: isize, element: &IUIAutomationElement) -> bool {
+        // WindowsFormsHost can embed a WinForms button beneath a WPF root.
+        // Root class alone cannot identify the activating leaf provider.
+        winforms_root(hwnd)
+            || winforms_control(element, "BUTTON").is_some()
+            || unsafe { element.CurrentFrameworkId() }.map(|id| id.to_string() == "WinForm").unwrap_or(false)
+    }
+
     fn ensure_control_enabled(mut hwnd: HWND) -> Result<(), String> {
         // GetAncestor(GA_PARENT) follows real parents, not the disabled owner
         // of an enabled modal dialog (which GetParent would also return).
@@ -828,7 +836,7 @@ mod native {
                 }
                 return Ok(ScrollResult::Scrolled);
             }
-            if winforms_root(hwnd) || unsafe { element.CurrentFrameworkId() }.map(|id| id.to_string() == "WPF").unwrap_or(false) {
+            if winforms_invoke_provider(hwnd, &element) || unsafe { element.CurrentFrameworkId() }.map(|id| id.to_string() == "WPF").unwrap_or(false) {
                 return Ok(ScrollResult::RequiresForeground);
             }
         }
