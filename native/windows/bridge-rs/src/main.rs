@@ -993,7 +993,7 @@ fn act_on_ref(
                 coordinate_fallback(args, parsed, &element)
             }
             windows_bridge::uia::PressResult::RequiresForeground => Err(ProtocolError::new(
-                "Invoke inside this WinForms window can activate it; background policy refuses it before input",
+                "This UIA Invoke provider can activate its window; background policy refuses it before input",
                 ErrorCode::ForegroundRequired,
             )),
         },

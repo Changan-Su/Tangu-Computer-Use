@@ -73,7 +73,13 @@ public class WindowsVisionFixture : Form {
         var backgroundButton = new System.Windows.Controls.Button { Content = "Background button" };
         System.Windows.Automation.AutomationProperties.SetName(backgroundButton, "Background button");
         backgroundButton.Click += (s, e) => presses++;
-        backgroundWindow.Content = backgroundButton;
+        var toggle = new System.Windows.Controls.CheckBox { Content = "Background toggle", Height = 40 };
+        System.Windows.Automation.AutomationProperties.SetName(toggle, "Background toggle");
+        toggle.Checked += (s, e) => presses++;
+        var backgroundPanel = new System.Windows.Controls.StackPanel();
+        backgroundButton.Height = 40;
+        backgroundPanel.Children.Add(backgroundButton); backgroundPanel.Children.Add(toggle);
+        backgroundWindow.Content = backgroundPanel;
         backgroundWindow.Show();
         Controls.AddRange(new Control[] { button, input, disabled, readOnly, wpfHost, list, canvas });
         cover.Text = "Forsion CU Cover"; cover.StartPosition = FormStartPosition.Manual;
