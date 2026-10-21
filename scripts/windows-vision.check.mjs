@@ -134,6 +134,7 @@ try {
   // Compact observations fold the WPF host. Resolve its real cached descendant
   // through the same search_ui tool the model uses; never invent a child ref.
   const buttonSearch = shown(await cu.executeSearchUi('', { stateId: seen.details.capture.stateId, text: 'Background button', role: 'button' }, undefined, undefined, ctx), {});
+  check('searching the accessibility tree keeps the cover foreground', (await front())?.windowId === state().cover, buttonSearch.said);
   const button = buttonSearch.details.matches?.find(match => match.label === 'Background button' && match.role === 'button')?.ref;
   check('native accessibility button has a reference', !!button, buttonSearch.said);
   seen.details.capture.stateId = buttonSearch.details.stateId;
