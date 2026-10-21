@@ -56,7 +56,7 @@ const tcx = { collectImage: image => { collected.push(image); fs.writeFileSync(p
 const shown = (result, args) => { const before = collected.length; result.said = cu.render(result, tcx, args); if (collected.length > before) result.actualImageSize = imageSize(Buffer.from(collected.at(-1).url.split(',')[1], 'base64')); fs.writeFileSync(path.join(home, `tool-${Date.now()}.json`), JSON.stringify({ said: result.said, details: result.details, actualImageSize: result.actualImageSize }, null, 2)); return result; };
 const front = async () => { const roots = await cu.windowsHelper.command('listRoots'); return (Array.isArray(roots) ? roots : roots.roots).find(row => row.isFocused); };
 let rootRef;
-const observe = async () => shown(await cu.executeObserve('', { root: rootRef, mode: 'visual' }, undefined, undefined, ctx), {});
+const observe = async (root = rootRef) => shown(await cu.executeObserve('', { root, mode: 'visual' }, undefined, undefined, ctx), {});
 const act = async (seen, actions, expect) => {
   const args = { stateId: seen.details.capture.stateId, actions, ...(expect ? { expect } : {}) };
   return shown(await cu.executeAct('', args, undefined, undefined, ctx), args);
@@ -130,6 +130,17 @@ try {
   check('strict background rejects coordinate input without native scrolling', (strict.blocked || strictErrors.includes('coordinate_blocked')) && state().topIndex === strictIndex, JSON.stringify(strict.details?.execution));
   check('strict background survives tool config reload', !strict.said.includes('[foreground]') && (await front())?.windowId === state().cover, strict.said);
   seen = await observe();
+  const hostSearch = shown(await cu.executeSearchUi('', { stateId: seen.details.capture.stateId, text: 'Hosted button', role: 'button' }, undefined, undefined, ctx), {});
+  const hosted = hostSearch.details.matches?.find(match => match.label === 'Hosted button')?.ref;
+  check('hosted WPF button has an observed reference', !!hosted, hostSearch.said);
+  seen.details.capture.stateId = hostSearch.details.stateId;
+  const hostedBefore = state().presses;
+  const hostedRefused = await act(seen, [{ action: 'click', ref: hosted }]);
+  check('strict hosted Invoke is refused before activation or a click', hostedRefused.details.execution.steps.some(step => step.error?.code === 'foreground_required') && state().presses === hostedBefore && (await front())?.windowId === state().cover, hostedRefused.said);
+  const wpfFound = await cu.executeFind('', { pid: boot.pid, text: 'Forsion CU Background Fixture' }, undefined, undefined, ctx);
+  const wpfRoot = wpfFound.details.windows.find(window => window.windowTitle === 'Forsion CU Background Fixture')?.windowRef;
+  check('standalone WPF fixture has a real window reference', !!wpfRoot);
+  seen = await observe(wpfRoot);
   const outline = seen.details.renderedOutline || '';
   // Compact observations fold the WPF host. Resolve its real cached descendant
   // through the same search_ui tool the model uses; never invent a child ref.

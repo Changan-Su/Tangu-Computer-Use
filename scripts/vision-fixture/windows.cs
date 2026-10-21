@@ -20,6 +20,7 @@ public class WindowsVisionFixture : Form {
     readonly TextBox readOnly = new TextBox();
     readonly Panel canvas = new Panel();
     readonly Form cover = new Form();
+    readonly System.Windows.Window backgroundWindow = new System.Windows.Window { Title = "Forsion CU Background Fixture", Width = 290, Height = 130, Left = 400, Top = 600, ShowActivated = false };
     readonly Timer timer = new Timer();
     Point start, last;
     int drags, presses, writes;
@@ -65,10 +66,15 @@ public class WindowsVisionFixture : Form {
         canvas.MouseUp += (s, e) => { if (dragging && Math.Abs(e.X - start.X) + Math.Abs(e.Y - start.Y) > 30) drags++; dragging = false; canvas.Capture = false; };
         readOnly.AccessibleName = "Read-only input"; readOnly.Text = "Read-only baseline"; readOnly.ReadOnly = true;
         readOnly.Location = new Point(20, 440); readOnly.Size = new Size(270, 24);
-        var wpfButton = new System.Windows.Controls.Button { Content = "Background button" };
-        System.Windows.Automation.AutomationProperties.SetName(wpfButton, "Background button");
+        var wpfButton = new System.Windows.Controls.Button { Content = "Hosted button" };
+        System.Windows.Automation.AutomationProperties.SetName(wpfButton, "Hosted button");
         wpfButton.Click += (s, e) => presses++;
         var wpfHost = new System.Windows.Forms.Integration.ElementHost { Child = wpfButton, Location = new Point(330, 440), Size = new Size(290, 24) };
+        var backgroundButton = new System.Windows.Controls.Button { Content = "Background button" };
+        System.Windows.Automation.AutomationProperties.SetName(backgroundButton, "Background button");
+        backgroundButton.Click += (s, e) => presses++;
+        backgroundWindow.Content = backgroundButton;
+        backgroundWindow.Show();
         Controls.AddRange(new Control[] { button, input, disabled, readOnly, wpfHost, list, canvas });
         cover.Text = "Forsion CU Cover"; cover.StartPosition = FormStartPosition.Manual;
         cover.Location = new Point(800, 100); cover.Size = new Size(200, 180);
@@ -94,7 +100,7 @@ public class WindowsVisionFixture : Form {
             else File.Move(stateFile + ".tmp", stateFile);
         };
         Shown += (s, e) => { list.Focus(); timer.Start(); };
-        FormClosed += (s, e) => { timer.Stop(); cover.Dispose(); };
+        FormClosed += (s, e) => { timer.Stop(); cover.Dispose(); backgroundWindow.Close(); };
     }
     public static void Run(string state, string commands) {
         Application.EnableVisualStyles();
