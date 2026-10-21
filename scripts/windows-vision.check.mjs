@@ -91,6 +91,10 @@ try {
     return !!rootRef;
   });
   check('real Windows helper finds the fixture', !!rootRef);
+  // Showing a second native top-level window can consume startup activation.
+  // Establish target focus via the fixture before asking the helper to input.
+  fs.writeFileSync(commandFile, 'target');
+  await until('fixture owns initial foreground and list focus', async s => s.listFocused && (await front())?.windowId === s.hwnd);
   let seen = await observe();
   check('visual image note uses the actual screenshot dimensions', seen.actualImageSize?.width === seen.details.capture.width && seen.actualImageSize?.height === seen.details.capture.height && seen.said.includes(`[image] The attached screenshot is ${seen.actualImageSize.width}x${seen.actualImageSize.height} px`), seen.said);
   check('Windows image note does not claim pixel scroll distances', !seen.said.includes('scrollX / scrollY distance'));
