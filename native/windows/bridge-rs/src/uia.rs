@@ -580,6 +580,11 @@ mod native {
         background_only: bool,
     ) -> Result<PressResult, String> {
         let (_com, _uia, element) = resolve(hwnd, runtime_id_target, automation_id)?;
+        // Both Invoke and Toggle of the stock Framework WPF provider activated
+        // the target in real Windows checks. Refuse before either pattern runs.
+        if background_only && unsafe { element.CurrentFrameworkId() }.map(|id| id.to_string() == "WPF").unwrap_or(false) {
+            return Ok(PressResult::RequiresForeground);
+        }
         if let Ok(pattern) = unsafe {
             element.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
         } {
@@ -750,8 +755,8 @@ mod native {
         let len = unsafe { GetClassNameW(HWND(hwnd as *mut _), &mut name) };
         // ElementHost's WPF Invoke also activates its WinForms root. The leaf
         // has no native HWND, so checking only WindowsForms10.BUTTON misses it.
+        let _ = element;
         String::from_utf16_lossy(&name[..len.max(0) as usize]).starts_with("WindowsForms10.")
-            || unsafe { element.CurrentFrameworkId() }.map(|id| id.to_string() == "WPF").unwrap_or(false)
     }
 
     fn ensure_control_enabled(mut hwnd: HWND) -> Result<(), String> {

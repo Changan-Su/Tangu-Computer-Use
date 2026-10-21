@@ -162,10 +162,7 @@ try {
   check('native toggle has an observed reference', !!toggle, toggleSearch.said);
   seen.details.capture.stateId = toggleSearch.details.stateId;
   const toggled = await act(seen, [{ action: 'click', ref: toggle }]);
-  await until('strict background reference toggle works', s => s.presses > presses);
-  const clickStep = toggled.details.execution.steps[0];
-  check('strict reference toggle uses accessibility without foreground escalation', clickStep.delivery === 'ax' && clickStep.deliveryPolicy === 'ax_only' && !toggled.details.execution.escalatedToForeground, toggled.said);
-  check('reference toggle keeps the cover foreground', !toggled.said.includes('[foreground]') && (await front())?.windowId === state().cover, toggled.said);
+  check('strict WPF Toggle is refused before activation or input', toggled.details.execution.steps.some(step => step.error?.code === 'foreground_required') && state().presses === presses && (await front())?.windowId === state().cover, toggled.said);
   seen = await observe();
   const legacy = seen.details.renderedOutline.split('\n').find(line => line.includes('Fixture button'))?.match(/@e\d+/)?.[0];
   check('legacy native button has an observed reference', !!legacy);
