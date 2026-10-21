@@ -142,7 +142,10 @@ try {
   await until('coordinate drag draws a native line', s => s.drags > drags);
   check('coordinate drag uses foreground native input', dragged.said.includes('[foreground]'), dragged.said);
   seen = await observe();
+  fs.writeFileSync(commandFile, 'capture-control');
+  await until('native desktop control screenshot is saved', () => fs.existsSync(stateFile + '.desktop.png'));
   const blue = blueCanvasPixels(seen);
+  fs.writeFileSync(path.join(home, 'ink-proof.json'), JSON.stringify({ bluePixels: blue, state: state(), image: seen.actualImageSize, screenshot: `screen-${collected.length}.jpg` }, null, 2));
   check('physical drag leaves visible blue ink after native window repaint', blue > 100, `bluePixels=${blue}`);
   const absent = await act(seen, [{ action: 'click', ...point(80, 32) }], { text: 'IMPOSSIBLE_WINDOWS_EXPECT_MARKER', timeoutMs: 700 });
   check('unsatisfied expect is reported after a delivered action', absent.said.includes('[expect] NOT satisfied') && state().presses > 0, absent.said);

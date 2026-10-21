@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Windows.Forms;
@@ -25,6 +26,8 @@ public class WindowsVisionFixture : Form {
     readonly Timer timer = new Timer();
     Point start, last;
     int drags, presses, writes;
+    int drawMoves, savedDrags;
+    readonly List<string> mouseEvents = new List<string>();
     bool dragging;
     static void ActivateForTest(Form window) {
         ShowWindow(window.Handle, 9);
@@ -61,14 +64,23 @@ public class WindowsVisionFixture : Form {
         canvas.Location = new Point(330, 85); canvas.Size = new Size(290, 350); canvas.BackColor = Color.White;
         using (var graphics = Graphics.FromImage(ink)) graphics.Clear(Color.White);
         canvas.Paint += (s, e) => e.Graphics.DrawImageUnscaled(ink, 0, 0);
-        canvas.MouseDown += (s, e) => { start = last = e.Location; dragging = true; canvas.Capture = true; };
+        canvas.MouseDown += (s, e) => {
+            mouseEvents.Add(DateTime.UtcNow.ToString("O") + " down " + e.Location + " buttons=" + e.Button);
+            start = last = e.Location; dragging = true; canvas.Capture = true;
+        };
         canvas.MouseMove += (s, e) => {
+            if (mouseEvents.Count < 100) mouseEvents.Add(DateTime.UtcNow.ToString("O") + " move " + e.Location + " dragging=" + dragging + " buttons=" + e.Button);
             if (!dragging) return;
+            drawMoves++;
             using (var graphics = Graphics.FromImage(ink)) using (var pen = new Pen(Color.Blue, 3)) graphics.DrawLine(pen, last, e.Location);
             canvas.Invalidate();
             last = e.Location;
         };
-        canvas.MouseUp += (s, e) => { if (dragging && Math.Abs(e.X - start.X) + Math.Abs(e.Y - start.Y) > 30) drags++; dragging = false; canvas.Capture = false; };
+        canvas.MouseUp += (s, e) => {
+            mouseEvents.Add(DateTime.UtcNow.ToString("O") + " up " + e.Location + " dragging=" + dragging + " buttons=" + e.Button);
+            if (dragging && Math.Abs(e.X - start.X) + Math.Abs(e.Y - start.Y) > 30) drags++;
+            dragging = false; canvas.Capture = false;
+        };
         readOnly.AccessibleName = "Read-only input"; readOnly.Text = "Read-only baseline"; readOnly.ReadOnly = true;
         readOnly.Location = new Point(20, 440); readOnly.Size = new Size(270, 24);
         var wpfButton = new System.Windows.Controls.Button { Content = "Hosted button" };
@@ -105,9 +117,18 @@ public class WindowsVisionFixture : Form {
                 if (command == "target") { ActivateForTest(this); ActiveControl = list; list.Focus(); }
                 if (command == "disable") EnableWindow(Handle, false);
                 if (command == "enable") EnableWindow(Handle, true);
+                if (command == "capture-control") {
+                    using (var image = new Bitmap(Width, Height)) {
+                        using (var graphics = Graphics.FromImage(image)) graphics.CopyFromScreen(Left, Top, 0, 0, image.Size);
+                        image.Save(stateFile + ".desktop.png", System.Drawing.Imaging.ImageFormat.Png);
+                    }
+                }
                 if (command == "close") { Close(); return; }
             }
             var client = PointToScreen(Point.Empty);
+            File.WriteAllLines(stateFile + ".mouse.log", mouseEvents);
+            File.WriteAllText(stateFile + ".draw-moves.txt", drawMoves.ToString());
+            if (drags > savedDrags) { ink.Save(stateFile + ".ink.png", System.Drawing.Imaging.ImageFormat.Png); savedDrags = drags; }
             string text = input.Text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "").Replace("\n", "\\n");
             File.WriteAllText(stateFile + ".tmp", "{\"pid\":" + System.Diagnostics.Process.GetCurrentProcess().Id + ",\"hwnd\":" + Handle.ToInt64() + ",\"visible\":" + (IsWindowVisible(Handle) ? "true" : "false") + ",\"enabled\":" + (IsWindowEnabled(Handle) ? "true" : "false") + ",\"listFocused\":" + (list.Focused ? "true" : "false") + ",\"cover\":" + (cover.IsHandleCreated ? cover.Handle.ToInt64() : 0) + ",\"left\":" + Left + ",\"top\":" + Top + ",\"width\":" + Width + ",\"height\":" + Height + ",\"clientX\":" + client.X + ",\"clientY\":" + client.Y + ",\"topIndex\":" + (list.TopItem == null ? 0 : list.TopItem.Index) + ",\"drags\":" + drags + ",\"presses\":" + presses + ",\"writes\":" + writes + ",\"readOnly\":\"" + readOnly.Text + "\",\"input\":\"" + text + "\"}");
             if (File.Exists(stateFile)) File.Replace(stateFile + ".tmp", stateFile, null);
