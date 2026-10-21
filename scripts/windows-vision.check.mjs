@@ -145,7 +145,9 @@ try {
   fs.writeFileSync(commandFile, 'capture-control');
   await until('native desktop control screenshot is saved', () => fs.existsSync(stateFile + '.desktop.png'));
   const blue = blueCanvasPixels(seen);
-  fs.writeFileSync(path.join(home, 'ink-proof.json'), JSON.stringify({ bluePixels: blue, state: state(), image: seen.actualImageSize, screenshot: `screen-${collected.length}.jpg` }, null, 2));
+  const heldMoves = Number(fs.readFileSync(stateFile + '.draw-moves.txt', 'utf8'));
+  fs.writeFileSync(path.join(home, 'ink-proof.json'), JSON.stringify({ bluePixels: blue, heldMoves, state: state(), image: seen.actualImageSize, screenshot: `screen-${collected.length}.jpg` }, null, 2));
+  check('physical drag delivers intermediate mouse moves while held', heldMoves >= 3, `heldMoves=${heldMoves}`);
   check('physical drag leaves visible blue ink after native window repaint', blue > 100, `bluePixels=${blue}`);
   const absent = await act(seen, [{ action: 'click', ...point(80, 32) }], { text: 'IMPOSSIBLE_WINDOWS_EXPECT_MARKER', timeoutMs: 700 });
   check('unsatisfied expect is reported after a delivered action', absent.said.includes('[expect] NOT satisfied') && state().presses > 0, absent.said);
