@@ -15,7 +15,7 @@ const stateFile = path.join(home, 'state.json'), commandFile = path.join(home, '
 process.env.PI_COMPUTER_USE_WINDOWS_HELPER_PATH = path.join(home, 'helper/windows-bridge.exe');
 const bundle = path.join(root, 'tangu-plugins/computer-use/dist', `.windows-vision-${process.pid}.mjs`);
 await build({ stdin: { contents: [
-  "export { executeFind, executeObserve, executeAct } from './src/vendor/bridge.ts'",
+  "export { executeFind, executeObserve, executeAct, executeSearchUi } from './src/vendor/bridge.ts'",
   "export { syncSettings, render, buildToolProvider } from './src/tools.ts'",
   "export { windowsHelper } from './src/vendor/platform/windows/helper.ts'",
 ].join('\n'), resolveDir: root, loader: 'ts' }, bundle: true, platform: 'node', format: 'esm', target: 'node20', outfile: bundle,
@@ -131,10 +131,14 @@ try {
   check('strict background survives tool config reload', !strict.said.includes('[foreground]') && (await front())?.windowId === state().cover, strict.said);
   seen = await observe();
   const outline = seen.details.renderedOutline || '';
-  const button = outline.split('\n').find(line => line.includes('Background button') && /\bbutton[ /]/i.test(line))?.match(/@e\d+/)?.[0];
-  check('native accessibility button has a reference', !!button, outline);
+  // Compact observations fold the WPF host. Resolve its real cached descendant
+  // through the same search_ui tool the model uses; never invent a child ref.
+  const buttonSearch = shown(await cu.executeSearchUi('', { stateId: seen.details.capture.stateId, text: 'Background button', role: 'button' }, undefined, undefined, ctx), {});
+  const button = buttonSearch.details.matches?.find(match => match.label === 'Background button' && match.role === 'button')?.ref;
+  check('native accessibility button has a reference', !!button, buttonSearch.said);
+  seen.details.capture.stateId = buttonSearch.details.stateId;
   const presses = state().presses;
-  const refClick = await act(await observe(), [{ action: 'click', ref: button }]);
+  const refClick = await act(seen, [{ action: 'click', ref: button }]);
   await until('strict background reference click works', s => s.presses > presses);
   const clickStep = refClick.details.execution.steps[0];
   check('strict reference click uses accessibility without foreground escalation', clickStep.delivery === 'ax' && clickStep.deliveryPolicy === 'ax_only' && !refClick.details.execution.escalatedToForeground, refClick.said);
