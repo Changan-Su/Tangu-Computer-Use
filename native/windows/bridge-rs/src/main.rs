@@ -879,9 +879,10 @@ fn handle_act_batch(args: &Value) -> Result<Value, ProtocolError> {
                     break;
                 }
             };
-            let didnt = step.get("outcome").and_then(Value::as_str) == Some("didnt");
+            let stop = step.get("outcome").and_then(Value::as_str) == Some("didnt")
+                || step.get("error").map(Value::is_object).unwrap_or(false);
             steps.push(step);
-            if didnt {
+            if stop {
                 stopped_at = Some(index);
                 break;
             }

@@ -149,6 +149,21 @@ try {
   fs.writeFileSync(path.join(home, 'ink-proof.json'), JSON.stringify({ bluePixels: blue, heldMoves, state: state(), image: seen.actualImageSize, screenshot: `screen-${collected.length}.jpg` }, null, 2));
   check('physical drag delivers intermediate mouse moves while held', heldMoves >= 3, `heldMoves=${heldMoves}`);
   check('physical drag leaves visible blue ink after native window repaint', blue > 100, `bluePixels=${blue}`);
+  // Fault-inject the native response only: reproducing a failed button release
+  // physically would leave the runner unsafe. Exercise the real platform/bridge
+  // sequence and prove a following real click is never dispatched.
+  const originalCommand = cu.windowsHelper.command;
+  let followupClicks = 0;
+  const beforeFailedRelease = state().presses;
+  try {
+    cu.windowsHelper.command = async function(command, args, options) {
+      if (command === 'act' && args.action === 'drag') return { outcome: 'unknown', performed: { grounding: 'coordinates', delivery: 'hid' }, error: { code: 'capture_failed', message: 'Drag release uncertain: injected SendInput refusal' } };
+      if (command === 'act' && args.action === 'click') followupClicks++;
+      return originalCommand.call(this, command, args, options);
+    };
+    const stopped = await act(seen, [{ action: 'drag', path: [point(360, 140), point(540, 300)] }, { action: 'click', ...point(80, 32) }]);
+    check('uncertain drag release stops later physical input while retaining unknown delivery', stopped.details.execution.steps.length === 1 && stopped.details.execution.steps[0].outcome === 'unknown' && stopped.details.execution.steps[0].error?.message?.includes('release uncertain') && followupClicks === 0 && state().presses === beforeFailedRelease, stopped.said);
+  } finally { cu.windowsHelper.command = originalCommand; }
   const absent = await act(seen, [{ action: 'click', ...point(80, 32) }], { text: 'IMPOSSIBLE_WINDOWS_EXPECT_MARKER', timeoutMs: 700 });
   check('unsatisfied expect is reported after a delivered action', absent.said.includes('[expect] NOT satisfied') && state().presses > 0, absent.said);
   settings = { ...settings, headless: true, cursor_overlay: true }; sync();

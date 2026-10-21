@@ -216,8 +216,9 @@ mod native {
                     .collect::<Result<Vec<_>, _>>()?;
                 let uncertain = drag(&points)?;
                 let mut response = ok("unknown", "coordinates", "hid")?;
-                if let Some(reason) = uncertain {
-                    response["evidence"]["reason"] = json!(reason);
+                if let Some(error) = uncertain {
+                    response["evidence"]["reason"] = json!(error.message);
+                    response["error"] = json!(error);
                 }
                 Ok(response)
             }
@@ -368,7 +369,7 @@ mod native {
         send(&[mouse(down, 0), mouse(up, 0)])
     }
 
-    fn drag(points: &[(i32, i32)]) -> Result<Option<String>, ProtocolError> {
+    fn drag(points: &[(i32, i32)]) -> Result<Option<ProtocolError>, ProtocolError> {
         if points.len() < 2 {
             return Err(invalid("drag requires at least two points"));
         }
@@ -420,8 +421,8 @@ mod native {
         let released = send(&[mouse(MOUSEEVENTF_LEFTUP, 0)]);
         Ok(match (moved, released) {
             (Ok(()), Ok(())) => None,
-            (Err(move_error), Ok(())) => Some(format!("Drag partially dispatched: {move_error}")),
-            (_, Err(release_error)) => Some(format!("Drag release uncertain: {release_error}")),
+            (Err(move_error), Ok(())) => Some(input_failed(format!("Drag partially dispatched: {move_error}"))),
+            (_, Err(release_error)) => Some(input_failed(format!("Drag release uncertain: {release_error}"))),
         })
     }
 
