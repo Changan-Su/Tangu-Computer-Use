@@ -19,6 +19,7 @@ public class WindowsVisionFixture : Form {
     readonly TextBox input = new TextBox();
     readonly TextBox readOnly = new TextBox();
     readonly Panel canvas = new Panel();
+    readonly Bitmap ink = new Bitmap(290, 350);
     readonly Form cover = new Form();
     readonly System.Windows.Window backgroundWindow = new System.Windows.Window { Title = "Forsion CU Background Fixture", Width = 290, Height = 190, Left = 400, Top = 600, ShowActivated = false };
     readonly Timer timer = new Timer();
@@ -58,10 +59,13 @@ public class WindowsVisionFixture : Form {
         for (int i = 0; i < 40; i++) list.Items.Add("Fixture row " + i);
         canvas.AccessibleName = "Native drawing canvas";
         canvas.Location = new Point(330, 85); canvas.Size = new Size(290, 350); canvas.BackColor = Color.White;
+        using (var graphics = Graphics.FromImage(ink)) graphics.Clear(Color.White);
+        canvas.Paint += (s, e) => e.Graphics.DrawImageUnscaled(ink, 0, 0);
         canvas.MouseDown += (s, e) => { start = last = e.Location; dragging = true; canvas.Capture = true; };
         canvas.MouseMove += (s, e) => {
             if (!dragging) return;
-            using (var graphics = canvas.CreateGraphics()) using (var pen = new Pen(Color.Blue, 3)) graphics.DrawLine(pen, last, e.Location);
+            using (var graphics = Graphics.FromImage(ink)) using (var pen = new Pen(Color.Blue, 3)) graphics.DrawLine(pen, last, e.Location);
+            canvas.Invalidate();
             last = e.Location;
         };
         canvas.MouseUp += (s, e) => { if (dragging && Math.Abs(e.X - start.X) + Math.Abs(e.Y - start.Y) > 30) drags++; dragging = false; canvas.Capture = false; };
@@ -117,7 +121,7 @@ public class WindowsVisionFixture : Form {
             list.Focus(); timer.Start();
             File.AppendAllText(stateFile + ".startup.log", "background host shown; state timer started\n");
         };
-        FormClosed += (s, e) => { timer.Stop(); cover.Dispose(); backgroundWindow.Close(); };
+        FormClosed += (s, e) => { timer.Stop(); cover.Dispose(); backgroundWindow.Close(); ink.Dispose(); };
     }
     public static void Run(string state, string commands) {
         Application.EnableVisualStyles();

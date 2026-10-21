@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { build } from 'esbuild';
 
 // This check deliberately uses foreground native input. Never run it on the
@@ -68,6 +68,19 @@ const act = async (seen, actions, expect) => {
   const args = { stateId: seen.details.capture.stateId, actions, ...(expect ? { expect } : {}) };
   return shown(await cu.executeAct('', args, undefined, undefined, ctx), args);
 };
+function blueCanvasPixels(capture) {
+  assert.ok(capture.actualImageSize, 'pixel proof requires a newly attached screenshot');
+  const s = state(), scale = capture.actualImageSize.width / s.width;
+  const left = Math.max(0, Math.floor((s.clientX - s.left + 330) * scale));
+  const top = Math.max(0, Math.floor((s.clientY - s.top + 85) * scale));
+  const right = Math.min(capture.actualImageSize.width, Math.ceil(left + 290 * scale));
+  const bottom = Math.min(capture.actualImageSize.height, Math.ceil(top + 350 * scale));
+  const file = path.join(home, `screen-${collected.length}.jpg`);
+  const ps = `$ErrorActionPreference="Stop"; Add-Type -AssemblyName System.Drawing; $bitmap=[System.Drawing.Image]::FromFile(${quote(file)}); try { $count=0; for ($y=${top}; $y -lt ${bottom}; $y++) { for ($x=${left}; $x -lt ${right}; $x++) { $color=$bitmap.GetPixel($x,$y); if ($color.B -gt 150 -and $color.R -lt 100 -and $color.G -lt 150) { $count++ } } }; Write-Output $count } finally { $bitmap.Dispose() }`;
+  const result = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')], { windowsHide: true, encoding: 'utf8', timeout: 20000 }).trim();
+  assert.match(result, /^\d+$/);
+  return Number(result);
+}
 const cover = async () => {
   fs.writeFileSync(commandFile, 'cover');
   let root;
@@ -124,10 +137,13 @@ try {
   check('Windows scroll does not show macOS scroll note', !scrolled.said.includes('[scroll]'));
   seen = await observe();
   const drags = state().drags;
+  check('native canvas screenshot is blank before physical dragging', blueCanvasPixels(seen) === 0);
   const dragged = await act(seen, [{ action: 'drag', path: [point(360, 140), point(540, 300)] }]);
   await until('coordinate drag draws a native line', s => s.drags > drags);
   check('coordinate drag uses foreground native input', dragged.said.includes('[foreground]'), dragged.said);
   seen = await observe();
+  const blue = blueCanvasPixels(seen);
+  check('physical drag leaves visible blue ink after native window repaint', blue > 100, `bluePixels=${blue}`);
   const absent = await act(seen, [{ action: 'click', ...point(80, 32) }], { text: 'IMPOSSIBLE_WINDOWS_EXPECT_MARKER', timeoutMs: 700 });
   check('unsatisfied expect is reported after a delivered action', absent.said.includes('[expect] NOT satisfied') && state().presses > 0, absent.said);
   settings = { ...settings, headless: true, cursor_overlay: true }; sync();
