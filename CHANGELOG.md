@@ -1,5 +1,9 @@
 # 更新日志
 
+## 未发布
+
+- 安装 helper 时核对发布证书（`certificate root = H"dab3a30e…"`），签名不对就拒装、已装的那份原样不动。原来只核对 bundle id：同 id 的 ad-hoc / 开发证书 helper 能盖掉发布版，macOS 里那条授权记录还是旧签名的，开关开着、helper 却读到「未授权」，只能在系统设置里删掉再重新加。开发构建要装就设 `PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1`，装完重新授权。只往临时位置解压、不登记 LaunchServices 的那种（`register: false`）不受影响。`check:installer` 加了这一段。
+
 ## 0.7.2-jev.6 — 2026-10-17（开发实验 / development experiment）
 
 - 后台操作的可见反馈（用户 10-17 在 dev 里试 2d040aa 报的两条）：

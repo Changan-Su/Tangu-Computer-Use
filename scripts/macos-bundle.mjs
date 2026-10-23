@@ -40,6 +40,20 @@ export function verifyMacosApp(app) {
     { stdio: 'pipe', timeout: 15_000 });
 }
 
+// The grant row keeps the requirement of the binary the user approved. Installing a differently signed
+// helper under the same bundle id leaves the switch on while the helper reads "not granted" until the user
+// removes and re-adds it, so a real install takes only the release certificate. Development builds
+// (ad-hoc or a dev certificate) opt in explicitly and accept granting access again.
+export const releaseRequirement = `=identifier "${bundleId}" and certificate root = H"${releaseCertSha1}"`;
+export const allowUnpinnedHelper = env => env.PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE === '1';
+
+export function isReleaseSigned(app) {
+  try {
+    execFileSync('/usr/bin/codesign', ['--verify', '--strict', '-R', releaseRequirement, app], { stdio: 'pipe', timeout: 15_000 });
+    return true;
+  } catch { return false; }
+}
+
 export function macosAppMatches(app, metadata) {
   try {
     if (sealedFiles.some(file => sha256(readFileSync(path.join(app, file))) !== metadata.files[file])) return false;
@@ -101,6 +115,10 @@ export async function installMacosApp(root, app, { register = true } = {}) {
       try {
         execFileSync('/usr/bin/ditto', ['-x', '-k', archive, staging], { stdio: 'pipe', timeout: 30_000 });
         if (!macosAppMatches(next, metadata)) throw new Error('The bundled Computer Use helper signature or contents are invalid.');
+        // A disposable copy that LaunchServices never sees (register: false) cannot touch the grant row.
+        if (register && !allowUnpinnedHelper(process.env) && !isReleaseSigned(next)) {
+          throw new Error('The bundled Computer Use helper is not signed with the release certificate. Installing it would make macOS ignore the existing Accessibility and Screen Recording grants. For a development build, set PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1 and grant access again afterwards.');
+        }
         if (existsSync(app)) { await fs.rename(app, old); movedOld = true; }
         try { await fs.rename(next, app); }
         catch (error) { if (movedOld) await fs.rename(old, app); throw error; }

@@ -8,7 +8,9 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { bundledMacosApp, sha256, macosHelperIsCurrent, appName } from './macos-bundle.mjs';
+import { execFileSync } from 'node:child_process';
+import { bundledMacosApp, sha256, macosHelperIsCurrent, appName, bundleId, isReleaseSigned } from './macos-bundle.mjs';
+import { packageMacosApp } from './package-macos-app.mjs';
 
 if (process.platform !== 'darwin') {
   console.log('SKIP real macOS installer checks');
@@ -48,7 +50,16 @@ try {
     }
   `);
   const installed = path.join(temp, 'Applications', appName);
+  // Real installs take only release-signed helpers. A local ad-hoc build of this package opts in, so the
+  // repair cases below still run; the pin itself is checked at the end with packages built for it.
+  const releaseSignedApp = async source => {
+    const dir = await fs.mkdtemp(path.join(temp, 'probe-'));
+    execFileSync('/usr/bin/ditto', ['-x', '-k', bundledMacosApp(source).archive, dir], { stdio: 'pipe' });
+    return isReleaseSigned(path.join(dir, appName));
+  };
+  const rootReleaseSigned = await releaseSignedApp(root);
   const env = { ...process.env, CU_TEST_TRACE: trace, PI_COMPUTER_USE_HELPER_APP_PATH: installed,
+    PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE: rootReleaseSigned ? '0' : '1',
     // These old knobs must not opt runtime back into signing or key discovery.
     PI_COMPUTER_USE_CODESIGN_IDENTITY: 'must-never-use-user-key', PI_COMPUTER_USE_NO_SIGN: '0',
     PI_COMPUTER_USE_ALLOW_BUILD: '1' };
@@ -135,6 +146,29 @@ try {
   assert.ok(commands.every(cmd => !['security','openssl','xcrun'].includes(path.basename(cmd.command))
     && (path.basename(cmd.command) !== 'codesign' || cmd.args[0] === '--verify')));
   console.log('PASS concurrent repair / stale-lock recovery / no runtime signing or keychain commands');
+
+  // Pin: an ad-hoc helper with the same bundle id must not replace anything unless development opts in.
+  const adhoc = path.join(temp, 'adhoc-package');
+  for (const rel of ['scripts', 'src/vendor/platform/macos', 'package.json']) {
+    await fs.cp(path.join(root, rel), path.join(adhoc, rel), { recursive: true });
+  }
+  await packageMacosApp(path.join(root, 'prebuilt/macos', process.arch, 'bridge'), path.join(adhoc, 'prebuilt/macos', process.arch),
+    packageVersion, ['--force', '-i', bundleId, '--timestamp=none', '--sign', '-']);
+  assert.equal(await releaseSignedApp(adhoc), false);
+  const fresh = path.join(temp, 'Fresh', appName);
+  const refusedFresh = run(['--runtime'], adhoc, { PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE: '0', PI_COMPUTER_USE_HELPER_APP_PATH: fresh });
+  assert.notEqual(refusedFresh.status, 0);
+  assert.match(refusedFresh.stderr, /not signed with the release certificate/);
+  assert.equal(await fs.access(fresh).then(() => true, () => false), false, 'a refused first install must not leave an app');
+  const allowedFresh = run(['--runtime'], adhoc, { PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE: '1', PI_COMPUTER_USE_HELPER_APP_PATH: fresh });
+  assert.equal(allowedFresh.status, 0, allowedFresh.stderr);
+  if (rootReleaseSigned) {
+    const before = await image();
+    const refused = run(['--runtime'], adhoc, { PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE: '0' });
+    assert.notEqual(refused.status, 0);
+    assert.equal(await image(), before, 'a refused helper must leave the release one in place');
+  }
+  console.log(`PASS ad-hoc helper refused unless PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1${rootReleaseSigned ? '; release helper accepted above' : ' (release-signed acceptance not covered: this package is a local ad-hoc build)'}`);
 } finally {
   await fs.rm(temp, { recursive: true, force: true });
 }
