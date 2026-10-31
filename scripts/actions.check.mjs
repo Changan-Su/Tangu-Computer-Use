@@ -265,6 +265,27 @@ console.log('✓ scroll:沿用本批 click / moveMouse 的位置、单独出现�
 }
 console.log('✓ 按坐标的左键点击 / scroll 先走后台、画面没变才上前台;drag、右键、按 ref 的与严格后台不变');
 
+// ── 8) 网页里的语义控件,单次左键先走 AXPress(Forsion patch):别的情况都走原路 ──
+{
+  const webArea = { role: 'AXWebArea' };
+  const group = { role: 'AXGroup', parent: webArea };
+  const node = (over = {}) => ({ wireRef: 'w1', role: 'AXButton', title: 'Save', description: '', canPress: true, canFocus: false, canSetValue: false, isTextInput: false, pictureOnly: false, actions: ['AXPress'], children: [], parent: group, ...over });
+  const env = (n, headless = false) => ({ headless, node: () => n, center: () => ({ x: 5, y: 5 }), validatePoint: () => {} });
+  const click = (n, { action = {}, state = {}, headless = false } = {}) => prepareAction({ action: 'click', ref: '@e1', ...action }, { currentFocus: false, ...state }, env(n, headless)).accessibilityPress;
+  assert.equal(typeof click(node()), 'string', 'a web control that lists AXPress qualifies, however deep');
+  assert.equal(click(node(), { action: { action: 'press' } }), click(node()), 'press and click name the same element');
+  assert.equal(click(node({ wireRef: 'w2' }), { action: { ref: '@e9' } }), click(node()), 'a new ref on the same element is the same element');
+  assert.notEqual(click(node({ title: 'Cancel' })), click(node()), 'another control is another element');
+  assert.equal(click(node({ parent: { role: 'AXGroup', parent: { role: 'AXWindow' } } })), undefined, 'outside web content the helper already presses it');
+  assert.equal(click(node({ canPress: false })), undefined, 'no AXPress: nothing to send');
+  assert.equal(click(node({ isTextInput: true })), undefined, 'a text field needs a real click to take focus');
+  assert.equal(click(node(), { action: { clickCount: 2 } }), undefined, 'AXPress cannot double click');
+  assert.equal(click(node(), { action: { button: 'right' } }), undefined, 'AXPress cannot right click');
+  assert.equal(click(node(), { state: { keysFollow: true } }), undefined, 'keys following in this batch need the window in front');
+  assert.equal(click(node(), { headless: true }), undefined, 'strict background is ax_only already');
+  console.log('✓ 网页语义控件的 AXPress 判据');
+}
+
 // ── 4) 判据 ──
 assert.equal(followsFocus({ action: 'keypress', keys: ['UP'] }), true);
 assert.equal(followsFocus({ action: 'typeText', text: 'x' }), true);

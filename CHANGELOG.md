@@ -2,6 +2,10 @@
 
 ## 未发布
 
+- 网页里的按钮、链接这类语义控件，单次左键先在后台用无障碍按下，不再每次抢前台。真实点击只在模型对同一元素再按一次时才发，不自动重放，免得重复提交。没有无障碍动作的元素、右键、双击、后面跟着打字的点击照旧。
+- 第一次读 Electron、Chrome 这类 App 时，等网页内容进无障碍树再返回（约 2.5 秒，每个进程只等一次）。以前读到的是一个空壳。
+- Web buttons, links and similar controls now take a plain left click in the background through accessibility instead of taking the foreground every time. A real click goes out only when the model presses the same element again; nothing is replayed automatically, so nothing submits twice. Elements with no accessibility action, right and double clicks, and clicks followed by typing are unchanged.
+- The first read of an Electron or Chrome-family app now waits for web content to reach the accessibility tree (about 2.5 s, once per process). It used to return an empty shell.
 - 安装 helper 时核对发布证书（`certificate root = H"dab3a30e…"`），签名不对就拒装、已装的那份原样不动。原来只核对 bundle id：同 id 的 ad-hoc / 开发证书 helper 能盖掉发布版，macOS 里那条授权记录还是旧签名的，开关开着、helper 却读到「未授权」，只能在系统设置里删掉再重新加。开发构建要装就设 `PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1`，装完重新授权。只往临时位置解压、不登记 LaunchServices 的那种（`register: false`）不受影响。`check:installer` 加了这一段。
 
 ## 0.7.2-jev.6 — 2026-10-17（开发实验 / development experiment）
