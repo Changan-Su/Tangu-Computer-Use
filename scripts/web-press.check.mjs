@@ -6,7 +6,7 @@
  *
  *   ① 全新启动的替身,find_roots 之后立刻 observe_ui,读得到网页按钮(不是空壳)
  *   ② 按钮走 ax_only:页面收到一次 isTrusted 的 click,前台没变,结果里有 AXPress 那句提示
- *   ③ 对同一元素再按一次:走原路(background → foreground_required → foreground)
+ *   ③ 对同一元素再按一次:直接走真实点击,不先走后台(后台那下可能落地,再补一次就按了两下)
  *   ④ 换一个元素:又走回 ax_only
  *   ⑤ helper 报 stale_ref 的那次没送达,再按同一元素还是 ax_only,不算重复
  *   ⑥ 再 observe_ui 不再等
@@ -175,7 +175,7 @@ try {
   policies.length = 0
   await press('Probe Save')
   const repeatPolicies = [...policies]
-  check(`③ 再按同一元素走真实点击(${repeatPolicies.join(' → ')})`, () => assert.deepEqual(repeatPolicies, ['background', 'foreground']))
+  check(`③ 再按同一元素走真实点击(${repeatPolicies.join(' → ')})`, () => { assert.deepEqual(repeatPolicies, ['foreground']); assert.equal(clicks('save').length, 1, 'the repeat reached the page before the real click') })
 
   policies.length = 0
   await press('Probe Other')

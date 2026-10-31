@@ -174,6 +174,8 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
   starts it at `ax_only` instead of `background`. Not for right / double clicks, not when keys follow in the batch (AXPress gives no
   focus), not when the control lists no AXPress: under React-style delegation a plain div, `tabindex` or `role=row` has none.
   Do not simply change `initialPolicy`: without AXPress `ax_only` falls back to a pid click that can be swallowed.
+  A repeat on the same element skips `background` and goes straight to `foreground`: through `background` a `click` can land as a
+  hover-less pid click, change nothing on screen, and be replayed, which is two presses for one call (live `cuwebdead` through `jev_ui`).
 - **Never replayed automatically.** `canRetryInForeground` stays false for refs. An AXPress reports `unknown` whether or not it did
   anything, so a replay could submit twice. Instead `lastAccessibilityPress` notices the model pressing the same element again in the same
   window and sends that one down the original path, and `executionNote` tells the model so. It is recorded only once the helper answered:

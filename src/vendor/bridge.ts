@@ -1233,7 +1233,9 @@ async function helperAct(
 		? `${target.pid}:${target.windowId}:${action.accessibilityPress}`
 		: undefined;
 	const accessibilityPress = pressKey !== undefined && pressKey !== lastAccessibilityPress;
-	if ((action.usesCurrentFocus || action.needsForeground || (pointer && (backgroundPointerMisses.get(pointerKey) ?? 0) >= 2)) && !headless) {
+	// The repeat is the real click the result promised. Through background first it can land as a hover-less pid click and then be replayed.
+	const repeatedPress = pressKey !== undefined && !accessibilityPress;
+	if ((action.usesCurrentFocus || action.needsForeground || repeatedPress || (pointer && (backgroundPointerMisses.get(pointerKey) ?? 0) >= 2)) && !headless) {
 		const sent = await wheelAction(target, action, signal);
 		const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, sent, "foreground"), { signal, timeoutMs }));
 		const trace = executionTraceFromAct(foreground, "foreground");
