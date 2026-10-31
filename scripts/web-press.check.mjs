@@ -10,7 +10,7 @@
  *   ④ 换一个元素:又走回 ax_only
  *   ⑤ helper 报 stale_ref 的那次没送达,再按同一元素还是 ax_only,不算重复
  *   ⑥ 再 observe_ui 不再等
- *   ⑦ 按完树一点没变(页面被盖住时就是这样,这里用「按已经有焦点、点了没反应的按钮」造):提窗口、带截图、不叫模型再按
+ *   ⑦ 按完网页内容一点没变(页面被盖住时就是这样,这里用「按已经有焦点、点了没反应的按钮」造):提窗口、带截图、不叫模型再按
  *
  * 不动真鼠标、不抢前台:bridge 和 helper 之间夹一层代理,记下每个 act 的 policy 和激活请求,policy = foreground 的 act
  * 和激活都不转发、直接回一个假结果。所以 ③ ⑦ 证明的是「决定这么做」,不是真实点击、也不是激活后的截图(那个看 web-stale.probe.mjs)。
@@ -215,7 +215,7 @@ try {
   const unchanged = await press('Probe Still')
   const stillPolicies = [...policies]
   await sleep(500)
-  check(`⑦ 按完树没变:提窗口、带截图、不叫模型再按(${stillPolicies.join(' → ')})`, () => {
+  check(`⑦ 按完网页没变:提窗口、带截图、不叫模型再按(${stillPolicies.join(' → ')})`, () => {
     assert.deepEqual(stillPolicies, ['ax_only'])
     assert.equal(clicks('still').length, 1)
     assert.deepEqual(activations, [child.pid], 'the window was not brought forward')

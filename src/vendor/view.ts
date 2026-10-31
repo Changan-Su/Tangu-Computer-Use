@@ -129,6 +129,20 @@ export function changesBetween(base: Outline, next: Outline): OutlineDiff {
 	};
 }
 
+/**
+ * Forsion patch, see UPSTREAM.md. Whether anything inside web content changed. Window chrome changes by itself (a covered
+ * Electron window grew a group under its fullscreen button on the press, live 10-31), so it says nothing about the page.
+ */
+export function webContentChanged(base: Outline, next: Outline): boolean {
+	const inWebContent = (outline: Outline, ref: string): boolean => {
+		for (let node = outline.nodes.find((candidate) => candidate.ref === ref); node; node = node.parent) {
+			if (node.role === "AXWebArea") return true;
+		}
+		return false;
+	};
+	return changesBetween(base, next).changes.some((change) => inWebContent(change.type === "removed" ? base : next, change.ref));
+}
+
 function label(node: SerializedOutlineNode): string {
 	return node.title || node.description || node.value || node.identifier || node.text.map((item) => item.string).join(" ").trim() || node.role || "node";
 }

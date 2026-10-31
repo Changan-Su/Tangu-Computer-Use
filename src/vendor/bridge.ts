@@ -22,7 +22,7 @@ import type { PermissionStatus } from "./permissions.ts";
 import { ResourceScheduler } from "./runtime.ts";
 import { scoreWindow, shouldPreferForegroundModalWindow } from "./root-selection.ts";
 import { SavedStates, type CurrentCapture, type CurrentTarget, type OperationState } from "./state.ts";
-import { changesBetween, renderChanges, stabilizeRefs } from "./view.ts";
+import { changesBetween, renderChanges, stabilizeRefs, webContentChanged } from "./view.ts";
 export type { ActParams, EvaluateBrowserParams, ExpandUiParams, ImageMode, InspectUiParams, LaunchBrowserParams, FindParams, MouseButtonName, NavigateBrowserParams, ObserveParams, ObserveTargetParams, ReadTextParams, RootSelector, SearchUiParams, StateTargetParams, UiAction, WaitForParams } from "./contract.ts";
 
 interface ActivationFlags {
@@ -2111,9 +2111,9 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 			}
 			let capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);
 			// Forsion patch, see UPSTREAM.md. A covered page takes an AXPress but its tree and its picture both stop updating,
-			// so an unchanged tree says nothing and a retry would press twice. Only activating brings the picture back.
+			// so an unchanged page says nothing and a retry would press twice. Only activating brings the picture back.
 			const pressed = (execution.steps?.length ? execution.steps : [execution]).filter((step) => step.accessibilityPress);
-			if (pressed.length > 0 && !execution.rootDelta?.length && (!execution.error || execution.error.code === "postcondition_failed") && changesBetween(baseView.outline, capture.outline).changes.length === 0) {
+			if (pressed.length > 0 && !execution.rootDelta?.length && (!execution.error || execution.error.code === "postcondition_failed") && !webContentChanged(baseView.outline, capture.outline)) {
 				const activated = await currentPlatformBackend.activateWindow?.(nativeWindowRequest(target), signal);
 				if (activated) {
 					await sleep(COVERED_PAGE_REPAINT_MS, signal);

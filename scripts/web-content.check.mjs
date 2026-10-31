@@ -18,14 +18,14 @@ let mod;
 try {
   const outfile = path.join(temp, 'bundle.mjs');
   await build({
-    stdin: { contents: "export * from './src/webContent.ts'\nexport { executionNote } from './src/foregroundNote.ts'", resolveDir: root, loader: 'ts' },
+    stdin: { contents: "export * from './src/webContent.ts'\nexport { executionNote } from './src/foregroundNote.ts'\nexport { webContentChanged } from './src/vendor/view.ts'", resolveDir: root, loader: 'ts' },
     bundle: true, platform: 'node', format: 'esm', target: 'node20', outfile, logLevel: 'silent', external: ['node:*'],
   });
   mod = await import(pathToFileURL(outfile).href);
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
-const { appBundleOf, hasChromiumFramework, hasWebArea, noteContact, webContentWait, executionNote, WEB_CONTENT_SETTLE_MS } = mod;
+const { appBundleOf, hasChromiumFramework, hasWebArea, noteContact, webContentWait, executionNote, webContentChanged, WEB_CONTENT_SETTLE_MS } = mod;
 
 assert.equal(appBundleOf('/Applications/Visual Studio Code.app/Contents/MacOS/Electron'), '/Applications/Visual Studio Code.app');
 assert.equal(appBundleOf('/Applications/Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper'), '/Applications/Code.app', 'the outer app, not the helper');
@@ -72,3 +72,20 @@ assert.doesNotMatch(executionNote(details({ accessibilityPress: true, staleAcces
 assert.match(executionNote(details({ accessibilityPress: true, staleAccessibilityTree: 'no_screenshot' })), /Do not press again/);
 assert.doesNotMatch(executionNote(details({ accessibilityPress: true, staleAccessibilityTree: 'no_screenshot' })), /screenshot is current/);
 console.log('✓ 模型提示');
+
+const outline = (extra = {}) => {
+  const window = { ref: '@e1', role: 'AXWindow', children: [] };
+  const fullscreen = { ref: '@e2', role: 'AXButton', parent: window };
+  const web = { ref: '@e3', role: 'AXWebArea', parent: window };
+  const status = { ref: '@e4', role: 'AXStaticText', value: extra.status ?? 'pending', parent: web };
+  const nodes = [window, fullscreen, web, status];
+  if (extra.chrome) nodes.push({ ref: '@e5', role: 'AXGroup', parent: fullscreen });
+  if (extra.page) nodes.push({ ref: '@e6', role: 'AXButton', parent: web });
+  return { root: window, nodes };
+};
+assert.equal(webContentChanged(outline(), outline()), false);
+assert.equal(webContentChanged(outline(), outline({ chrome: true })), false, 'live cuwebcovered: chrome grew a group, the page did not change');
+assert.equal(webContentChanged(outline(), outline({ status: 'saved' })), true);
+assert.equal(webContentChanged(outline(), outline({ page: true })), true);
+assert.equal(webContentChanged(outline({ page: true }), outline()), true, 'a removed node is looked up in the old outline');
+console.log('✓ 只看网页区域的变化');

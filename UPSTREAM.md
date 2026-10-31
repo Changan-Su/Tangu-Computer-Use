@@ -183,8 +183,8 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
 - **A covered page.** A fully covered window goes `document.visibilityState === 'hidden'`. An AXPress still lands there, but neither the tree
   nor the picture updates, and nothing warns beforehand: the helper still reports `isOnscreen`. A press that landed then read as one that
   missed and the model pressed again, twice for one request (live `cuweb`, one run in seven; 79 probe rounds: tree new in all 75 `visible`
-  rounds, old in all 4 `hidden` ones, and a focus change in the tree tracked that exactly). So when nothing in the tree changed after an
-  AXPress, `performDesktopTransaction` calls `activateWindow` (the helper's existing `restoreUserFocus`, which brings the page back, then
+  rounds, old in all 4 `hidden` ones, and a focus change in the tree tracked that exactly). So when nothing inside `AXWebArea` changed after an
+  AXPress (window chrome changes on its own, which is `webContentChanged` in `view.ts`), `performDesktopTransaction` calls `activateWindow` (the helper's existing `restoreUserFocus`, which brings the page back, then
   `focusWindow` for the right window of a multi-window app; `restoreUserFocus` only matches titles), waits `COVERED_PAGE_REPAINT_MS` and captures again with the screenshot attached. Measured: the screenshot before activating
   is old, the one about 1 s after is new, and the tree sometimes stays old until the page next changes. It also runs after a failed
   `expect`, the same stale tree under another name, and not when `rootDelta` shows a new window opened instead. If the app cannot be activated nothing certifies the press, so
