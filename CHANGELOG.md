@@ -1,7 +1,11 @@
 # 更新日志
 
-## 未发布
+## 0.7.2 — 2026-10-31
 
+- 这是 0.7.1 之后的第一个正式版，下面 0.7.2-jev.1 到 jev.6 的内容都随这一版发布。macOS 的 helper 协议号从 16 升到 18，插件更新后会重启还在运行的旧 helper。
+- Windows：严格后台模式下不再改变前台窗口；按住拖动时按节奏投递移动事件，松手结果不确定时停止后面的输入。
+- First stable release since 0.7.1. It includes everything in the 0.7.2-jev.1 to jev.6 development builds below. The macOS helper protocol goes from 16 to 18, and the plugin restarts a running older helper after it updates.
+- Windows: strict background mode no longer changes the foreground window. Held drags send their motion at a steady pace, and input stops if the release is uncertain.
 - 网页里的按钮、链接这类语义控件，单次左键先在后台用无障碍按下，不再每次抢前台。真实点击只在模型对同一元素再按一次时才发，不自动重放，免得重复提交。没有无障碍动作的元素、右键、双击、后面跟着打字的点击照旧。
 - 第一次读 Electron、Chrome 这类 App 时，等网页内容进无障碍树再返回（约 2.5 秒，每个进程只等一次）。以前读到的是一个空壳。
 - Web buttons, links and similar controls now take a plain left click in the background through accessibility instead of taking the foreground every time. A real click goes out only when the model presses the same element again; nothing is replayed automatically, so nothing submits twice. Elements with no accessibility action, right and double clicks, and clicks followed by typing are unchanged.
