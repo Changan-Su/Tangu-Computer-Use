@@ -68,7 +68,7 @@ jobs:
 
   publish:
     needs: [build-windows, build-linux]
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: write # 上传 Release 资产
       id-token: write # npm trusted publishing(OIDC)
