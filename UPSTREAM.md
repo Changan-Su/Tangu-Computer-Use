@@ -161,6 +161,30 @@ app (`harness-runs/2026-10-11/`), clicks read off the 1520x1144 capture landed o
 (64,382 / 64,384 for a centre at 64,384), same as off 1020x767 and 899x677. The `[image]` line stating the
 size is what makes that work. A short-side cap of 768 was tried and removed.
 
+### Web content on macOS (vendor TS patch, after 0.7.2-jev.6)
+
+`src/vendor/actions.ts` and `src/vendor/bridge.ts` carry this too; **a re-sync wipes it, replay it**. `npm run check:actions` and
+`npm run check:web-content` go red if it is gone; `npm run check:web-press` proves it on a real Electron window.
+
+- **One background AXPress for web controls.** `requiresPointerFocus` in `bridge.swift` refuses AXPress inside `AXWebArea` unless the
+  policy is `ax_only`, so every web click escalated to the foreground. Upstream gives no bug for it, and it is not a system limit:
+  measured 10-31, `<button>`, links, `role=button` and checkboxes take AXPress with a window in the background (Electron 40 48/48,
+  Chrome for Testing 18/18, VS Code 4/4), the page sees `isTrusted` pointer, mouse and click events, focus and the real cursor stay put.
+  `prepareAction` sets `accessibilityPress` (the element's identity) for a plain left click by ref on such a control, and `helperAct`
+  starts it at `ax_only` instead of `background`. Not for right / double clicks, not when keys follow in the batch (AXPress gives no
+  focus), not when the control lists no AXPress: under React-style delegation a plain div, `tabindex` or `role=row` has none.
+  Do not simply change `initialPolicy`: without AXPress `ax_only` falls back to a pid click that can be swallowed.
+- **Never replayed automatically.** `canRetryInForeground` stays false for refs. An AXPress reports `unknown` whether or not it did
+  anything, so a replay could submit twice. Instead `lastAccessibilityPress` notices the model pressing the same element again in the same
+  window and sends that one down the original path, and `executionNote` tells the model so. It is recorded only once the helper answered:
+  a `stale_ref` delivered nothing and must not count as the first press.
+- **Waiting for web content on first read.** `performLook` reads once more when `src/webContent.ts` says the first read of a Chromium app
+  came back as a shell. The helper's own wait is 0.35 s and browsers only; the web tree needs about 2.1 s from first contact.
+  `executeFind` starts the clock for every root it lists, because `listWindows` is what turns accessibility on.
+
+Not touched, and native: `backgroundPressAtPoint` still skips web content for coordinate clicks, and `setText` in web content still goes
+through key events, which do not land in the background (measured). `AXValue` writes there are unmeasured.
+
 ### PACKAGE_ROOT — no longer patched, but still guarded
 `platform/{macos,windows,linux}/helper.ts` locate `scripts/setup-helper.mjs` via
 `path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..")`. Correct in the source

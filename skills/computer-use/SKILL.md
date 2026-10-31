@@ -159,6 +159,9 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
   target app first and presses via accessibility when it lands on a real control. Web content, text
   fields, right/middle clicks and double clicks still need the foreground. So prefer `ref` when you
   have one (it is more precise), but do not avoid a coordinate click just to stay in the background.
+- A left click by `ref` on a web button, link or other control that lists `AXPress` stays in the
+  background too. The result says so. If the returned state shows nothing changed, press the same
+  element again: the repeat is a real click and takes the foreground. Do not retry it any other way.
 
 ## Show the user what you are doing
 

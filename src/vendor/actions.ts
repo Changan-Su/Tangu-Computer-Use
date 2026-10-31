@@ -5,7 +5,7 @@ import { toFiniteNumber } from "./platform/coerce.ts";
 export type ActionTarget = { ref: string } | { x: number; y: number } | { focus: { x: number; y: number } };
 
 export type PreparedAction =
-	| { action: "press" | "click"; target: ActionTarget; params: { button?: MouseButtonName; clickCount?: number }; establishesFocus: boolean; usesCurrentFocus: false; needsForeground: boolean }
+	| { action: "press" | "click"; target: ActionTarget; params: { button?: MouseButtonName; clickCount?: number }; accessibilityPress?: string; establishesFocus: boolean; usesCurrentFocus: false; needsForeground: boolean }
 	| { action: "setText"; target: ActionTarget; params: { text: string }; establishesFocus: false; usesCurrentFocus: false; needsForeground: false }
 	| { action: "typeText"; target: ActionTarget; params: { text: string }; establishesFocus: false; usesCurrentFocus: boolean; needsForeground: false }
 	| { action: "keypress"; target: ActionTarget; params: { keys: string[] }; establishesFocus: false; usesCurrentFocus: boolean; needsForeground: false }
@@ -153,6 +153,23 @@ function containsEditable(node: OutlineNode): boolean {
 	return node.children.some(containsEditable);
 }
 
+/**
+ * Forsion patch, see UPSTREAM.md. Which element a plain left click would AXPress in the background: a control inside
+ * web content that advertises AXPress. Refs change on every observation, so the element is named by what it is;
+ * the bridge compares this to notice the model pressing the same element again.
+ * Keyboard input following in this batch needs a real click: AXPress gives neither focus nor the foreground.
+ */
+function accessibilityPressIdentity(action: UiAction, target: ActionTarget, state: ActionState, env: ActionEnvironment): string | undefined {
+	if (env.headless || !action.ref?.trim() || !("ref" in target) || state.keysFollow) return undefined;
+	if (mouseButton(action.button) !== "left" || clickCount(action.clickCount) !== 1) return undefined;
+	const node = env.node(action.ref.trim());
+	if (!node.canPress) return undefined;
+	for (let parent = node.parent; parent; parent = parent.parent) {
+		if (parent.role === "AXWebArea") return [node.role, node.title, node.description].join("\u0000");
+	}
+	return undefined;
+}
+
 export function prepareAction(action: UiAction, state: ActionState, env: ActionEnvironment): PreparedAction {
 	const operation = action.action;
 	const usesCurrentFocus = !env.headless && isKeyboard(operation) && !action.ref
@@ -173,7 +190,7 @@ export function prepareAction(action: UiAction, state: ActionState, env: ActionE
 
 	switch (operation) {
 		case "press":
-		case "click": return { action: operation, target, params: { button: mouseButton(action.button), clickCount: clickCount(action.clickCount) }, establishesFocus, usesCurrentFocus: false, needsForeground };
+		case "click": return { action: operation, target, params: { button: mouseButton(action.button), clickCount: clickCount(action.clickCount) }, accessibilityPress: accessibilityPressIdentity(action, target, state, env), establishesFocus, usesCurrentFocus: false, needsForeground };
 		case "setText": return { action: operation, target, params: { text: action.text ?? "" }, establishesFocus: false, usesCurrentFocus: false, needsForeground: false };
 		case "typeText": return { action: operation, target, params: { text: action.text ?? "" }, establishesFocus: false, usesCurrentFocus, needsForeground: false };
 		case "keypress": return { action: operation, target, params: { keys: keys(action.keys) }, establishesFocus: false, usesCurrentFocus, needsForeground: false };

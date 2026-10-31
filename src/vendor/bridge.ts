@@ -10,6 +10,7 @@ import { canRetryInForeground, isBackgroundPointer, keysFollow, needsFrontmostPr
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
 import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
 import { applyWheelFix, wheelFix } from "../wheel.ts"; // Forsion patch, see UPSTREAM.md
+import { noteContact, webContentWait } from "../webContent.ts"; // Forsion patch, see UPSTREAM.md
 import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
 import { foldToBudget, graftScopedOutline, nodeByRef, outlineNodeLabel, outlineNodePath, rankedTextMatch, restoreOutline, searchOutline, searchOutlineRanked, serializeOutline, serializeOutlineNodeShallow, serializeOutlineSearchMatch, type LookResponse, type Outline, type OutlineChange, type OutlineNode, type OutlineSearchMatch, type SerializedOutline, type SerializedOutlineNode, type SerializedOutlineSearchMatch } from "./outline.ts";
 import { applyOutputEnvelope, boundToolError, clearStoredOutputs, readStoredOutput, UI_TEXT_PAGE_CHARS } from "./output.ts";
@@ -56,6 +57,7 @@ interface ExecutionTrace {
 	actionCount?: number;
 	stoppedAt?: number;
 	backgroundFirst?: boolean;
+	accessibilityPress?: boolean;
 	escalatedToForeground?: boolean;
 	escalationReason?: string;
 	backgroundAttempt?: { outcome: "foreground_required" | "didnt"; reason: string };
@@ -972,7 +974,7 @@ function captureForLook(look: LookResponse): CurrentCapture {
 
 async function performLook(target: ResolvedTarget, options: { readText: "auto" | "always" | "never"; baseLookId?: string; scopeRef?: string; maxDimension?: number; includeImage?: boolean }, signal?: AbortSignal): Promise<LookResponse> {
 	if ((!Number.isFinite(target.windowId) || target.windowId <= 0) && !target.nativeWindowRef) throw new Error(`Current platform requires a stable root id to observe '${target.windowTitle}'. Call find_roots and select a root with a stable id.`);
-	return await currentPlatformBackend.observe({
+	const observe = () => currentPlatformBackend.observe({
 		target: nativeWindowRequest(target),
 		baseLookId: options.baseLookId,
 		readText: options.readText,
@@ -980,6 +982,12 @@ async function performLook(target: ResolvedTarget, options: { readText: "auto" |
 		maxDimension: options.maxDimension,
 		includeImage: options.includeImage,
 	}, { signal, timeoutMs: LOOK_TIMEOUT_MS });
+	const look = await observe();
+	// Forsion patch, see UPSTREAM.md: the first read of a Chromium app comes back before its web content exists.
+	const wait = currentPlatformBackend.name === "macos" ? await webContentWait(target.pid, look.outline) : 0;
+	if (wait <= 0) return look;
+	await sleep(wait, signal);
+	return await observe();
 }
 
 function noteWindowForTarget(target: ResolvedTarget | CurrentTarget, look?: LookResponse) {
@@ -1195,6 +1203,16 @@ async function wheelAction(target: ResolvedTarget, action: NativePreparedAction,
  */
 const backgroundPointerMisses = new Map<string, number>();
 
+/**
+ * Forsion patch, see UPSTREAM.md. The element the last AXPress went to. An AXPress that lands can look exactly like one
+ * that did nothing, and replaying it could submit twice, so nothing is retried here: the press stays one press, and the
+ * model pressing the same element again is what sends a real click. That click stays the route for the element until
+ * another one is pressed.
+ * ponytail: "same element" does not look at whether the screen changed, so a stepper pressed repeatedly goes to the
+ * foreground from its second press, as every web click did before this. Compare outlines if that matters.
+ */
+let lastAccessibilityPress: string | undefined;
+
 async function helperAct(
 	target: ResolvedTarget,
 	action: NativePreparedAction,
@@ -1211,6 +1229,10 @@ async function helperAct(
 	const timeoutMs = Math.max(COMMAND_TIMEOUT_MS, textTimeout);
 	const pointer = isBackgroundPointer(action);
 	const pointerKey = `${target.pid}:${action.action === "scroll" ? "scroll" : "click"}`;
+	const pressKey = currentPlatformBackend.name === "macos" && (action.action === "press" || action.action === "click") && action.accessibilityPress !== undefined
+		? `${target.pid}:${target.windowId}:${action.accessibilityPress}`
+		: undefined;
+	const accessibilityPress = pressKey !== undefined && pressKey !== lastAccessibilityPress;
 	if ((action.usesCurrentFocus || action.needsForeground || (pointer && (backgroundPointerMisses.get(pointerKey) ?? 0) >= 2)) && !headless) {
 		const sent = await wheelAction(target, action, signal);
 		const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, sent, "foreground"), { signal, timeoutMs }));
@@ -1219,9 +1241,10 @@ async function helperAct(
 		return trace;
 	}
 	try {
-		const initialPolicy = headless ? "ax_only" : "background";
+		const initialPolicy = headless || accessibilityPress ? "ax_only" : "background";
 		const sent = pointer ? await wheelAction(target, action, signal, initialPolicy) : action;
 		const result = checked(await currentPlatformBackend.act(helperActRequest(target, sent, initialPolicy), { signal, timeoutMs }));
+		if (accessibilityPress) lastAccessibilityPress = pressKey; // only once the helper answered: a stale ref sent nothing
 		if (pointer) backgroundPointerMisses.set(pointerKey, pointerMissesAfter(backgroundPointerMisses.get(pointerKey) ?? 0, result.outcome));
 		if (canRetryInForeground(action, result.outcome, headless)) {
 			const retry = pointer ? await wheelAction(target, action, signal) : action;
@@ -1237,6 +1260,7 @@ async function helperAct(
 		}
 		const trace = executionTraceFromAct(result, "background");
 		trace.backgroundFirst = true;
+		trace.accessibilityPress = accessibilityPress;
 		return trace;
 	} catch (error) {
 		const code = (error as Error & { code?: string })?.code;
@@ -1331,7 +1355,9 @@ function collectBroadWindowDetails(roots: HelperWindow[], config: ReturnType<typ
 
 async function windowDetailsForFind(query: FindParams, config: ReturnType<typeof getComputerUseConfig>, signal?: AbortSignal): Promise<ListWindowsDetails["windows"]> {
 	if (!query.app && !query.bundleId && !Number.isFinite(query.pid)) {
-		return collectBroadWindowDetails(await currentPlatformBackend.listRoots({}, signal), config);
+		const roots = await currentPlatformBackend.listRoots({}, signal);
+		for (const root of roots) if (root.pid !== undefined) noteContact(root.pid); // Forsion patch, see UPSTREAM.md
+		return collectBroadWindowDetails(roots, config);
 	}
 	const apps = (await listApps(signal)).filter((app) => appMatchesWindowQuery(app, query));
 	return await collectWindowDetails(apps, config, signal);

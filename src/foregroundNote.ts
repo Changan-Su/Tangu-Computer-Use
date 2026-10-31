@@ -20,6 +20,7 @@ interface ExecStep {
   outcome?: string;
   error?: { code?: string; message?: string };
   performed?: { delivery?: string; grounding?: string; verification?: string };
+  accessibilityPress?: boolean;
   escalatedToForeground?: boolean;
   escalationReason?: string;
   delivery?: string;
@@ -37,6 +38,7 @@ export function executionSummary(details: unknown) {
     outcome: s.outcome ?? 'unknown',
     delivery: s.delivery ?? s.performed?.delivery ?? 'unknown',
     policy: s.deliveryPolicy ?? 'unknown',
+    accessibilityPress: s.accessibilityPress || undefined,
     grounding: s.performed?.grounding,
     verification: s.performed?.verification,
     error: s.error ? { code: s.error.code, message: s.error.message?.slice(0, 384) } : undefined,
@@ -54,6 +56,7 @@ export function executionNote(details: unknown): string {
       ? 'The input was attempted; its effect is UNVERIFIED, not proven failed. A canvas can change without accessibility confirmation. Inspect the returned state before any retry, including a retry with another tool.'
       : 'The native executor confirmed this action; still verify the requested task result.';
   return `[execution] ${JSON.stringify(summary)}\n${meaning} Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\n`
+    + (summary.steps.some((s) => s.accessibilityPress) ? 'This press went through accessibility, in the background. If the returned state shows it changed nothing, press the same element again: the repeat goes out as a real click and takes the foreground.\n' : '')
     + (summary.strictBackground ? '[policy] Strict background is ON. Do not bypass it with shell, AppleScript, open/activate, or another tool. If foreground input is needed, ask the user to switch the app or change this setting.\n' : '');
 }
 
