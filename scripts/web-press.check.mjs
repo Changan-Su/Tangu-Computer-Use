@@ -10,11 +10,14 @@
  *   ④ 换一个元素:又走回 ax_only
  *   ⑤ helper 报 stale_ref 的那次没送达,再按同一元素还是 ax_only,不算重复
  *   ⑥ 再 observe_ui 不再等
+ *   ⑦ 按完树一点没变(页面被盖住时就是这样,这里用「按已经有焦点、点了没反应的按钮」造):提窗口、带截图、不叫模型再按
  *
- * 不动真鼠标、不抢前台:bridge 和 helper 之间夹一层代理,记下每个 act 的 policy,policy = foreground 的不转发、
- * 直接回一个假结果。所以 ③ 证明的是「决定走真实点击」,不是真实点击本身。
+ * 不动真鼠标、不抢前台:bridge 和 helper 之间夹一层代理,记下每个 act 的 policy 和激活请求,policy = foreground 的 act
+ * 和激活都不转发、直接回一个假结果。所以 ③ ⑦ 证明的是「决定这么做」,不是真实点击、也不是激活后的截图(那个看 web-stale.probe.mjs)。
+ * 替身被别的窗口完全盖住时 ② 的按压会走 ⑦ 的路径,② 会红:别让窗口压在屏幕右下角。
  *
  * 负对照(应该在 ① 和 ② 红):node scripts/web-press.check.mjs --root <没有这处改动的检出>
+ * 负对照(应该只在 ⑦ 红):--root <a855a69 的检出>
  *
  * 需要:macOS、协议版本和 vendor 一致且已授权的 helper(PI_COMPUTER_USE_HELPER_APP_PATH,缺省用已安装的那份)、
  * Electron(CU_ELECTRON,缺省用 Forsion-Genesis/desktop 装的那份)。
@@ -46,8 +49,9 @@ process.env.PI_CU_SOCKET_PATH = proxySock
 process.env.PI_COMPUTER_USE_HELPER_APP_PATH = helperApp
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>CU Web Press</title></head><body>
-<button id="save">Probe Save</button> <button id="other">Probe Other</button> <button id="stale">Probe Stale</button>
+<button id="save">Probe Save</button> <button id="other">Probe Other</button> <button id="stale">Probe Stale</button> <button id="focus">Probe Focus</button> <button id="still">Probe Still</button>
 <script>
+document.getElementById('focus').addEventListener('click', () => document.getElementById('still').focus())
 const post = (o) => fetch('/log', { method: 'POST', body: JSON.stringify(o), keepalive: true })
 document.addEventListener('click', (e) => post({ type: 'click', id: e.target.id, trusted: e.isTrusted }), true)
 addEventListener('load', () => post({ type: 'load' }))
@@ -70,6 +74,7 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r))
 
 // 代理:一次连接一条 JSON,和 helper 自己的协议一样
 const policies = []
+const activations = []
 let staleNextAct = false
 const proxy = net.createServer((client) => {
   let buffer = ''
@@ -81,6 +86,12 @@ const proxy = net.createServer((client) => {
     const line = buffer.slice(0, end); buffer = buffer.slice(end + 1)
     const request = JSON.parse(line)
     if (request.cmd === 'act') policies.push(request.policy)
+    if (request.cmd === 'restoreUserFocus') {
+      activations.push(request.pid)
+      client.end(`${JSON.stringify({ id: request.id, ok: true, result: { restored: true, appRestored: true, windowRestored: false } })}\n`)
+      return
+    }
+    if (request.cmd === 'focusWindow') { client.end(`${JSON.stringify({ id: request.id, ok: true, result: { focused: true } })}\n`); return }
     if (request.cmd === 'act' && staleNextAct) {
       staleNextAct = false
       client.end(`${JSON.stringify({ id: request.id, ok: false, error: { code: 'stale_ref', message: 'Element reference is stale' } })}\n`)
@@ -169,6 +180,7 @@ try {
     assert.equal(pressed.details.execution.steps?.[0]?.delivery ?? pressed.details.execution.delivery, 'ax')
     assert.equal(pressed.details.execution.steps?.[0]?.accessibilityPress ?? pressed.details.execution.accessibilityPress, true)
     assert.match(bridge.executionNote(pressed.details), /press the same element again/, 'the model is not told what to do next')
+    assert.deepEqual(activations, [], 'the tree changed, so nothing should have come forward')
   })
   check(`② 前台没变(${frontBefore.appName} → ${frontAfter.appName})`, () => { assert.equal(frontAfter.pid, frontBefore.pid); assert.notEqual(frontAfter.pid, child.pid) })
 
@@ -195,6 +207,22 @@ try {
   await observe()
   const againMs = Date.now() - again
   check(`⑥ 之后的观察不再等(${againMs} ms)`, () => assert.ok(againMs < 1500))
+
+  await press('Probe Focus')
+  await sleep(500)
+  policies.length = 0
+  activations.length = 0
+  const unchanged = await press('Probe Still')
+  const stillPolicies = [...policies]
+  await sleep(500)
+  check(`⑦ 按完树没变:提窗口、带截图、不叫模型再按(${stillPolicies.join(' → ')})`, () => {
+    assert.deepEqual(stillPolicies, ['ax_only'])
+    assert.equal(clicks('still').length, 1)
+    assert.deepEqual(activations, [child.pid], 'the window was not brought forward')
+    assert.ok(unchanged.content.some((block) => block.type === 'image'), 'no screenshot attached')
+    assert.doesNotMatch(unchanged.content[0].text, /requested explicitly/)
+    assert.match(bridge.executionNote(unchanged.details), /only if the screenshot shows/, 'the model is not told to judge by the screenshot')
+  })
 } finally {
   child.kill()
   await askHelper('shutdown').catch(() => {})

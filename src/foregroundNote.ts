@@ -21,6 +21,7 @@ interface ExecStep {
   error?: { code?: string; message?: string };
   performed?: { delivery?: string; grounding?: string; verification?: string };
   accessibilityPress?: boolean;
+  staleAccessibilityTree?: string;
   escalatedToForeground?: boolean;
   escalationReason?: string;
   delivery?: string;
@@ -39,12 +40,22 @@ export function executionSummary(details: unknown) {
     delivery: s.delivery ?? s.performed?.delivery ?? 'unknown',
     policy: s.deliveryPolicy ?? 'unknown',
     accessibilityPress: s.accessibilityPress || undefined,
+    staleAccessibilityTree: s.staleAccessibilityTree || undefined,
     grounding: s.performed?.grounding,
     verification: s.performed?.verification,
     error: s.error ? { code: s.error.code, message: s.error.message?.slice(0, 384) } : undefined,
   }));
   return { outcome: exec.outcome ?? 'unknown', strictBackground: d?.config?.headless ?? null, steps,
     error: exec.error ? { code: exec.error.code, message: exec.error.message?.slice(0, 384) } : undefined };
+}
+
+function accessibilityPressNote(steps: Array<{ accessibilityPress?: boolean; staleAccessibilityTree?: string }>): string {
+  const stale = steps.find((s) => s.staleAccessibilityTree)?.staleAccessibilityTree;
+  if (!stale) return steps.some((s) => s.accessibilityPress) ? 'This press went through accessibility, in the background. If the returned state shows it changed nothing, press the same element again: the repeat goes out as a real click and takes the foreground.\n' : '';
+  const why = 'This press went through accessibility and the accessibility tree did not change right after it. That does NOT mean it failed: a covered web page takes the press but stops updating its tree, and the tree can stay old until the page next changes, so later observe_ui text may still show the old state.';
+  return stale === 'current_screenshot'
+    ? `${why} The window was brought forward and the attached screenshot is current. Judge by the screenshot, not the tree. Press the same element again only if the screenshot shows the press did nothing: the repeat goes out as a real click.\n`
+    : `${why} The window could not be brought forward, so nothing here shows whether it landed. Do not press again; ask the user to check the window.\n`;
 }
 
 export function executionNote(details: unknown): string {
@@ -56,7 +67,7 @@ export function executionNote(details: unknown): string {
       ? 'The input was attempted; its effect is UNVERIFIED, not proven failed. A canvas can change without accessibility confirmation. Inspect the returned state before any retry, including a retry with another tool.'
       : 'The native executor confirmed this action; still verify the requested task result.';
   return `[execution] ${JSON.stringify(summary)}\n${meaning} Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\n`
-    + (summary.steps.some((s) => s.accessibilityPress) ? 'This press went through accessibility, in the background. If the returned state shows it changed nothing, press the same element again: the repeat goes out as a real click and takes the foreground.\n' : '')
+    + accessibilityPressNote(summary.steps)
     + (summary.strictBackground ? '[policy] Strict background is ON. Do not bypass it with shell, AppleScript, open/activate, or another tool. If foreground input is needed, ask the user to switch the app or change this setting.\n' : '');
 }
 

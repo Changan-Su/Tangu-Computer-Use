@@ -163,7 +163,7 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
 
 ### Web content on macOS (vendor TS patch, after 0.7.2-jev.6)
 
-`src/vendor/actions.ts` and `src/vendor/bridge.ts` carry this too; **a re-sync wipes it, replay it**. `npm run check:actions` and
+`src/vendor/actions.ts`, `src/vendor/bridge.ts` and `src/vendor/platform/` carry this too; **a re-sync wipes it, replay it**. `npm run check:actions` and
 `npm run check:web-content` go red if it is gone; `npm run check:web-press` proves it on a real Electron window.
 
 - **One background AXPress for web controls.** `requiresPointerFocus` in `bridge.swift` refuses AXPress inside `AXWebArea` unless the
@@ -180,6 +180,16 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
   anything, so a replay could submit twice. Instead `lastAccessibilityPress` notices the model pressing the same element again in the same
   window and sends that one down the original path, and `executionNote` tells the model so. It is recorded only once the helper answered:
   a `stale_ref` delivered nothing and must not count as the first press.
+- **A covered page.** A fully covered window goes `document.visibilityState === 'hidden'`. An AXPress still lands there, but neither the tree
+  nor the picture updates, and nothing warns beforehand: the helper still reports `isOnscreen`. A press that landed then read as one that
+  missed and the model pressed again, twice for one request (live `cuweb`, one run in seven; 79 probe rounds: tree new in all 75 `visible`
+  rounds, old in all 4 `hidden` ones, and a focus change in the tree tracked that exactly). So when nothing in the tree changed after an
+  AXPress, `performDesktopTransaction` calls `activateWindow` (the helper's existing `restoreUserFocus`, which brings the page back, then
+  `focusWindow` for the right window of a multi-window app; `restoreUserFocus` only matches titles), waits `COVERED_PAGE_REPAINT_MS` and captures again with the screenshot attached. Measured: the screenshot before activating
+  is old, the one about 1 s after is new, and the tree sometimes stays old until the page next changes. It also runs after a failed
+  `expect`, the same stale tree under another name, and not when `rootDelta` shows a new window opened instead. If the app cannot be activated nothing certifies the press, so
+  the note says not to press again. Pressing an element with no visible effect pays one trip to the foreground. Strict background never gets here: `accessibilityPressIdentity` is undefined there,
+  and `npm run check:web-covered` proves the path on a real cover.
 - **Waiting for web content on first read.** `performLook` reads once more when `src/webContent.ts` says the first read of a Chromium app
   came back as a shell. The helper's own wait is 0.35 s and browsers only; the web tree needs about 2.1 s from first contact.
   `executeFind` starts the clock for every root it lists, because `listWindows` is what turns accessibility on.

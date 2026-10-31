@@ -67,4 +67,8 @@ const details = (step) => ({ config: { headless: false }, execution: { outcome: 
 assert.match(executionNote(details({ accessibilityPress: true })), /press the same element again/);
 assert.doesNotMatch(executionNote(details({})), /press the same element again/, 'only after an accessibility press');
 assert.doesNotMatch(executionNote(details({ accessibilityPress: false })), /press the same element again/);
+assert.match(executionNote(details({ accessibilityPress: true, staleAccessibilityTree: 'current_screenshot' })), /only if the screenshot shows/);
+assert.doesNotMatch(executionNote(details({ accessibilityPress: true, staleAccessibilityTree: 'current_screenshot' })), /changed nothing, press the same element again/);
+assert.match(executionNote(details({ accessibilityPress: true, staleAccessibilityTree: 'no_screenshot' })), /Do not press again/);
+assert.doesNotMatch(executionNote(details({ accessibilityPress: true, staleAccessibilityTree: 'no_screenshot' })), /screenshot is current/);
 console.log('✓ 模型提示');

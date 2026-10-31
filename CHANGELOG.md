@@ -7,8 +7,12 @@
 - First stable release since 0.7.1. It includes everything in the 0.7.2-jev.1 to jev.6 development builds below. The macOS helper protocol goes from 16 to 18, and the plugin restarts a running older helper after it updates.
 - Windows: strict background mode no longer changes the foreground window. Held drags send their motion at a steady pace, and input stops if the release is uncertain.
 - 网页里的按钮、链接这类语义控件，单次左键先在后台用无障碍按下，不再每次抢前台。真实点击只在模型对同一元素再按一次时才发，不自动重放，免得重复提交。没有无障碍动作的元素、右键、双击、后面跟着打字的点击照旧。
+- 网页窗口被完全盖住时，后台按压照样落地，但页面的无障碍树和画面都停在按之前，模型以为没按上，再按一次就成了两次点击。现在按完树一点没变时，会把窗口提上来，等约 2 秒，把新截图带回结果，并告诉模型按截图判断，截图显示真没反应才再按。这种情况下这次按压会抢前台。
+- 对同一元素再按一次时直接走真实点击，不再先走后台：后台那下可能落地，再补真实点击就按了两下。
 - 第一次读 Electron、Chrome 这类 App 时，等网页内容进无障碍树再返回（约 2.5 秒，每个进程只等一次）。以前读到的是一个空壳。
 - Web buttons, links and similar controls now take a plain left click in the background through accessibility instead of taking the foreground every time. A real click goes out only when the model presses the same element again; nothing is replayed automatically, so nothing submits twice. Elements with no accessibility action, right and double clicks, and clicks followed by typing are unchanged.
+- When a web window is fully covered, a background press still lands, but the page's accessibility tree and picture both stay as they were, so the model thought it had missed and pressed again, which clicked twice. When the tree has not changed at all after a press, the window now comes forward, and after about 2 s a fresh screenshot goes back in the result with a note to judge by it and press again only if it shows no effect. That press takes the foreground.
+- A repeat press on the same element now goes straight to a real click instead of trying the background first, where it could land and then be replayed.
 - The first read of an Electron or Chrome-family app now waits for web content to reach the accessibility tree (about 2.5 s, once per process). It used to return an empty shell.
 - 安装 helper 时核对发布证书（`certificate root = H"dab3a30e…"`），签名不对就拒装、已装的那份原样不动。原来只核对 bundle id：同 id 的 ad-hoc / 开发证书 helper 能盖掉发布版，macOS 里那条授权记录还是旧签名的，开关开着、helper 却读到「未授权」，只能在系统设置里删掉再重新加。开发构建要装就设 `PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1`，装完重新授权。只往临时位置解压、不登记 LaunchServices 的那种（`register: false`）不受影响。`check:installer` 加了这一段。
 

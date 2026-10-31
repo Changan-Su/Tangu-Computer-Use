@@ -58,6 +58,7 @@ interface ExecutionTrace {
 	stoppedAt?: number;
 	backgroundFirst?: boolean;
 	accessibilityPress?: boolean;
+	staleAccessibilityTree?: "current_screenshot" | "no_screenshot";
 	escalatedToForeground?: boolean;
 	escalationReason?: string;
 	backgroundAttempt?: { outcome: "foreground_required" | "didnt"; reason: string };
@@ -299,6 +300,8 @@ const ACTION_SETTLE_MS = 280;
 const BROWSER_CONTEXT_PREFIX = "browser:";
 const MANAGED_BROWSER_READY_TIMEOUT_MS = 15_000;
 const AUTO_IMAGE_MAX_DIMENSION = 900;
+/** Forsion patch, see UPSTREAM.md. How long a covered page takes to paint again once activated: 0.9-1.3 s measured on macOS 27. */
+const COVERED_PAGE_REPAINT_MS = 2_000;
 const EXPLICIT_IMAGE_MAX_DIMENSION = 1_600;
 const BROWSER_TRANSACTION_ACTIONS = new Set<UiAction["action"]>(["press", "click", "setText", "typeText", "keypress", "scroll", "drag", "moveMouse"]);
 
@@ -1039,7 +1042,9 @@ async function buildToolResult(
 	base?: { stateId: string; outline: Outline },
 ): Promise<AgentToolResult<ComputerUseDetails>> {
 	const state = operationState();
-	const fallbackReason = imageFallbackReason(tool, result, imageMode);
+	const fallbackReason = execution.staleAccessibilityTree === "current_screenshot"
+		? { reason: "fallback_recovery" as const, message: "The accessibility tree did not change right after this press, so a current screenshot is attached." }
+		: imageFallbackReason(tool, result, imageMode);
 	const transition = base ? changesBetween(base.outline, result.outline) : undefined;
 	const useDiff = Boolean(transition && !transition.useFullView);
 	const folded = foldToBudget(result.outline);
@@ -2104,7 +2109,20 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 			} else {
 				await sleep(settleMsForExecution(execution), signal);
 			}
-			const capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);
+			let capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);
+			// Forsion patch, see UPSTREAM.md. A covered page takes an AXPress but its tree and its picture both stop updating,
+			// so an unchanged tree says nothing and a retry would press twice. Only activating brings the picture back.
+			const pressed = (execution.steps?.length ? execution.steps : [execution]).filter((step) => step.accessibilityPress);
+			if (pressed.length > 0 && !execution.rootDelta?.length && (!execution.error || execution.error.code === "postcondition_failed") && changesBetween(baseView.outline, capture.outline).changes.length === 0) {
+				const activated = await currentPlatformBackend.activateWindow?.(nativeWindowRequest(target), signal);
+				if (activated) {
+					await sleep(COVERED_PAGE_REPAINT_MS, signal);
+					capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);
+				}
+				for (const trace of [execution, ...pressed]) {
+					Object.assign(trace, activated ? { staleAccessibilityTree: "current_screenshot", escalatedToForeground: true, escalationReason: "stale_accessibility_tree" } : { staleAccessibilityTree: "no_screenshot" });
+				}
+			}
 			if (!execution.error) execution.outcome = outcomeAfterObservedValues(execution.outcome ?? "unknown", executedActions, (ref) => nodeByRef(capture.outline, ref)?.value);
 			for (const action of executedActions) {
 				state.currentNote = noteAfterAct(state.currentNote ?? noteBefore, action.ref, capture.outline, { window: noteWindowForTarget(capture.target, capture.look), rootDelta: execution.rootDelta });

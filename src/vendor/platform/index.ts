@@ -12,6 +12,7 @@ const macosPlatformBackend: ComputerUsePlatformBackend = {
 	listRoots: macosBackend.listRoots,
 	getFrontmost: macosBackend.getFrontmost,
 	focusWindow: macosBackend.focusWindow,
+	activateWindow: macosBackend.activateWindow,
 	observe: macosBackend.observe,
 	act: macosBackend.act,
 	actBatch: macosBackend.actBatch,
