@@ -8,7 +8,8 @@
  *   ② 按钮走 ax_only:页面收到一次 isTrusted 的 click,前台没变,结果里有 AXPress 那句提示
  *   ③ 对同一元素再按一次:走原路(background → foreground_required → foreground)
  *   ④ 换一个元素:又走回 ax_only
- *   ⑤ 再 observe_ui 不再等
+ *   ⑤ helper 报 stale_ref 的那次没送达,再按同一元素还是 ax_only,不算重复
+ *   ⑥ 再 observe_ui 不再等
  *
  * 不动真鼠标、不抢前台:bridge 和 helper 之间夹一层代理,记下每个 act 的 policy,policy = foreground 的不转发、
  * 直接回一个假结果。所以 ③ 证明的是「决定走真实点击」,不是真实点击本身。
@@ -45,7 +46,7 @@ process.env.PI_CU_SOCKET_PATH = proxySock
 process.env.PI_COMPUTER_USE_HELPER_APP_PATH = helperApp
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>CU Web Press</title></head><body>
-<button id="save">Probe Save</button> <button id="other">Probe Other</button>
+<button id="save">Probe Save</button> <button id="other">Probe Other</button> <button id="stale">Probe Stale</button>
 <script>
 const post = (o) => fetch('/log', { method: 'POST', body: JSON.stringify(o), keepalive: true })
 document.addEventListener('click', (e) => post({ type: 'click', id: e.target.id, trusted: e.isTrusted }), true)
@@ -69,6 +70,7 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r))
 
 // 代理:一次连接一条 JSON,和 helper 自己的协议一样
 const policies = []
+let staleNextAct = false
 const proxy = net.createServer((client) => {
   let buffer = ''
   client.on('error', () => {})
@@ -79,6 +81,11 @@ const proxy = net.createServer((client) => {
     const line = buffer.slice(0, end); buffer = buffer.slice(end + 1)
     const request = JSON.parse(line)
     if (request.cmd === 'act') policies.push(request.policy)
+    if (request.cmd === 'act' && staleNextAct) {
+      staleNextAct = false
+      client.end(`${JSON.stringify({ id: request.id, ok: false, error: { code: 'stale_ref', message: 'Element reference is stale' } })}\n`)
+      return
+    }
     if (request.cmd === 'act' && request.policy === 'foreground') {
       client.end(`${JSON.stringify({ id: request.id, ok: true, result: { outcome: 'worked', performed: { delivery: 'hid', grounding: 'coordinates' } } })}\n`)
       return
@@ -103,7 +110,7 @@ const dist = path.join(root, 'tangu-plugins/computer-use/dist')
 fs.mkdirSync(dist, { recursive: true })
 const outfile = path.join(dist, `.web-press-check-${process.pid}.mjs`)
 await build({
-  stdin: { contents: "export { executeFind, executeObserve, executeAct, ensureComputerUseSetup } from './src/vendor/bridge.ts'", resolveDir: root, loader: 'ts' },
+  stdin: { contents: "export { executeFind, executeObserve, executeAct, ensureComputerUseSetup } from './src/vendor/bridge.ts'\nexport { executionNote } from './src/foregroundNote.ts'", resolveDir: root, loader: 'ts' },
   bundle: true, platform: 'node', format: 'esm', target: 'node20', outfile, logLevel: 'silent', external: ['node:*'],
   alias: { '@earendil-works/pi-coding-agent': path.join(root, 'src/pi-compat.ts') },
   banner: { js: "import { createRequire as __createRequire } from 'node:module';\nconst require = __createRequire(import.meta.url);" },
@@ -161,6 +168,7 @@ try {
     assert.equal(clicks('save')[0].trusted, true)
     assert.equal(pressed.details.execution.steps?.[0]?.delivery ?? pressed.details.execution.delivery, 'ax')
     assert.equal(pressed.details.execution.steps?.[0]?.accessibilityPress ?? pressed.details.execution.accessibilityPress, true)
+    assert.match(bridge.executionNote(pressed.details), /press the same element again/, 'the model is not told what to do next')
   })
   check(`② 前台没变(${frontBefore.appName} → ${frontAfter.appName})`, () => { assert.equal(frontAfter.pid, frontBefore.pid); assert.notEqual(frontAfter.pid, child.pid) })
 
@@ -175,10 +183,18 @@ try {
   const otherPolicies = [...policies]
   check(`④ 换一个元素回到 AXPress(${otherPolicies.join(' → ')})`, () => { assert.deepEqual(otherPolicies, ['ax_only']); assert.equal(clicks('other').length, 1) })
 
+  staleNextAct = true
+  await press('Probe Stale').catch(() => {})
+  policies.length = 0
+  await press('Probe Stale')
+  await sleep(500)
+  const staleRetry = [...policies]
+  check(`⑤ 没送达的那次不算重复(${staleRetry.join(' → ')})`, () => { assert.deepEqual(staleRetry, ['ax_only']); assert.equal(clicks('stale').length, 1) })
+
   const again = Date.now()
   await observe()
   const againMs = Date.now() - again
-  check(`⑤ 之后的观察不再等(${againMs} ms)`, () => assert.ok(againMs < 1500))
+  check(`⑥ 之后的观察不再等(${againMs} ms)`, () => assert.ok(againMs < 1500))
 } finally {
   child.kill()
   await askHelper('shutdown').catch(() => {})

@@ -56,7 +56,8 @@ export function noteContact(pid: number, now = Date.now()): void {
 export async function webContentWait(pid: number, outline: { role: string; children?: readonly any[] }, isChromium = isChromiumProcess): Promise<number> {
   noteContact(pid);
   if (decided.has(pid)) return 0;
-  decided.add(pid);
-  if (hasWebArea(outline) || !(await isChromium(pid))) return 0;
-  return Math.max(0, firstContact.get(pid)! + WEB_CONTENT_SETTLE_MS - Date.now());
+  const wait = hasWebArea(outline) || !(await isChromium(pid)) ? 0 : Math.max(0, firstContact.get(pid)! + WEB_CONTENT_SETTLE_MS - Date.now());
+  // 要等的时候不算判完:等待被取消的话,下一次观察还要接着等。等够了时钟已过,下次自然是 0
+  if (wait === 0) decided.add(pid);
+  return wait;
 }

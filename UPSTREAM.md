@@ -175,8 +175,9 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
   focus), not when the control lists no AXPress: under React-style delegation a plain div, `tabindex` or `role=row` has none.
   Do not simply change `initialPolicy`: without AXPress `ax_only` falls back to a pid click that can be swallowed.
 - **Never replayed automatically.** `canRetryInForeground` stays false for refs. An AXPress reports `unknown` whether or not it did
-  anything, so a replay could submit twice. Instead `lastAccessibilityPress` notices the model pressing the same element again and sends
-  that one down the original path, and `executionNote` tells the model so.
+  anything, so a replay could submit twice. Instead `lastAccessibilityPress` notices the model pressing the same element again in the same
+  window and sends that one down the original path, and `executionNote` tells the model so. It is recorded only once the helper answered:
+  a `stale_ref` delivered nothing and must not count as the first press.
 - **Waiting for web content on first read.** `performLook` reads once more when `src/webContent.ts` says the first read of a Chromium app
   came back as a shell. The helper's own wait is 0.35 s and browsers only; the web tree needs about 2.1 s from first contact.
   `executeFind` starts the clock for every root it lists, because `listWindows` is what turns accessibility on.

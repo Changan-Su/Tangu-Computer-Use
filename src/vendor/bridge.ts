@@ -1230,10 +1230,9 @@ async function helperAct(
 	const pointer = isBackgroundPointer(action);
 	const pointerKey = `${target.pid}:${action.action === "scroll" ? "scroll" : "click"}`;
 	const pressKey = currentPlatformBackend.name === "macos" && (action.action === "press" || action.action === "click") && action.accessibilityPress !== undefined
-		? `${target.pid}:${action.accessibilityPress}`
+		? `${target.pid}:${target.windowId}:${action.accessibilityPress}`
 		: undefined;
 	const accessibilityPress = pressKey !== undefined && pressKey !== lastAccessibilityPress;
-	if (pressKey !== undefined) lastAccessibilityPress = pressKey;
 	if ((action.usesCurrentFocus || action.needsForeground || (pointer && (backgroundPointerMisses.get(pointerKey) ?? 0) >= 2)) && !headless) {
 		const sent = await wheelAction(target, action, signal);
 		const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, sent, "foreground"), { signal, timeoutMs }));
@@ -1245,6 +1244,7 @@ async function helperAct(
 		const initialPolicy = headless || accessibilityPress ? "ax_only" : "background";
 		const sent = pointer ? await wheelAction(target, action, signal, initialPolicy) : action;
 		const result = checked(await currentPlatformBackend.act(helperActRequest(target, sent, initialPolicy), { signal, timeoutMs }));
+		if (accessibilityPress) lastAccessibilityPress = pressKey; // only once the helper answered: a stale ref sent nothing
 		if (pointer) backgroundPointerMisses.set(pointerKey, pointerMissesAfter(backgroundPointerMisses.get(pointerKey) ?? 0, result.outcome));
 		if (canRetryInForeground(action, result.outcome, headless)) {
 			const retry = pointer ? await wheelAction(target, action, signal) : action;

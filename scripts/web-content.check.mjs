@@ -49,7 +49,13 @@ assert.equal(await webContentWait(102, page, chromium(true)), 0, 'web content al
 assert.ok(!asked.includes(102), 'no need to look at the app bundle then');
 const wait = await webContentWait(103, shell, chromium(true));
 assert.ok(wait > WEB_CONTENT_SETTLE_MS - 200 && wait <= WEB_CONTENT_SETTLE_MS, `first contact now waits the full time (${wait})`);
+assert.ok(await webContentWait(103, shell, chromium(true)) > 0, 'a cancelled wait is not used up');
+assert.equal(await webContentWait(103, page, chromium(true)), 0, 'web content arrived');
 assert.equal(await webContentWait(103, shell, chromium(true)), 0, 'one wait per process');
+noteContact(106, Date.now() - WEB_CONTENT_SETTLE_MS - 1);
+assert.equal(await webContentWait(106, shell, chromium(true)), 0, 'the wait ran out');
+noteContact(106, Date.now());
+assert.equal(await webContentWait(106, shell, chromium(true)), 0, 'and stays used up');
 noteContact(104, Date.now() - 2000);
 const rest = await webContentWait(104, shell, chromium(true));
 assert.ok(rest > 300 && rest <= 500, `find_roots already started the clock (${rest})`);
