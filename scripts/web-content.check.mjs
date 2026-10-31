@@ -74,13 +74,13 @@ assert.doesNotMatch(executionNote(details({ accessibilityPress: true, staleAcces
 console.log('✓ 模型提示');
 
 const outline = (extra = {}) => {
-  const window = { ref: '@e1', role: 'AXWindow', children: [] };
-  const fullscreen = { ref: '@e2', role: 'AXButton', parent: window };
-  const web = { ref: '@e3', role: 'AXWebArea', parent: window };
-  const status = { ref: '@e4', role: 'AXStaticText', value: extra.status ?? 'pending', parent: web };
-  const nodes = [window, fullscreen, web, status];
-  if (extra.chrome) nodes.push({ ref: '@e5', role: 'AXGroup', parent: fullscreen });
-  if (extra.page) nodes.push({ ref: '@e6', role: 'AXButton', parent: web });
+  const node = (ref, role, parent, more = {}) => ({ ref, role, parent, subrole: '', value: '', text: [], actions: [], children: [], ...more });
+  const window = node('@e1', 'AXWindow');
+  const fullscreen = node('@e2', 'AXButton', window);
+  const web = node('@e3', 'AXWebArea', window);
+  const nodes = [window, fullscreen, web, node('@e4', 'AXStaticText', web, { value: extra.status ?? 'pending' })];
+  if (extra.chrome) nodes.push(node('@e5', 'AXGroup', fullscreen));
+  if (extra.page) nodes.push(node('@e6', 'AXButton', web));
   return { root: window, nodes };
 };
 assert.equal(webContentChanged(outline(), outline()), false);
