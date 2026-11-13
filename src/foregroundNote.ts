@@ -21,7 +21,8 @@ interface ExecStep {
   error?: { code?: string; message?: string };
   performed?: { delivery?: string; grounding?: string; verification?: string };
   accessibilityPress?: boolean;
-  staleAccessibilityTree?: string;
+  pressUnconfirmed?: string;
+  earlierPressTookEffect?: string;
   escalatedToForeground?: boolean;
   escalationReason?: string;
   delivery?: string;
@@ -35,32 +36,41 @@ export function executionSummary(details: unknown) {
   const d = details as { config?: { headless?: boolean }; execution?: ExecStep } | undefined;
   const exec = d?.execution;
   if (!exec || (!exec.outcome && !exec.error)) return undefined;
-  const steps = (exec.steps?.length ? exec.steps : [exec]).map(s => ({
+  // 「没有再按」的那次结果没有送出任何动作,不列步骤。
+  const steps = (exec.earlierPressTookEffect ? [] : exec.steps?.length ? exec.steps : [exec]).map(s => ({
     outcome: s.outcome ?? 'unknown',
     delivery: s.delivery ?? s.performed?.delivery ?? 'unknown',
     policy: s.deliveryPolicy ?? 'unknown',
     accessibilityPress: s.accessibilityPress || undefined,
-    staleAccessibilityTree: s.staleAccessibilityTree || undefined,
+    pressUnconfirmed: s.pressUnconfirmed || undefined,
     grounding: s.performed?.grounding,
     verification: s.performed?.verification,
     error: s.error ? { code: s.error.code, message: s.error.message?.slice(0, 384) } : undefined,
   }));
   return { outcome: exec.outcome ?? 'unknown', strictBackground: d?.config?.headless ?? null, steps,
+    earlierPressTookEffect: exec.earlierPressTookEffect || undefined,
     error: exec.error ? { code: exec.error.code, message: exec.error.message?.slice(0, 384) } : undefined };
 }
 
-function accessibilityPressNote(steps: Array<{ accessibilityPress?: boolean; staleAccessibilityTree?: string }>): string {
-  const stale = steps.find((s) => s.staleAccessibilityTree)?.staleAccessibilityTree;
-  if (!stale) return steps.some((s) => s.accessibilityPress) ? 'This press went through accessibility, in the background. If the returned state shows it changed nothing, press the same element again: the repeat goes out as a real click and takes the foreground.\n' : '';
-  const why = 'This press went through accessibility and the accessibility tree did not change right after it. That does NOT mean it failed: a covered web page takes the press but stops updating its tree, and the tree can stay old until the page next changes, so later observe_ui text may still show the old state.';
-  return stale === 'current_screenshot'
-    ? `${why} The window was brought forward and the attached screenshot is current. Judge by the screenshot, not the tree. Press the same element again only if the screenshot shows the press did nothing: the repeat goes out as a real click.\n`
-    : `${why} The window could not be brought forward, so nothing here shows whether it landed. Do not press again; ask the user to check the window.\n`;
+function accessibilityPressNote(steps: Array<{ accessibilityPress?: boolean; pressUnconfirmed?: string }>): string {
+  const unconfirmed = steps.find((s) => s.pressUnconfirmed)?.pressUnconfirmed;
+  if (!unconfirmed) return steps.some((s) => s.accessibilityPress) ? 'This press went through accessibility, in the background. If the returned state shows it changed nothing, press the same element again: the repeat goes out as a real click and takes the foreground.\n' : '';
+  // 页面读之前已经问过(helper 的 webFlush),窗口也提上来过:到这里还没变化,是没生效还是界面没刷新分不出来。
+  // 只叫模型看,不叫它再按;它真要再按同一个元素,bridge 会先比窗口变没变(earlierPressTookEffect)。
+  const sent = 'This press was sent through accessibility and nothing in the page has changed yet. That does NOT mean it failed: the interface may not have refreshed. Do not press again now.';
+  return unconfirmed === 'current_screenshot'
+    ? `${sent} The window was brought forward and the attached screenshot is current. Next, only look: read the screenshot, or call observe_ui again (wait first if the page may still be loading). If you later press the same element again, the window is compared with this result first, and a real click goes out only if nothing has changed.\n`
+    : `${sent} The window could not be brought forward, so nothing here shows whether it landed. Next, only look: call observe_ui again. If it still shows no change, ask the user to check the window.\n`;
 }
 
 export function executionNote(details: unknown): string {
   const summary = executionSummary(details);
   if (!summary) return '';
+  const strict = summary.strictBackground ? '[policy] Strict background is ON. Do not bypass it with shell, AppleScript, open/activate, or another tool. If foreground input is needed, ask the user to switch the app or change this setting.\n' : '';
+  if (summary.earlierPressTookEffect) {
+    const moved = summary.earlierPressTookEffect === 'picture' ? 'the picture around the element has changed (a current screenshot is attached)' : 'the page has changed';
+    return `[execution] ${JSON.stringify(summary)}\nNothing was sent this time. The earlier press of this element showed no change in its result; since then ${moved}, so that press took effect. Continue from the returned state. Press the element again only if the task needs a second press.\n` + strict;
+  }
   const meaning = summary.error || summary.outcome === 'didnt'
     ? 'The executor reported a failure. Check the error and current state before deciding what to do.'
     : summary.outcome === 'unknown'
@@ -68,7 +78,7 @@ export function executionNote(details: unknown): string {
       : 'The native executor confirmed this action; still verify the requested task result.';
   return `[execution] ${JSON.stringify(summary)}\n${meaning} Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\n`
     + accessibilityPressNote(summary.steps)
-    + (summary.strictBackground ? '[policy] Strict background is ON. Do not bypass it with shell, AppleScript, open/activate, or another tool. If foreground input is needed, ask the user to switch the app or change this setting.\n' : '');
+    + strict;
 }
 
 function tookForeground(step: ExecStep | undefined): boolean {

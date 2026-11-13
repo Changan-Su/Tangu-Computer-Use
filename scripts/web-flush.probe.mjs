@@ -3,8 +3,11 @@
  * 探针:页面 hidden 时后台 AXPress 之后,「直接读」对「先问再读」。
  *
  * 背景见 web-covered.check.mjs:窗口被完全盖住时页面进 hidden,AXPress 照样落地,但无障碍树停在按之前。
- * helper 的 look 带 `flushWeb` 时,读之前先对窗口里的 AXWebArea 做一次按 App 限定的位置查询(问页面一次)。
+ * helper 的 look 读之前先对窗口里的 AXWebArea 做一次按 App 限定的位置查询(问页面一次),`flushWeb: false` 关掉。
  * 这里不经过 bridge.ts,只跟 helper 的私有 socket 说话,量 helper 自己:按完之后树多久变新。
+ *
+ * 2026-11-13 的 90 轮(docs/probes/web-flush/)是在探针提交 6b0d97e 的 helper 上跑的:那时开关缺省关,另有一组
+ * askWait(问完等变化通知,最多 800 ms),15 轮一次通知都没等到,正式版去掉了那个参数,这里也不再有这一组。
  *
  * 一个 Electron 替身加一扇原生盖窗撑若干轮(--per-instance),每轮:
  *   1. 对齐:先问再读,直到树里的计数等于页面自己报的点击数(上一轮是对照组时树是旧的)
@@ -17,10 +20,9 @@
  *   direct   每次都直接读(对照)。到 --window 毫秒还旧,末尾问一次,记晚问还救不救得回
  *   ask      每次读之前都问
  *   askOnce  只在第一次读之前问,之后直接读(问一次够不够、要多久)
- *   askWait  第一次问完等变化通知(最多 800 ms),记通知多久到;之后直接读
  *
  *   PI_COMPUTER_USE_HELPER_APP_PATH=<带 flushWeb 的 helper.app> node scripts/web-flush.probe.mjs \
- *     [--arms direct:30,ask:30,askOnce:15,askWait:15] [--per-instance 6] [--window 3000] [--seed 20261113] [--out <目录>]
+ *     [--arms direct:30,ask:30,askOnce:15] [--per-instance 6] [--window 3000] [--seed 20261113] [--out <目录>]
  *
  * 只要辅助功能授权,不截图。盖窗起来那一下会切前台,每个替身一次,切完马上还回去;要走 devlock。不动真鼠标。
  * 需要:macOS、Electron(CU_ELECTRON,缺省用 Forsion-Genesis/desktop 装的那份)。
@@ -44,8 +46,8 @@ const helperApp = process.env.PI_COMPUTER_USE_HELPER_APP_PATH
 assert.ok(helperApp && fs.existsSync(helperApp), 'set PI_COMPUTER_USE_HELPER_APP_PATH to a helper that knows flushWeb')
 const electron = process.env.CU_ELECTRON ?? path.resolve(repo, '../../Forsion-Genesis/desktop/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')
 assert.ok(fs.existsSync(electron), `Electron not found: ${electron} (set CU_ELECTRON)`)
-const arms = Object.fromEntries((arg('--arms') ?? 'direct:30,ask:30,askOnce:15,askWait:15').split(',').map((s) => { const [name, n] = s.split(':'); return [name, Number(n)] }))
-for (const name of Object.keys(arms)) assert.ok(['direct', 'ask', 'askOnce', 'askWait'].includes(name), `unknown arm ${name}`)
+const arms = Object.fromEntries((arg('--arms') ?? 'direct:30,ask:30,askOnce:15').split(',').map((s) => { const [name, n] = s.split(':'); return [name, Number(n)] }))
+for (const name of Object.keys(arms)) assert.ok(['direct', 'ask', 'askOnce'].includes(name), `unknown arm ${name}`)
 const perInstance = Number(arg('--per-instance') ?? 6)
 const windowMs = Number(arg('--window') ?? 3000)
 const seed = Number(arg('--seed') ?? 20261113)
@@ -137,7 +139,7 @@ async function runInstance(instance) {
     const root = (await askHelper('listRoots', { pid: child.pid })).roots.find((r) => r.title === 'CU Web Flush')
     assert.ok(root, 'fixture window not listed')
     const windowId = root.windowId
-    const look = (flags = {}) => askHelper('look', { windowId, includeImage: false, readText: 'never', ...flags })
+    const look = (flags = {}) => askHelper('look', { windowId, includeImage: false, readText: 'never', flushWeb: false, ...flags })
     // 头一次读会给这个进程打开网页无障碍,页面的树要过一会儿才长出来
     let first, firstOutline
     for (let i = 0; i < 30; i++) {
@@ -192,9 +194,8 @@ async function runInstance(instance) {
       const deadline = pressDone + windowMs
       for (let i = 0; Date.now() < deadline; i++) {
         const asks = arm === 'ask' || (i === 0 && arm !== 'direct')
-        const flags = asks ? { flushWeb: true, ...(arm === 'askWait' ? { flushWaitMs: 800 } : {}) } : {}
         const start = Date.now()
-        const r = await look(flags)
+        const r = await look({ flushWeb: asks })
         const end = Date.now()
         const seen = readOutline(r.outline).count
         polls.push({ startMs: start - pressDone, endMs: end - pressDone, asked: asks, count: seen, describeMs: r.timings?.describeMs, ...(r.webFlush ? { flush: r.webFlush } : {}) })
@@ -291,10 +292,9 @@ for (const name of Object.keys(arms)) {
     ...(name === 'direct' ? { rescued: valid.filter((r) => r.rescue?.fresh).length, rescueMs: median(valid.filter((r) => r.rescue?.fresh).map((r) => r.rescue.ms)) } : {}),
     ...(firstAsk.length ? {
       asked: firstAsk.filter((f) => f.asked).length, hitInWindow: firstAsk.filter((f) => f.hitInWindow).length, hitInWebArea: firstAsk.filter((f) => f.hitInWebArea).length,
-      hitRoles: firstAsk.reduce((acc, f) => { acc[f.hitRole ?? f.reason] = (acc[f.hitRole ?? f.reason] ?? 0) + 1; return acc }, {}),
+      hitRoles: firstAsk.reduce((acc, f) => { for (const role of f.hitRoles ?? [f.reason]) acc[role] = (acc[role] ?? 0) + 1; return acc }, {}),
       askMs: { median: median(firstAsk.map((f) => f.ms)), max: Math.max(...firstAsk.map((f) => f.ms)) },
-      searchMs: median(firstAsk.map((f) => f.searchMs ?? 0)), hitMs: median(firstAsk.map((f) => f.hitMs ?? 0)), visits: median(firstAsk.map((f) => f.visits ?? 0)),
-      ...(name === 'askWait' ? { changedAfterMs: { got: firstAsk.filter((f) => f.changedAfterMs !== undefined).length, median: median(firstAsk.filter((f) => f.changedAfterMs !== undefined).map((f) => f.changedAfterMs)), max: Math.max(-1, ...firstAsk.filter((f) => f.changedAfterMs !== undefined).map((f) => f.changedAfterMs)) } } : {}),
+      searched: firstAsk.filter((f) => f.visits !== undefined).length,
     } : {}),
     describeMs: median(valid.flatMap((r) => r.polls.map((p) => p.describeMs ?? 0))),
   }

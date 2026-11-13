@@ -1,0 +1,2394 @@
+{
+ "meta": {
+  "startedAt": "2026-11-13T14:00:53.349Z",
+  "finishedAt": "2026-11-13T14:01:55.420Z",
+  "macOS": "27.0.1",
+  "electron": "40.10.2",
+  "repoHead": "6b0d97e",
+  "repoDirty": true,
+  "helper": {
+   "identifier": "com.forsion.tangu-computer-use.dev",
+   "teamId": "4TVPMAHDTT",
+   "protocolVersion": 19,
+   "accessibility": true,
+   "screenRecording": false
+  },
+  "arms": {
+   "direct": 8,
+   "ask": 8,
+   "askOnce": 8
+  },
+  "perInstance": 6,
+  "windowMs": 3000,
+  "seed": 20261113
+ },
+ "summary": {
+  "direct": {
+   "rounds": 8,
+   "valid": 8,
+   "fresh": 0,
+   "stale": 8,
+   "freshAfterPressDoneMs": {
+    "median": null,
+    "p90": null,
+    "max": null
+   },
+   "freshOnPoll": {},
+   "plainReadAfterFreshAgrees": 0,
+   "rescued": 8,
+   "rescueMs": 46,
+   "describeMs": 15
+  },
+  "ask": {
+   "rounds": 8,
+   "valid": 8,
+   "fresh": 8,
+   "stale": 0,
+   "freshAfterPressDoneMs": {
+    "median": 53,
+    "p90": 63,
+    "max": 63
+   },
+   "freshOnPoll": {
+    "1": 8
+   },
+   "plainReadAfterFreshAgrees": 8,
+   "asked": 8,
+   "hitInWindow": 8,
+   "hitInWebArea": 8,
+   "hitRoles": {
+    "AXWebArea": 8
+   },
+   "askMs": {
+    "median": 0,
+    "max": 3
+   },
+   "searched": 0,
+   "describeMs": 16
+  },
+  "askOnce": {
+   "rounds": 8,
+   "valid": 8,
+   "fresh": 8,
+   "stale": 0,
+   "freshAfterPressDoneMs": {
+    "median": 50,
+    "p90": 58,
+    "max": 58
+   },
+   "freshOnPoll": {
+    "1": 8
+   },
+   "plainReadAfterFreshAgrees": 8,
+   "asked": 8,
+   "hitInWindow": 8,
+   "hitInWebArea": 8,
+   "hitRoles": {
+    "AXWebArea": 8
+   },
+   "askMs": {
+    "median": 0,
+    "max": 4
+   },
+   "searched": 0,
+   "describeMs": 15
+  }
+ },
+ "instances": [
+  {
+   "instance": 1,
+   "pid": 71145,
+   "rounds": 6
+  },
+  {
+   "instance": 2,
+   "pid": 71329,
+   "rounds": 6
+  },
+  {
+   "instance": 3,
+   "pid": 71441,
+   "rounds": 6
+  },
+  {
+   "instance": 4,
+   "pid": 71627,
+   "rounds": 6
+  }
+ ],
+ "rounds": [
+  {
+   "round": 1,
+   "arm": "direct",
+   "instance": 1,
+   "indexInInstance": 0,
+   "base": 0,
+   "sync": {
+    "tries": 1,
+    "ms": 45
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 444,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 1,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 18
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 40,
+     "asked": false,
+     "count": 0,
+     "describeMs": 14
+    },
+    {
+     "startMs": 142,
+     "endMs": 189,
+     "asked": false,
+     "count": 0,
+     "describeMs": 14
+    },
+    {
+     "startMs": 290,
+     "endMs": 335,
+     "asked": false,
+     "count": 0,
+     "describeMs": 16
+    },
+    {
+     "startMs": 435,
+     "endMs": 473,
+     "asked": false,
+     "count": 0,
+     "describeMs": 12
+    },
+    {
+     "startMs": 576,
+     "endMs": 627,
+     "asked": false,
+     "count": 0,
+     "describeMs": 13
+    },
+    {
+     "startMs": 728,
+     "endMs": 769,
+     "asked": false,
+     "count": 0,
+     "describeMs": 14
+    },
+    {
+     "startMs": 871,
+     "endMs": 912,
+     "asked": false,
+     "count": 0,
+     "describeMs": 15
+    },
+    {
+     "startMs": 1015,
+     "endMs": 1055,
+     "asked": false,
+     "count": 0,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1156,
+     "endMs": 1194,
+     "asked": false,
+     "count": 0,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1295,
+     "endMs": 1332,
+     "asked": false,
+     "count": 0,
+     "describeMs": 15
+    },
+    {
+     "startMs": 1433,
+     "endMs": 1480,
+     "asked": false,
+     "count": 0,
+     "describeMs": 15
+    },
+    {
+     "startMs": 1581,
+     "endMs": 1626,
+     "asked": false,
+     "count": 0,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1726,
+     "endMs": 1769,
+     "asked": false,
+     "count": 0,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1870,
+     "endMs": 1913,
+     "asked": false,
+     "count": 0,
+     "describeMs": 13
+    },
+    {
+     "startMs": 2015,
+     "endMs": 2075,
+     "asked": false,
+     "count": 0,
+     "describeMs": 18
+    },
+    {
+     "startMs": 2178,
+     "endMs": 2230,
+     "asked": false,
+     "count": 0,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2331,
+     "endMs": 2388,
+     "asked": false,
+     "count": 0,
+     "describeMs": 16
+    },
+    {
+     "startMs": 2490,
+     "endMs": 2534,
+     "asked": false,
+     "count": 0,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2637,
+     "endMs": 2685,
+     "asked": false,
+     "count": 0,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2786,
+     "endMs": 2832,
+     "asked": false,
+     "count": 0,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2934,
+     "endMs": 2982,
+     "asked": false,
+     "count": 0,
+     "describeMs": 14
+    }
+   ],
+   "fresh": false,
+   "rescue": {
+    "fresh": true,
+    "tries": 1,
+    "ms": 43
+   },
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 2,
+   "arm": "direct",
+   "instance": 1,
+   "indexInInstance": 1,
+   "base": 1,
+   "sync": {
+    "tries": 1,
+    "ms": 45
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 454,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 2,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 16
+   },
+   "polls": [
+    {
+     "startMs": 1,
+     "endMs": 49,
+     "asked": false,
+     "count": 1,
+     "describeMs": 15
+    },
+    {
+     "startMs": 151,
+     "endMs": 191,
+     "asked": false,
+     "count": 1,
+     "describeMs": 15
+    },
+    {
+     "startMs": 293,
+     "endMs": 340,
+     "asked": false,
+     "count": 1,
+     "describeMs": 16
+    },
+    {
+     "startMs": 442,
+     "endMs": 491,
+     "asked": false,
+     "count": 1,
+     "describeMs": 16
+    },
+    {
+     "startMs": 593,
+     "endMs": 636,
+     "asked": false,
+     "count": 1,
+     "describeMs": 16
+    },
+    {
+     "startMs": 738,
+     "endMs": 785,
+     "asked": false,
+     "count": 1,
+     "describeMs": 16
+    },
+    {
+     "startMs": 887,
+     "endMs": 941,
+     "asked": false,
+     "count": 1,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1042,
+     "endMs": 1090,
+     "asked": false,
+     "count": 1,
+     "describeMs": 15
+    },
+    {
+     "startMs": 1192,
+     "endMs": 1240,
+     "asked": false,
+     "count": 1,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1341,
+     "endMs": 1389,
+     "asked": false,
+     "count": 1,
+     "describeMs": 9
+    },
+    {
+     "startMs": 1491,
+     "endMs": 1531,
+     "asked": false,
+     "count": 1,
+     "describeMs": 13
+    },
+    {
+     "startMs": 1633,
+     "endMs": 1671,
+     "asked": false,
+     "count": 1,
+     "describeMs": 12
+    },
+    {
+     "startMs": 1773,
+     "endMs": 1817,
+     "asked": false,
+     "count": 1,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1920,
+     "endMs": 1959,
+     "asked": false,
+     "count": 1,
+     "describeMs": 10
+    },
+    {
+     "startMs": 2060,
+     "endMs": 2098,
+     "asked": false,
+     "count": 1,
+     "describeMs": 13
+    },
+    {
+     "startMs": 2200,
+     "endMs": 2242,
+     "asked": false,
+     "count": 1,
+     "describeMs": 11
+    },
+    {
+     "startMs": 2342,
+     "endMs": 2388,
+     "asked": false,
+     "count": 1,
+     "describeMs": 13
+    },
+    {
+     "startMs": 2490,
+     "endMs": 2534,
+     "asked": false,
+     "count": 1,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2634,
+     "endMs": 2676,
+     "asked": false,
+     "count": 1,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2778,
+     "endMs": 2832,
+     "asked": false,
+     "count": 1,
+     "describeMs": 25
+    },
+    {
+     "startMs": 2933,
+     "endMs": 2974,
+     "asked": false,
+     "count": 1,
+     "describeMs": 13
+    }
+   ],
+   "fresh": false,
+   "rescue": {
+    "fresh": true,
+    "tries": 1,
+    "ms": 45
+   },
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 3,
+   "arm": "askOnce",
+   "instance": 1,
+   "indexInInstance": 2,
+   "base": 2,
+   "sync": {
+    "tries": 1,
+    "ms": 49
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 444,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 3,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 20
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 50,
+     "asked": true,
+     "count": 3,
+     "describeMs": 15,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 2,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 50,
+   "freshAfterClickMs": 474,
+   "plainReadAfterFresh": 3,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 4,
+   "arm": "direct",
+   "instance": 1,
+   "indexInInstance": 3,
+   "base": 3,
+   "sync": {
+    "tries": 1,
+    "ms": 50
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 464,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 4,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 20
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 54,
+     "asked": false,
+     "count": 3,
+     "describeMs": 17
+    },
+    {
+     "startMs": 154,
+     "endMs": 204,
+     "asked": false,
+     "count": 3,
+     "describeMs": 15
+    },
+    {
+     "startMs": 307,
+     "endMs": 359,
+     "asked": false,
+     "count": 3,
+     "describeMs": 18
+    },
+    {
+     "startMs": 461,
+     "endMs": 503,
+     "asked": false,
+     "count": 3,
+     "describeMs": 14
+    },
+    {
+     "startMs": 605,
+     "endMs": 650,
+     "asked": false,
+     "count": 3,
+     "describeMs": 17
+    },
+    {
+     "startMs": 752,
+     "endMs": 796,
+     "asked": false,
+     "count": 3,
+     "describeMs": 14
+    },
+    {
+     "startMs": 898,
+     "endMs": 944,
+     "asked": false,
+     "count": 3,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1044,
+     "endMs": 1097,
+     "asked": false,
+     "count": 3,
+     "describeMs": 17
+    },
+    {
+     "startMs": 1198,
+     "endMs": 1255,
+     "asked": false,
+     "count": 3,
+     "describeMs": 19
+    },
+    {
+     "startMs": 1358,
+     "endMs": 1403,
+     "asked": false,
+     "count": 3,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1505,
+     "endMs": 1556,
+     "asked": false,
+     "count": 3,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1658,
+     "endMs": 1712,
+     "asked": false,
+     "count": 3,
+     "describeMs": 15
+    },
+    {
+     "startMs": 1813,
+     "endMs": 1857,
+     "asked": false,
+     "count": 3,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1958,
+     "endMs": 1997,
+     "asked": false,
+     "count": 3,
+     "describeMs": 10
+    },
+    {
+     "startMs": 2099,
+     "endMs": 2145,
+     "asked": false,
+     "count": 3,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2247,
+     "endMs": 2291,
+     "asked": false,
+     "count": 3,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2393,
+     "endMs": 2433,
+     "asked": false,
+     "count": 3,
+     "describeMs": 12
+    },
+    {
+     "startMs": 2535,
+     "endMs": 2588,
+     "asked": false,
+     "count": 3,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2690,
+     "endMs": 2744,
+     "asked": false,
+     "count": 3,
+     "describeMs": 19
+    },
+    {
+     "startMs": 2844,
+     "endMs": 2882,
+     "asked": false,
+     "count": 3,
+     "describeMs": 12
+    },
+    {
+     "startMs": 2984,
+     "endMs": 3037,
+     "asked": false,
+     "count": 3,
+     "describeMs": 14
+    }
+   ],
+   "fresh": false,
+   "rescue": {
+    "fresh": true,
+    "tries": 1,
+    "ms": 52
+   },
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 5,
+   "arm": "ask",
+   "instance": 1,
+   "indexInInstance": 4,
+   "base": 4,
+   "sync": {
+    "tries": 1,
+    "ms": 41
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 450,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 5,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 15
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 41,
+     "asked": true,
+     "count": 5,
+     "describeMs": 16,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 0,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 41,
+   "freshAfterClickMs": 476,
+   "plainReadAfterFresh": 5,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 6,
+   "arm": "askOnce",
+   "instance": 1,
+   "indexInInstance": 5,
+   "base": 5,
+   "sync": {
+    "tries": 1,
+    "ms": 62
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 445,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 6,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 19
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 52,
+     "asked": true,
+     "count": 6,
+     "describeMs": 16,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 0,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 52,
+   "freshAfterClickMs": 478,
+   "plainReadAfterFresh": 6,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 7,
+   "arm": "askOnce",
+   "instance": 2,
+   "indexInInstance": 0,
+   "base": 0,
+   "sync": {
+    "tries": 1,
+    "ms": 41
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 441,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 1,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 20
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 38,
+     "asked": true,
+     "count": 1,
+     "describeMs": 12,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 0,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 38,
+   "freshAfterClickMs": 459,
+   "plainReadAfterFresh": 1,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 8,
+   "arm": "ask",
+   "instance": 2,
+   "indexInInstance": 1,
+   "base": 1,
+   "sync": {
+    "tries": 1,
+    "ms": 49
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 458,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 2,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 20
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 53,
+     "asked": true,
+     "count": 2,
+     "describeMs": 18,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 0,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 53,
+   "freshAfterClickMs": 491,
+   "plainReadAfterFresh": 2,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 9,
+   "arm": "ask",
+   "instance": 2,
+   "indexInInstance": 2,
+   "base": 2,
+   "sync": {
+    "tries": 1,
+    "ms": 48
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 441,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 3,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 17
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 45,
+     "asked": true,
+     "count": 3,
+     "describeMs": 16,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 0,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 45,
+   "freshAfterClickMs": 469,
+   "plainReadAfterFresh": 3,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 10,
+   "arm": "askOnce",
+   "instance": 2,
+   "indexInInstance": 3,
+   "base": 3,
+   "sync": {
+    "tries": 1,
+    "ms": 44
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 452,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 4,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 19
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 40,
+     "asked": true,
+     "count": 4,
+     "describeMs": 15,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 1,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 40,
+   "freshAfterClickMs": 473,
+   "plainReadAfterFresh": 4,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 11,
+   "arm": "direct",
+   "instance": 2,
+   "indexInInstance": 4,
+   "base": 4,
+   "sync": {
+    "tries": 1,
+    "ms": 47
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 439,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 5,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 19
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 49,
+     "asked": false,
+     "count": 4,
+     "describeMs": 17
+    },
+    {
+     "startMs": 151,
+     "endMs": 202,
+     "asked": false,
+     "count": 4,
+     "describeMs": 15
+    },
+    {
+     "startMs": 304,
+     "endMs": 347,
+     "asked": false,
+     "count": 4,
+     "describeMs": 15
+    },
+    {
+     "startMs": 448,
+     "endMs": 488,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 590,
+     "endMs": 635,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 737,
+     "endMs": 783,
+     "asked": false,
+     "count": 4,
+     "describeMs": 16
+    },
+    {
+     "startMs": 885,
+     "endMs": 924,
+     "asked": false,
+     "count": 4,
+     "describeMs": 12
+    },
+    {
+     "startMs": 1026,
+     "endMs": 1072,
+     "asked": false,
+     "count": 4,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1174,
+     "endMs": 1212,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1313,
+     "endMs": 1355,
+     "asked": false,
+     "count": 4,
+     "describeMs": 15
+    },
+    {
+     "startMs": 1457,
+     "endMs": 1499,
+     "asked": false,
+     "count": 4,
+     "describeMs": 13
+    },
+    {
+     "startMs": 1601,
+     "endMs": 1647,
+     "asked": false,
+     "count": 4,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1749,
+     "endMs": 1803,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1905,
+     "endMs": 1948,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2049,
+     "endMs": 2090,
+     "asked": false,
+     "count": 4,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2192,
+     "endMs": 2235,
+     "asked": false,
+     "count": 4,
+     "describeMs": 13
+    },
+    {
+     "startMs": 2337,
+     "endMs": 2381,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2483,
+     "endMs": 2528,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2630,
+     "endMs": 2677,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2778,
+     "endMs": 2818,
+     "asked": false,
+     "count": 4,
+     "describeMs": 13
+    },
+    {
+     "startMs": 2920,
+     "endMs": 2965,
+     "asked": false,
+     "count": 4,
+     "describeMs": 15
+    }
+   ],
+   "fresh": false,
+   "rescue": {
+    "fresh": true,
+    "tries": 1,
+    "ms": 46
+   },
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 12,
+   "arm": "ask",
+   "instance": 2,
+   "indexInInstance": 5,
+   "base": 5,
+   "sync": {
+    "tries": 1,
+    "ms": 48
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 461,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 6,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 16
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 40,
+     "asked": true,
+     "count": 6,
+     "describeMs": 14,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 0,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 40,
+   "freshAfterClickMs": 485,
+   "plainReadAfterFresh": 6,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 13,
+   "arm": "ask",
+   "instance": 3,
+   "indexInInstance": 0,
+   "base": 0,
+   "sync": {
+    "tries": 1,
+    "ms": 47
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 460,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 1,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 18
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 56,
+     "asked": true,
+     "count": 1,
+     "describeMs": 16,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 0,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 56,
+   "freshAfterClickMs": 498,
+   "plainReadAfterFresh": 1,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 14,
+   "arm": "askOnce",
+   "instance": 3,
+   "indexInInstance": 1,
+   "base": 1,
+   "sync": {
+    "tries": 1,
+    "ms": 52
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 463,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 2,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 20
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 47,
+     "asked": true,
+     "count": 2,
+     "describeMs": 16,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 0,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 47,
+   "freshAfterClickMs": 490,
+   "plainReadAfterFresh": 2,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 15,
+   "arm": "direct",
+   "instance": 3,
+   "indexInInstance": 2,
+   "base": 2,
+   "sync": {
+    "tries": 1,
+    "ms": 57
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 459,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 3,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 24
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 44,
+     "asked": false,
+     "count": 2,
+     "describeMs": 14
+    },
+    {
+     "startMs": 146,
+     "endMs": 186,
+     "asked": false,
+     "count": 2,
+     "describeMs": 14
+    },
+    {
+     "startMs": 287,
+     "endMs": 330,
+     "asked": false,
+     "count": 2,
+     "describeMs": 15
+    },
+    {
+     "startMs": 433,
+     "endMs": 477,
+     "asked": false,
+     "count": 2,
+     "describeMs": 16
+    },
+    {
+     "startMs": 579,
+     "endMs": 627,
+     "asked": false,
+     "count": 2,
+     "describeMs": 16
+    },
+    {
+     "startMs": 730,
+     "endMs": 778,
+     "asked": false,
+     "count": 2,
+     "describeMs": 15
+    },
+    {
+     "startMs": 878,
+     "endMs": 925,
+     "asked": false,
+     "count": 2,
+     "describeMs": 13
+    },
+    {
+     "startMs": 1026,
+     "endMs": 1064,
+     "asked": false,
+     "count": 2,
+     "describeMs": 12
+    },
+    {
+     "startMs": 1165,
+     "endMs": 1206,
+     "asked": false,
+     "count": 2,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1308,
+     "endMs": 1357,
+     "asked": false,
+     "count": 2,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1458,
+     "endMs": 1503,
+     "asked": false,
+     "count": 2,
+     "describeMs": 15
+    },
+    {
+     "startMs": 1604,
+     "endMs": 1654,
+     "asked": false,
+     "count": 2,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1756,
+     "endMs": 1810,
+     "asked": false,
+     "count": 2,
+     "describeMs": 15
+    },
+    {
+     "startMs": 1911,
+     "endMs": 1955,
+     "asked": false,
+     "count": 2,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2057,
+     "endMs": 2103,
+     "asked": false,
+     "count": 2,
+     "describeMs": 16
+    },
+    {
+     "startMs": 2204,
+     "endMs": 2250,
+     "asked": false,
+     "count": 2,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2350,
+     "endMs": 2387,
+     "asked": false,
+     "count": 2,
+     "describeMs": 13
+    },
+    {
+     "startMs": 2489,
+     "endMs": 2537,
+     "asked": false,
+     "count": 2,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2639,
+     "endMs": 2687,
+     "asked": false,
+     "count": 2,
+     "describeMs": 16
+    },
+    {
+     "startMs": 2788,
+     "endMs": 2836,
+     "asked": false,
+     "count": 2,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2938,
+     "endMs": 2988,
+     "asked": false,
+     "count": 2,
+     "describeMs": 15
+    }
+   ],
+   "fresh": false,
+   "rescue": {
+    "fresh": true,
+    "tries": 1,
+    "ms": 50
+   },
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 16,
+   "arm": "direct",
+   "instance": 3,
+   "indexInInstance": 3,
+   "base": 3,
+   "sync": {
+    "tries": 1,
+    "ms": 48
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 461,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 4,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 17
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 50,
+     "asked": false,
+     "count": 3,
+     "describeMs": 16
+    },
+    {
+     "startMs": 152,
+     "endMs": 204,
+     "asked": false,
+     "count": 3,
+     "describeMs": 16
+    },
+    {
+     "startMs": 305,
+     "endMs": 356,
+     "asked": false,
+     "count": 3,
+     "describeMs": 16
+    },
+    {
+     "startMs": 458,
+     "endMs": 508,
+     "asked": false,
+     "count": 3,
+     "describeMs": 15
+    },
+    {
+     "startMs": 610,
+     "endMs": 662,
+     "asked": false,
+     "count": 3,
+     "describeMs": 15
+    },
+    {
+     "startMs": 764,
+     "endMs": 804,
+     "asked": false,
+     "count": 3,
+     "describeMs": 15
+    },
+    {
+     "startMs": 907,
+     "endMs": 945,
+     "asked": false,
+     "count": 3,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1046,
+     "endMs": 1091,
+     "asked": false,
+     "count": 3,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1192,
+     "endMs": 1235,
+     "asked": false,
+     "count": 3,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1337,
+     "endMs": 1377,
+     "asked": false,
+     "count": 3,
+     "describeMs": 13
+    },
+    {
+     "startMs": 1479,
+     "endMs": 1520,
+     "asked": false,
+     "count": 3,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1622,
+     "endMs": 1668,
+     "asked": false,
+     "count": 3,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1769,
+     "endMs": 1823,
+     "asked": false,
+     "count": 3,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1926,
+     "endMs": 1977,
+     "asked": false,
+     "count": 3,
+     "describeMs": 16
+    },
+    {
+     "startMs": 2079,
+     "endMs": 2120,
+     "asked": false,
+     "count": 3,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2222,
+     "endMs": 2270,
+     "asked": false,
+     "count": 3,
+     "describeMs": 16
+    },
+    {
+     "startMs": 2371,
+     "endMs": 2420,
+     "asked": false,
+     "count": 3,
+     "describeMs": 17
+    },
+    {
+     "startMs": 2523,
+     "endMs": 2572,
+     "asked": false,
+     "count": 3,
+     "describeMs": 17
+    },
+    {
+     "startMs": 2672,
+     "endMs": 2717,
+     "asked": false,
+     "count": 3,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2819,
+     "endMs": 2871,
+     "asked": false,
+     "count": 3,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2972,
+     "endMs": 3018,
+     "asked": false,
+     "count": 3,
+     "describeMs": 14
+    }
+   ],
+   "fresh": false,
+   "rescue": {
+    "fresh": true,
+    "tries": 1,
+    "ms": 41
+   },
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 17,
+   "arm": "direct",
+   "instance": 3,
+   "indexInInstance": 4,
+   "base": 4,
+   "sync": {
+    "tries": 1,
+    "ms": 45
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 463,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 5,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 15
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 54,
+     "asked": false,
+     "count": 4,
+     "describeMs": 16
+    },
+    {
+     "startMs": 155,
+     "endMs": 201,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 303,
+     "endMs": 350,
+     "asked": false,
+     "count": 4,
+     "describeMs": 16
+    },
+    {
+     "startMs": 450,
+     "endMs": 497,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 598,
+     "endMs": 653,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 756,
+     "endMs": 804,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 906,
+     "endMs": 958,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1059,
+     "endMs": 1118,
+     "asked": false,
+     "count": 4,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1219,
+     "endMs": 1271,
+     "asked": false,
+     "count": 4,
+     "describeMs": 17
+    },
+    {
+     "startMs": 1371,
+     "endMs": 1426,
+     "asked": false,
+     "count": 4,
+     "describeMs": 15
+    },
+    {
+     "startMs": 1528,
+     "endMs": 1570,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1673,
+     "endMs": 1716,
+     "asked": false,
+     "count": 4,
+     "describeMs": 15
+    },
+    {
+     "startMs": 1818,
+     "endMs": 1860,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1961,
+     "endMs": 2005,
+     "asked": false,
+     "count": 4,
+     "describeMs": 13
+    },
+    {
+     "startMs": 2106,
+     "endMs": 2150,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2251,
+     "endMs": 2295,
+     "asked": false,
+     "count": 4,
+     "describeMs": 13
+    },
+    {
+     "startMs": 2397,
+     "endMs": 2444,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2546,
+     "endMs": 2592,
+     "asked": false,
+     "count": 4,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2694,
+     "endMs": 2740,
+     "asked": false,
+     "count": 4,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2843,
+     "endMs": 2890,
+     "asked": false,
+     "count": 4,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2992,
+     "endMs": 3051,
+     "asked": false,
+     "count": 4,
+     "describeMs": 19
+    }
+   ],
+   "fresh": false,
+   "rescue": {
+    "fresh": true,
+    "tries": 1,
+    "ms": 48
+   },
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 18,
+   "arm": "direct",
+   "instance": 3,
+   "indexInInstance": 5,
+   "base": 5,
+   "sync": {
+    "tries": 1,
+    "ms": 49
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 458,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 6,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 17
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 53,
+     "asked": false,
+     "count": 5,
+     "describeMs": 16
+    },
+    {
+     "startMs": 154,
+     "endMs": 209,
+     "asked": false,
+     "count": 5,
+     "describeMs": 17
+    },
+    {
+     "startMs": 310,
+     "endMs": 362,
+     "asked": false,
+     "count": 5,
+     "describeMs": 18
+    },
+    {
+     "startMs": 464,
+     "endMs": 518,
+     "asked": false,
+     "count": 5,
+     "describeMs": 15
+    },
+    {
+     "startMs": 619,
+     "endMs": 670,
+     "asked": false,
+     "count": 5,
+     "describeMs": 16
+    },
+    {
+     "startMs": 771,
+     "endMs": 820,
+     "asked": false,
+     "count": 5,
+     "describeMs": 14
+    },
+    {
+     "startMs": 922,
+     "endMs": 976,
+     "asked": false,
+     "count": 5,
+     "describeMs": 15
+    },
+    {
+     "startMs": 1078,
+     "endMs": 1132,
+     "asked": false,
+     "count": 5,
+     "describeMs": 15
+    },
+    {
+     "startMs": 1234,
+     "endMs": 1283,
+     "asked": false,
+     "count": 5,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1385,
+     "endMs": 1429,
+     "asked": false,
+     "count": 5,
+     "describeMs": 14
+    },
+    {
+     "startMs": 1531,
+     "endMs": 1579,
+     "asked": false,
+     "count": 5,
+     "describeMs": 15
+    },
+    {
+     "startMs": 1680,
+     "endMs": 1733,
+     "asked": false,
+     "count": 5,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1835,
+     "endMs": 1883,
+     "asked": false,
+     "count": 5,
+     "describeMs": 16
+    },
+    {
+     "startMs": 1983,
+     "endMs": 2031,
+     "asked": false,
+     "count": 5,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2133,
+     "endMs": 2174,
+     "asked": false,
+     "count": 5,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2276,
+     "endMs": 2327,
+     "asked": false,
+     "count": 5,
+     "describeMs": 14
+    },
+    {
+     "startMs": 2429,
+     "endMs": 2478,
+     "asked": false,
+     "count": 5,
+     "describeMs": 16
+    },
+    {
+     "startMs": 2580,
+     "endMs": 2627,
+     "asked": false,
+     "count": 5,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2728,
+     "endMs": 2775,
+     "asked": false,
+     "count": 5,
+     "describeMs": 15
+    },
+    {
+     "startMs": 2876,
+     "endMs": 2925,
+     "asked": false,
+     "count": 5,
+     "describeMs": 16
+    }
+   ],
+   "fresh": false,
+   "rescue": {
+    "fresh": true,
+    "tries": 1,
+    "ms": 55
+   },
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 19,
+   "arm": "askOnce",
+   "instance": 4,
+   "indexInInstance": 0,
+   "base": 0,
+   "sync": {
+    "tries": 1,
+    "ms": 48
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 466,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 1,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 23
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 53,
+     "asked": true,
+     "count": 1,
+     "describeMs": 15,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 3,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 53,
+   "freshAfterClickMs": 496,
+   "plainReadAfterFresh": 1,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 20,
+   "arm": "askOnce",
+   "instance": 4,
+   "indexInInstance": 1,
+   "base": 1,
+   "sync": {
+    "tries": 1,
+    "ms": 49
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 459,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 2,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 19
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 58,
+     "asked": true,
+     "count": 2,
+     "describeMs": 14,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 4,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 58,
+   "freshAfterClickMs": 498,
+   "plainReadAfterFresh": 2,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 21,
+   "arm": "ask",
+   "instance": 4,
+   "indexInInstance": 2,
+   "base": 2,
+   "sync": {
+    "tries": 1,
+    "ms": 61
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 472,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 3,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 22
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 54,
+     "asked": true,
+     "count": 3,
+     "describeMs": 16,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 0,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 54,
+   "freshAfterClickMs": 504,
+   "plainReadAfterFresh": 3,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 22,
+   "arm": "ask",
+   "instance": 4,
+   "indexInInstance": 3,
+   "base": 3,
+   "sync": {
+    "tries": 1,
+    "ms": 49
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 479,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 4,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 20
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 63,
+     "asked": true,
+     "count": 4,
+     "describeMs": 18,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 0,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 63,
+   "freshAfterClickMs": 522,
+   "plainReadAfterFresh": 4,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 23,
+   "arm": "askOnce",
+   "instance": 4,
+   "indexInInstance": 4,
+   "base": 4,
+   "sync": {
+    "tries": 1,
+    "ms": 55
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 457,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 5,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 23
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 52,
+     "asked": true,
+     "count": 5,
+     "describeMs": 14,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 0,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 52,
+   "freshAfterClickMs": 486,
+   "plainReadAfterFresh": 5,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  },
+  {
+   "round": 24,
+   "arm": "ask",
+   "instance": 4,
+   "indexInInstance": 5,
+   "base": 5,
+   "sync": {
+    "tries": 1,
+    "ms": 46
+   },
+   "hiddenBefore": true,
+   "act": {
+    "ms": 472,
+    "outcome": "unknown",
+    "delivery": "ax",
+    "grounding": "description"
+   },
+   "click": {
+    "n": 6,
+    "vis": "hidden",
+    "trusted": true,
+    "afterPressStartMs": 17
+   },
+   "polls": [
+    {
+     "startMs": 0,
+     "endMs": 57,
+     "asked": true,
+     "count": 6,
+     "describeMs": 18,
+     "flush": {
+      "hitInWebArea": true,
+      "areas": 1,
+      "hitRoles": [
+       "AXWebArea"
+      ],
+      "asked": true,
+      "ms": 3,
+      "hitInWindow": true
+     }
+    }
+   ],
+   "fresh": true,
+   "freshAfterPressDoneMs": 57,
+   "freshAfterClickMs": 512,
+   "plainReadAfterFresh": 6,
+   "clicksLanded": 1,
+   "sawVisible": false,
+   "hiddenAfter": true,
+   "valid": true
+  }
+ ]
+}

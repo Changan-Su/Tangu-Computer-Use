@@ -10,14 +10,16 @@
  *   ④ 换一个元素:又走回 ax_only
  *   ⑤ helper 报 stale_ref 的那次没送达,再按同一元素还是 ax_only,不算重复
  *   ⑥ 再 observe_ui 不再等
- *   ⑦ 按完网页内容一点没变(页面被盖住时就是这样,这里用「按已经有焦点、点了没反应的按钮」造):提窗口、带截图、不叫模型再按
+ *   ⑦ 按完网页内容一点没变(这里用「按已经有焦点、点了没反应的按钮」造):提窗口、带截图、叫模型先看不要再按
+ *   ⑧ 模型还是再按了同一个元素,窗口从那次按压到现在都没变:照常发真实点击
+ *   ⑨ 按完没变、过几秒页面才变(慢页面),模型再按同一个元素:先比出页面变了,什么都不发,告诉模型上一次已经生效
  *
  * 不动真鼠标、不抢前台:bridge 和 helper 之间夹一层代理,记下每个 act 的 policy 和激活请求,policy = foreground 的 act
- * 和激活都不转发、直接回一个假结果。所以 ③ ⑦ 证明的是「决定这么做」,不是真实点击、也不是激活后的截图(那个看 web-stale.probe.mjs)。
+ * 和激活都不转发、直接回一个假结果。所以 ③ ⑦ ⑧ 证明的是「决定这么做」,不是真实点击、也不是激活后的截图(那个看 web-covered.check.mjs)。
  * 替身被别的窗口完全盖住时 ② 的按压会走 ⑦ 的路径,② 会红:别让窗口压在屏幕右下角。
  *
  * 负对照(应该在 ① 和 ② 红):node scripts/web-press.check.mjs --root <没有这处改动的检出>
- * 负对照(应该只在 ⑦ 红):--root <a855a69 的检出>
+ * 负对照(应该只在 ⑨ 红):--root <把 bridge.ts 里 earlierPressTookEffect 那次调用去掉的副本>
  *
  * 需要:macOS、协议版本和 vendor 一致且已授权的 helper(PI_COMPUTER_USE_HELPER_APP_PATH,缺省用已安装的那份)、
  * Electron(CU_ELECTRON,缺省用 Forsion-Genesis/desktop 装的那份)。
@@ -49,9 +51,12 @@ process.env.PI_CU_SOCKET_PATH = proxySock
 process.env.PI_COMPUTER_USE_HELPER_APP_PATH = helperApp
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>CU Web Press</title></head><body>
-<button id="save">Probe Save</button> <button id="other">Probe Other</button> <button id="stale">Probe Stale</button> <button id="focus">Probe Focus</button> <button id="still">Probe Still</button>
+<button id="save">Probe Save</button> <button id="other">Probe Other</button> <button id="stale">Probe Stale</button> <button id="focus">Probe Focus</button> <button id="still">Probe Still</button> <button id="aim">Probe Aim</button> <button id="late">Probe Late</button><p id="lateStatus">Late: idle</p>
 <script>
 document.getElementById('focus').addEventListener('click', () => document.getElementById('still').focus())
+document.getElementById('aim').addEventListener('click', () => document.getElementById('late').focus())
+// 慢页面:按下去 7 秒后才有变化,动作结果回去的时候(提窗口再等 2 秒)页面还是老样子
+document.getElementById('late').addEventListener('click', () => setTimeout(() => { document.getElementById('lateStatus').textContent = 'Late: done' }, 7000))
 const post = (o) => fetch('/log', { method: 'POST', body: JSON.stringify(o), keepalive: true })
 document.addEventListener('click', (e) => post({ type: 'click', id: e.target.id, trusted: e.isTrusted }), true)
 addEventListener('load', () => post({ type: 'load' }))
@@ -215,13 +220,42 @@ try {
   const unchanged = await press('Probe Still')
   const stillPolicies = [...policies]
   await sleep(500)
-  check(`⑦ 按完网页没变:提窗口、带截图、不叫模型再按(${stillPolicies.join(' → ')})`, () => {
+  check(`⑦ 按完网页没变:提窗口、带截图、叫模型先看不要再按(${stillPolicies.join(' → ')})`, () => {
     assert.deepEqual(stillPolicies, ['ax_only'])
     assert.equal(clicks('still').length, 1)
     assert.deepEqual(activations, [child.pid], 'the window was not brought forward')
     assert.ok(unchanged.content.some((block) => block.type === 'image'), 'no screenshot attached')
     assert.doesNotMatch(unchanged.content[0].text, /requested explicitly/)
-    assert.match(bridge.executionNote(unchanged.details), /only if the screenshot shows/, 'the model is not told to judge by the screenshot')
+    assert.equal(unchanged.details.execution.pressUnconfirmed, 'current_screenshot')
+    assert.match(bridge.executionNote(unchanged.details), /Do not press again now/, 'the model is not told to hold off')
+    assert.match(bridge.executionNote(unchanged.details), /only look/, 'the next step offered is not a read')
+  })
+
+  policies.length = 0
+  const repeated = await press('Probe Still')
+  const repeatedPolicies = [...policies]
+  check(`⑧ 再按、窗口一直没变:照常发真实点击(${repeatedPolicies.join(' → ')})`, () => {
+    assert.deepEqual(repeatedPolicies, ['foreground'])
+    assert.ok(!repeated.details.execution.earlierPressTookEffect, 'nothing moved, yet the click was held back')
+  })
+
+  await press('Probe Aim')
+  await sleep(500)
+  policies.length = 0
+  const slow = await press('Probe Late')
+  const slowPolicies = [...policies]
+  for (let i = 0; i < 100 && !/Late: done/.test(text(await observe())); i++) await sleep(200)
+  policies.length = 0
+  const held = await press('Probe Late')
+  const heldPolicies = [...policies]
+  check(`⑨ 再按之前页面已经变了:什么都不发,告诉模型上一次已生效(${slowPolicies.join(' → ')} 之后 ${heldPolicies.join(' → ') || '没有动作'})`, () => {
+    assert.deepEqual(slowPolicies, ['ax_only'])
+    assert.equal(slow.details.execution.pressUnconfirmed, 'current_screenshot', 'the slow press was not left unconfirmed, so this case tests nothing')
+    assert.deepEqual(heldPolicies, [], 'a second press went out')
+    assert.equal(clicks('late').length, 1)
+    assert.equal(held.details.execution.earlierPressTookEffect, 'tree')
+    assert.match(text(held), /Nothing was sent/)
+    assert.match(bridge.executionNote(held.details), /that press took effect/)
   })
 } finally {
   child.kill()

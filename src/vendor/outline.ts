@@ -59,6 +59,28 @@ export interface LookImage {
 	height: number;
 	/** windows of the same app drawn over the target in this image (a popup, a dropdown); macOS helper only */
 	overlays?: number;
+	/** Forsion patch, see UPSTREAM.md. Grayscale thumbnail of this image, one byte per `cell`-pixel square, top row first; macOS helper only. */
+	grid?: PictureGrid;
+}
+
+export interface PictureGrid {
+	cols: number;
+	rows: number;
+	cell: number;
+	data: string;
+}
+
+/**
+ * Forsion patch, see UPSTREAM.md. What the helper did before reading a window with web content: it asks the page one
+ * hit-test, because a hidden page holds its accessibility changes back until it is asked something.
+ * `asked` false with `reason` "no_web_area" is a native window. `hitInWindow` false means another window of the same
+ * app answered, so the tree that follows may still be the old one.
+ */
+export interface WebFlush {
+	asked: boolean;
+	reason?: string;
+	hitInWindow?: boolean;
+	hitInWebArea?: boolean;
 }
 
 export interface LookWindow {
@@ -78,6 +100,7 @@ export interface LookResponse {
 	capturedAt: number;
 	window: LookWindow;
 	image?: LookImage;
+	webFlush?: WebFlush;
 	outline: OutlineNode;
 	timings: Record<string, number>;
 	readText?: { requested?: "auto" | "always" | "never"; executed: boolean };
@@ -215,6 +238,8 @@ export function parseLookResponse(raw: unknown): LookResponse {
 	const image = isRecord(record.image) ? record.image : undefined;
 	const window = isRecord(record.window) ? record.window : {};
 	const metadata = isRecord(window.metadata) ? window.metadata : undefined;
+	const grid = image && isRecord(image.grid) ? image.grid : undefined;
+	const webFlush = isRecord(record.webFlush) ? record.webFlush : undefined;
 	const outline = buildOutline(toString(record.lookId), parseNode(record.outline));
 	const readText = isRecord(record.readText) ? record.readText : undefined;
 	const requestedReadText = readText?.requested === "auto" || readText?.requested === "always" || readText?.requested === "never" ? readText.requested : undefined;
@@ -238,7 +263,9 @@ export function parseLookResponse(raw: unknown): LookResponse {
 			width: Math.max(1, Math.trunc(toNumber(image.width, 1))),
 			height: Math.max(1, Math.trunc(toNumber(image.height, 1))),
 			...(toNumber(image.overlays) > 0 ? { overlays: Math.trunc(toNumber(image.overlays)) } : {}),
+			...(grid && toString(grid.data) ? { grid: { cols: Math.trunc(toNumber(grid.cols)), rows: Math.trunc(toNumber(grid.rows)), cell: Math.max(1, Math.trunc(toNumber(grid.cell, 8))), data: toString(grid.data) } } : {}),
 		} : undefined,
+		...(webFlush ? { webFlush: { asked: toBoolean(webFlush.asked), reason: toString(webFlush.reason) || undefined, ...(webFlush.hitInWindow === undefined ? {} : { hitInWindow: toBoolean(webFlush.hitInWindow) }), ...(webFlush.hitInWebArea === undefined ? {} : { hitInWebArea: toBoolean(webFlush.hitInWebArea) }) } } : {}),
 		outline: outline.root,
 		timings: isRecord(record.timings) ? Object.fromEntries(Object.entries(record.timings).map(([key, value]) => [key, toNumber(value)])) : {},
 		readText: readText ? { requested: requestedReadText, executed: toBoolean(readText.executed) } : undefined,
