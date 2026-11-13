@@ -454,6 +454,9 @@ final class Bridge {
 	private var controlledWindowId: UInt32 = 0
 	private var controlledPid: Int32 = 0
 	private var controlledAt: Date?
+	/// 最后一条登记窗口的 act 带的 runId(旧调用方是 nil;look 不改它)。和窗口一起在 controlledLock 下读写,
+	/// liveView 拿它和最近动作的归属比(见 LiveFrameOwner)。
+	private var controlledRunId: String?
 	private var highlightFollowTimer: Timer?
 	// 协议 20:liveView 回包里的光标 / 最近动作 / 动作计数 / runId / 这一轮还在不在(见 LiveViewExtras)。
 	// 和叠层开关无关:「操作可视化」关着也照记(整轮状态机在主线程那份会被开关清掉,这里另记一份,读的时候按时刻现算)。
@@ -725,6 +728,7 @@ final class Bridge {
 		controlledWindowId = windowId
 		controlledPid = pid
 		controlledAt = Date()
+		controlledRunId = overlay.runId
 		controlledLock.unlock()
 		liveLock.lock()
 		liveTurn.actStarted(runId: overlay.runId, at: OverlayClock.now())
@@ -744,11 +748,12 @@ final class Bridge {
 	}
 
 	/// 记下一个动作(找到目标之后、取证之前调;读元素名放在这里,不占「取证 → 投递」的间隔)。返回它的 seq。
-	private func noteLiveAction(kind: String, point: CGPoint?, label: String?) -> Int {
+	/// owner 从这条 act 自己的参数取(窗口、pid、runId),不读共享的「被操控窗口」—— 别的 act 可能已经改了它。
+	private func noteLiveAction(kind: String, point: CGPoint?, label: String?, owner: LiveFrameOwner) -> Int {
 		liveLock.lock()
 		defer { liveLock.unlock() }
 		liveActionCount += 1
-		liveLastAction = LiveActionRecord(kind: kind, seq: liveActionCount, at: OverlayClock.now(), point: point, cursor: nil, label: label)
+		liveLastAction = LiveActionRecord(kind: kind, seq: liveActionCount, at: OverlayClock.now(), point: point, cursor: nil, label: label, owner: owner)
 		return liveActionCount
 	}
 
@@ -774,9 +779,9 @@ final class Bridge {
 		)
 	}
 
-	/// liveView 回包的五个字段(只在按窗口截图的那条路上并进去)。
-	private func liveViewExtras(windowId: UInt32) -> [String: Any] {
-		let bounds = windowInfo(windowId: windowId)?.bounds
+	/// liveView 回包的五个字段(只在按窗口截图的那条路上并进去)。frame 是截图用的同一份快照。
+	private func liveViewExtras(frame: LiveFrameOwner) -> [String: Any] {
+		let bounds = windowInfo(windowId: frame.windowId)?.bounds
 		liveLock.lock()
 		defer { liveLock.unlock() }
 		let now = OverlayClock.now()
@@ -786,7 +791,7 @@ final class Bridge {
 		case .acting, .thinking: turnActive = true
 		case .idle, .ending: turnActive = false
 		}
-		return LiveViewExtras.fields(last: liveLastAction, actionCount: liveActionCount, runId: liveRunId, turnActive: turnActive, windowBounds: bounds, now: now)
+		return LiveViewExtras.fields(last: liveLastAction, actionCount: liveActionCount, runId: liveRunId, turnActive: turnActive, frame: frame, windowBounds: bounds, now: now)
 	}
 
 	/// overlayTurn:只收 end。runId 对不上 / 没给 runId 而这一轮有 runId 时不做事,但照样回 ok(见 OverlayTurnModel)。
@@ -817,11 +822,11 @@ final class Bridge {
 		if sleep > 0 { usleep(useconds_t(sleep * 1_000_000)) }
 	}
 
-	private func controlledSnapshot() -> (windowId: UInt32, pid: Int32, at: Date)? {
+	private func controlledSnapshot() -> (windowId: UInt32, pid: Int32, at: Date, runId: String?)? {
 		controlledLock.lock()
 		defer { controlledLock.unlock() }
 		guard controlledWindowId != 0, let at = controlledAt else { return nil }
-		return (controlledWindowId, controlledPid, at)
+		return (controlledWindowId, controlledPid, at, controlledRunId)
 	}
 
 	/// 最近被操控窗口的一帧画面。给 Forsion 桌面的"被操控窗口"视图轮询用(≤2fps)。
@@ -851,7 +856,7 @@ final class Bridge {
 		if #available(macOS 14.0, *) {
 			// 协议 20:按窗口出图的这条路上带光标 / 最近动作(比例坐标 = 窗口 bounds 里的位置)。帧没变时也带:
 			// 叠层不在画面里,光标和 seq 照样在动。整屏出图的老路(下面 legacy)几何不同,不带。
-			payload.merge(liveViewExtras(windowId: controlled.windowId)) { current, _ in current }
+			payload.merge(liveViewExtras(frame: LiveFrameOwner(windowId: controlled.windowId, pid: controlled.pid, runId: controlled.runId))) { current, _ in current }
 			let live = LiveWindowStream.shared
 			var source = "stream"
 			var image: CGImage?
@@ -2448,7 +2453,7 @@ final class Bridge {
 			} else {
 				point = rawPoint
 			}
-			liveSeq = noteLiveAction(kind: kind, point: point, label: element.flatMap(elementLabel))
+			liveSeq = noteLiveAction(kind: kind, point: point, label: element.flatMap(elementLabel), owner: LiveFrameOwner(windowId: record.windowId, pid: pid, runId: overlay.runId))
 		}
 
 		// 先到再点(协议 20):落点一算出来就让光标起飞,和下面的按前准备(装 AX 观察器)并行;取证之前只等还没飞完的那段。

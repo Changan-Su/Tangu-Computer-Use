@@ -126,8 +126,9 @@ struct AgentOverlayRenderTests {
         // 有光标、有最近动作、有 runId、这一轮在进行:窗口在 (100, 50) 起、800 × 524,点在样例那个比例上。
         let bounds = CGRect(x: 100, y: 50, width: 800, height: 524)
         let point = CGPoint(x: 100 + 0.6425 * 800, y: 50 + 0.8811 * 524)
-        let record = LiveActionRecord(kind: "click", seq: 17, at: 99.82, point: point, cursor: point, label: LiveViewExtras.label(title: "  Send\n", description: nil))
-        let built = LiveViewExtras.fields(last: record, actionCount: 17, runId: "run_01HZX8Q2W3", turnActive: true, windowBounds: bounds, now: 100)
+        let frame = LiveFrameOwner(windowId: 42, pid: 7, runId: "run_01HZX8Q2W3")
+        let record = LiveActionRecord(kind: "click", seq: 17, at: 99.82, point: point, cursor: point, label: LiveViewExtras.label(title: "  Send\n", description: nil), owner: frame)
+        let built = LiveViewExtras.fields(last: record, actionCount: 17, runId: "run_01HZX8Q2W3", turnActive: true, frame: frame, windowBounds: bounds, now: 100)
         // 过一遍 JSON(和真回包一样经 JSONSerialization 出去),再和样例比键集与类型。
         guard let encoded = try? JSONSerialization.data(withJSONObject: built),
             let reparsed = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any]
@@ -148,14 +149,28 @@ struct AgentOverlayRenderTests {
         expect(action?["label"] as? String == "Send" && action?["ageMs"] as? Int == 180 && action?["seq"] as? Int == 17, "lastAction 的 label / ageMs / seq")
 
         // 落在窗口外、不知道窗口在哪:不给坐标;没有动作:只有计数和轮次。
-        let outside = LiveActionRecord(kind: "scroll", seq: 3, at: 1, point: CGPoint(x: 50, y: 60), cursor: nil, label: nil)
-        let out = LiveViewExtras.fields(last: outside, actionCount: 3, runId: nil, turnActive: false, windowBounds: bounds, now: 2)
+        let legacy = LiveFrameOwner(windowId: 42, pid: 7, runId: nil)
+        let outside = LiveActionRecord(kind: "scroll", seq: 3, at: 1, point: CGPoint(x: 50, y: 60), cursor: nil, label: nil, owner: legacy)
+        let out = LiveViewExtras.fields(last: outside, actionCount: 3, runId: nil, turnActive: false, frame: legacy, windowBounds: bounds, now: 2)
         expect(out["cursor"] == nil && (out["lastAction"] as? [String: Any])?["x"] == nil, "窗口外的点不给坐标")
         expect(out["runId"] == nil && (out["lastAction"] as? [String: Any])?["label"] == nil, "没有 runId / label 就不给")
-        let noBounds = LiveViewExtras.fields(last: record, actionCount: 17, runId: nil, turnActive: true, windowBounds: nil, now: 100)
+        let noBounds = LiveViewExtras.fields(last: record, actionCount: 17, runId: nil, turnActive: true, frame: frame, windowBounds: nil, now: 100)
         expect(noBounds["cursor"] == nil, "不知道窗口在哪就不给 cursor")
-        let empty = LiveViewExtras.fields(last: nil, actionCount: 0, runId: nil, turnActive: false, windowBounds: bounds, now: 0)
+        let empty = LiveViewExtras.fields(last: nil, actionCount: 0, runId: nil, turnActive: false, frame: frame, windowBounds: bounds, now: 0)
         expect(Set(empty.keys) == ["actionCount", "turnActive"], "还没有动作:只给计数和轮次")
+        expect(out["lastAction"] != nil, "旧调用方(没有 runId)的动作配同样没有 runId 的这一帧:照给")
+
+        // 归属:这一帧是 B 的窗口 / B 这一轮,最近动作是迟到的 A —— 不能拼在一起。cursor / lastAction 不给,计数和轮次照给。
+        for (name, other) in [
+            ("别的窗口", LiveFrameOwner(windowId: 43, pid: 7, runId: "run_01HZX8Q2W3")),
+            ("别的进程", LiveFrameOwner(windowId: 42, pid: 8, runId: "run_01HZX8Q2W3")),
+            ("别的一轮", LiveFrameOwner(windowId: 42, pid: 7, runId: "run_B")),
+            ("这一帧是旧调用方登记的", LiveFrameOwner(windowId: 42, pid: 7, runId: nil)),
+        ] {
+            let mixed = LiveViewExtras.fields(last: record, actionCount: 18, runId: "run_B", turnActive: true, frame: other, windowBounds: bounds, now: 100)
+            expect(mixed["cursor"] == nil && mixed["lastAction"] == nil, "\(name):不带 cursor / lastAction")
+            expect(mixed["actionCount"] as? Int == 18 && mixed["turnActive"] as? Bool == true && mixed["runId"] as? String == "run_B", "\(name):actionCount / turnActive / runId 照给")
+        }
         expect(LiveViewExtras.fraction(CGPoint(x: 900, y: 574), in: bounds).map { $0.x == 1 && $0.y == 1 } == true, "右下角正好是 1")
         expect(LiveViewExtras.fraction(CGPoint(x: 1, y: 1), in: .zero) == nil, "bounds 退化就不给")
 

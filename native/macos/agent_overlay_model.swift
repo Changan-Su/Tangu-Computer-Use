@@ -589,6 +589,14 @@ struct ArrivalBudget: Equatable {
 
 // MARK: - 实时画面回包里的光标与最近动作
 
+/// 一帧 / 一个动作归谁:哪扇窗口、哪个进程、哪一轮(runId;旧调用方是 nil)。liveView 拿这一帧的归属和最近动作的
+/// 归属比,对不上就不把那个动作拼进这一帧的回包。
+struct LiveFrameOwner: Equatable {
+    var windowId: UInt32
+    var pid: Int32
+    var runId: String?
+}
+
 /// helper 记下的最近一次动作(liveView 回包用)。坐标一律是全局 CG 点(左上原点)。
 struct LiveActionRecord: Equatable {
     var kind: String
@@ -600,6 +608,8 @@ struct LiveActionRecord: Equatable {
     /// 示意光标停的那一点(画了光标才有;打字时是输入框前缘)。没有就用 point。
     var cursor: CGPoint?
     var label: String?
+    /// 这个动作是哪条 act 做的(从那条 act 自己的参数取,不读共享状态)。
+    var owner: LiveFrameOwner
 }
 
 /// liveView 回包的五个新字段(协议 20,契约 §1.4):cursor / lastAction / actionCount / runId / turnActive。
@@ -644,10 +654,12 @@ enum LiveViewExtras {
         return (round4(x), round4(y))
     }
 
-    static func fields(last: LiveActionRecord?, actionCount: Int, runId: String?, turnActive: Bool, windowBounds: CGRect?, now: Double) -> [String: Any] {
+    /// frame:这一帧画面是谁的(和截图用的同一份快照)。最近动作的归属和它对不上(别的窗口 / 进程 / 一轮)就不带
+    /// cursor / lastAction —— 否则会把 B 的画面配上迟到的 A 的动作;actionCount / turnActive / runId 照给。
+    static func fields(last: LiveActionRecord?, actionCount: Int, runId: String?, turnActive: Bool, frame: LiveFrameOwner, windowBounds: CGRect?, now: Double) -> [String: Any] {
         var out: [String: Any] = ["actionCount": actionCount, "turnActive": turnActive]
         if let runId { out["runId"] = runId }
-        guard let last else { return out }
+        guard let last, last.owner == frame else { return out }
         var action: [String: Any] = ["kind": last.kind, "seq": last.seq, "ageMs": max(0, Int(((now - last.at) * 1000).rounded()))]
         if let point = last.point, let bounds = windowBounds, let f = fraction(point, in: bounds) {
             action["x"] = f.x
