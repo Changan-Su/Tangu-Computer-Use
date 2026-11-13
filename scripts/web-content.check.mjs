@@ -83,7 +83,8 @@ assert.match(executionNote(details({ accessibilityPress: true, pressUnconfirmed:
 // 再按之前比出窗口变了:没有发任何动作,不列步骤,不说「执行器确认了这次动作」
 const held = (how) => ({ config: { headless: false }, execution: { strategy: 'act', outcome: 'worked', actionCount: 0, earlierPressTookEffect: how } });
 assert.match(executionNote(held('tree')), /Nothing was sent this time/);
-assert.match(executionNote(held('tree')), /the page has changed, so that press took effect/);
+assert.match(executionNote(held('tree')), /the page has changed \(see the changes in this result\), so that press most likely took effect late/);
+assert.match(executionNote(held('tree')), /If it shows the press did nothing, press the element once more/, 'the changed page is evidence, the model still decides');
 assert.match(executionNote(held('picture')), /picture around the element has changed/);
 assert.doesNotMatch(executionNote(held('tree')), /confirmed this action/);
 assert.match(executionNote(held('tree')), /"steps":\[\]/);

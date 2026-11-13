@@ -60,7 +60,7 @@ interface ExecutionTrace {
 	accessibilityPress?: boolean;
 	/** Forsion patch. This press showed no change in the page: "current_screenshot" after its window was brought forward, "no_screenshot" when it could not be. */
 	pressUnconfirmed?: "current_screenshot" | "no_screenshot";
-	/** Forsion patch. Nothing was sent: this element's earlier press showed no change, and the window has moved since (the page's tree, or the picture around the element). */
+	/** Forsion patch. Nothing was sent, once: this element's earlier press showed no change, and the window has moved since (the page's tree, or the picture around the element). */
 	earlierPressTookEffect?: "tree" | "picture";
 	escalatedToForeground?: boolean;
 	escalationReason?: string;
@@ -2083,9 +2083,11 @@ async function terminalDesktopActionResult(
 /**
  * Forsion patch, see UPSTREAM.md. The model is pressing again the element whose last press showed no change
  * (unconfirmedPress). Before that goes out as a real click, read the window once more: if the page's tree moved since
- * before that press, or the picture around the element moved since the screenshot that went out with it, the press took
- * effect late and a second one would act twice. Then nothing is sent and the model gets the current state. A model told
- * "the tree may be old, trust the picture" still follows the tree, so the comparison is made here and not left to it.
+ * before that press, or the picture around the element moved since the screenshot that went out with it, the press most
+ * likely took effect late and a second one would act twice. Then nothing is sent, once, and the model gets the current
+ * state to judge by. It is evidence and not proof (a clock on the page moves too), so the result says what changed and
+ * leaves the verdict to the model; its next press of the element goes out. A model told "the tree may be old, trust the
+ * picture" still follows the tree, so the comparison is made here and not left to it.
  * Nothing moved: the state is put back and the click goes out as promised.
  */
 async function earlierPressTookEffect(
@@ -2098,6 +2100,8 @@ async function earlierPressTookEffect(
 	const pending = unconfirmedPress;
 	const first = actions[0];
 	if (!pending || !first?.ref || (first.action !== "click" && first.action !== "press")) return undefined;
+	// A right or double click on that element is another gesture, which the earlier press cannot have performed.
+	if ((first.button ?? "left") !== "left" || (first.clickCount ?? 1) !== 1) return undefined;
 	const node = nodeByRef(look.parsedOutline!, first.ref.trim());
 	if (!node || `${target.pid}:${target.windowId}:${[node.role, node.title, node.description].join("\u0000")}` !== pending.key) return undefined;
 	const state = operationState();
@@ -2112,7 +2116,7 @@ async function earlierPressTookEffect(
 	}
 	unconfirmedPress = undefined;
 	const execution: ExecutionTrace = { strategy: "act", outcome: "worked", actionCount: 0, earlierPressTookEffect: moved };
-	return await buildToolResult("act_ui", `Nothing was sent to ${target.appName} — ${target.windowTitle}: the earlier press of this element took effect. Returned state ${capture.capture.stateId}.`, capture, execution, signal, state.currentImageMode, baseView);
+	return await buildToolResult("act_ui", `Nothing was sent to ${target.appName} — ${target.windowTitle}: the page has changed since this element was last pressed. Returned state ${capture.capture.stateId}.`, capture, execution, signal, state.currentImageMode, baseView);
 }
 
 async function performDesktopTransaction(params: ActParams, actions: UiAction[], signal?: AbortSignal): Promise<AgentToolResult<ComputerUseDetails | TerminalDesktopActionDetails>> {
@@ -2132,6 +2136,9 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 		const headless = getComputerUseConfig().headless;
 		const alreadyApplied = await earlierPressTookEffect(actions, target, look, baseView, signal);
 		if (alreadyApplied) return alreadyApplied;
+		// Kept for the next action only, and that is this one: forget it before anything is sent, so a failure further
+		// down cannot leave it standing while this action changes the page.
+		unconfirmedPress = undefined;
 		const execution = await dispatchUiTransaction(actions, target, look, headless, signal);
 		const executedActions = actions.slice(0, execution.actionCount ?? actions.length);
 		try {
@@ -2175,7 +2182,6 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 			// shows the change. What is left is a press that changed nothing, a change that is only painted, and a page that
 			// could not be asked: only then is the window brought forward, where a page reports and repaints by itself. A press
 			// that still shows nothing is never sent again here; it is remembered for earlierPressTookEffect().
-			unconfirmedPress = undefined;
 			const pressedSteps = execution.steps?.length ? execution.steps : [execution];
 			const pressed = pressedSteps.filter((step) => step.accessibilityPress);
 			if (pressed.length > 0 && !execution.rootDelta?.length && (!execution.error || execution.error.code === "postcondition_failed") && !webContentChanged(baseView.outline, capture.outline)) {

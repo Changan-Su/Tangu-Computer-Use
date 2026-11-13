@@ -68,8 +68,9 @@ export function executionNote(details: unknown): string {
   if (!summary) return '';
   const strict = summary.strictBackground ? '[policy] Strict background is ON. Do not bypass it with shell, AppleScript, open/activate, or another tool. If foreground input is needed, ask the user to switch the app or change this setting.\n' : '';
   if (summary.earlierPressTookEffect) {
-    const moved = summary.earlierPressTookEffect === 'picture' ? 'the picture around the element has changed (a current screenshot is attached)' : 'the page has changed';
-    return `[execution] ${JSON.stringify(summary)}\nNothing was sent this time. The earlier press of this element showed no change in its result; since then ${moved}, so that press took effect. Continue from the returned state. Press the element again only if the task needs a second press.\n` + strict;
+    // 页面变了是证据,不是定论(页面上的时钟也会动):说清楚变了什么,让模型看了再定;它再按一次就发出去。
+    const moved = summary.earlierPressTookEffect === 'picture' ? 'the picture around the element has changed (a current screenshot is attached)' : 'the page has changed (see the changes in this result)';
+    return `[execution] ${JSON.stringify(summary)}\nNothing was sent this time. The earlier press of this element showed no change in its result; since then ${moved}, so that press most likely took effect late. Check the returned state before anything else: if it shows the result you wanted, continue. If it shows the press did nothing, press the element once more; that one goes out as a real click.\n` + strict;
   }
   const meaning = summary.error || summary.outcome === 'didnt'
     ? 'The executor reported a failure. Check the error and current state before deciding what to do.'

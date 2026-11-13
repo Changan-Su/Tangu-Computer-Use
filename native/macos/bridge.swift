@@ -2790,12 +2790,13 @@ final class Bridge {
 			return true
 		}
 
-		// 页面不可见时变化攒着不发,也就没有通知来叫醒这个循环:每一轮读之前都问。头一回没问成(这扇窗没有网页)就不再试。
+		// 页面不可见时变化攒着不发,也就没有通知来叫醒这个循环:每一轮读之前都问。这扇窗没有网页就不再试(免得每一轮都去找);
+		// 别的原因没问成(位置查询一时没答、网页区域一时没有尺寸)下一轮照问。
 		var flushWeb = boolArg(request, "flushWeb") ?? true
 		var lastCount = 0
 		repeat {
 			let changeGeneration = rootChangeGeneration(pid: pid)
-			if flushWeb { flushWeb = (flushPendingWebUpdates(pid: pid, window: window, windowId: windowId)["asked"] as? Bool) ?? false }
+			if flushWeb, (flushPendingWebUpdates(pid: pid, window: window, windowId: windowId)["reason"] as? String) == "no_web_area" { flushWeb = false }
 			let collected = collectDescendantsWithContext(startingAt: rootElement, maxDepth: 12, maxNodes: 2000)
 			let descendants = scopeExact ? Array(collected.prefix(1)) : collected
 			lastCount = descendants.count

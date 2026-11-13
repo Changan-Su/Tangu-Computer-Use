@@ -12,7 +12,8 @@
  *   ⑥ 再 observe_ui 不再等
  *   ⑦ 按完网页内容一点没变(这里用「按已经有焦点、点了没反应的按钮」造):提窗口、带截图、叫模型先看不要再按
  *   ⑧ 模型还是再按了同一个元素,窗口从那次按压到现在都没变:照常发真实点击
- *   ⑨ 按完没变、过几秒页面才变(慢页面),模型再按同一个元素:先比出页面变了,什么都不发,告诉模型上一次已经生效
+ *   ⑨ 按完没变、过几秒页面才变(慢页面),模型再按同一个元素:先比出页面变了,这一次什么都不发,告诉模型页面变了、先看
+ *   ⑩ 同一个元素换成右键:那是另一个动作,照常发
  *
  * 不动真鼠标、不抢前台:bridge 和 helper 之间夹一层代理,记下每个 act 的 policy 和激活请求,policy = foreground 的 act
  * 和激活都不转发、直接回一个假结果。所以 ③ ⑦ ⑧ 证明的是「决定这么做」,不是真实点击、也不是激活后的截图(那个看 web-covered.check.mjs)。
@@ -56,7 +57,8 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
 document.getElementById('focus').addEventListener('click', () => document.getElementById('still').focus())
 document.getElementById('aim').addEventListener('click', () => document.getElementById('late').focus())
 // 慢页面:按下去 7 秒后才有变化,动作结果回去的时候(提窗口再等 2 秒)页面还是老样子
-document.getElementById('late').addEventListener('click', () => setTimeout(() => { document.getElementById('lateStatus').textContent = 'Late: done' }, 7000))
+let lateDone = 0
+document.getElementById('late').addEventListener('click', () => setTimeout(() => { document.getElementById('lateStatus').textContent = 'Late: done ' + (++lateDone) }, 7000))
 const post = (o) => fetch('/log', { method: 'POST', body: JSON.stringify(o), keepalive: true })
 document.addEventListener('click', (e) => post({ type: 'click', id: e.target.id, trusted: e.isTrusted }), true)
 addEventListener('load', () => post({ type: 'load' }))
@@ -244,18 +246,33 @@ try {
   policies.length = 0
   const slow = await press('Probe Late')
   const slowPolicies = [...policies]
-  for (let i = 0; i < 100 && !/Late: done/.test(text(await observe())); i++) await sleep(200)
+  for (let i = 0; i < 100 && !/Late: done 1/.test(text(await observe())); i++) await sleep(200)
   policies.length = 0
   const held = await press('Probe Late')
   const heldPolicies = [...policies]
-  check(`⑨ 再按之前页面已经变了:什么都不发,告诉模型上一次已生效(${slowPolicies.join(' → ')} 之后 ${heldPolicies.join(' → ') || '没有动作'})`, () => {
+  check(`⑨ 再按之前页面已经变了:这一次什么都不发,告诉模型页面变了、先看(${slowPolicies.join(' → ')} 之后 ${heldPolicies.join(' → ') || '没有动作'})`, () => {
     assert.deepEqual(slowPolicies, ['ax_only'])
     assert.equal(slow.details.execution.pressUnconfirmed, 'current_screenshot', 'the slow press was not left unconfirmed, so this case tests nothing')
     assert.deepEqual(heldPolicies, [], 'a second press went out')
     assert.equal(clicks('late').length, 1)
     assert.equal(held.details.execution.earlierPressTookEffect, 'tree')
     assert.match(text(held), /Nothing was sent/)
-    assert.match(bridge.executionNote(held.details), /that press took effect/)
+    assert.match(bridge.executionNote(held.details), /most likely took effect late/)
+    assert.match(bridge.executionNote(held.details), /Check the returned state/)
+  })
+
+  await press('Probe Aim')
+  await sleep(500)
+  const slowAgain = await press('Probe Late')
+  for (let i = 0; i < 100 && !/Late: done 2/.test(text(await observe())); i++) await sleep(200)
+  policies.length = 0
+  const lateState = await observe()
+  const rightClick = await bridge.executeAct('', { stateId: lateState.details.capture.stateId, actions: [{ action: 'click', ref: refOf(text(lateState), 'Probe Late'), button: 'right' }] }, undefined, undefined, pctx)
+  const rightPolicies = [...policies]
+  check(`⑩ 同一个元素换成右键:照常发(${rightPolicies.join(' → ')})`, () => {
+    assert.equal(slowAgain.details.execution.pressUnconfirmed, 'current_screenshot', 'the slow press was not left unconfirmed, so this case tests nothing')
+    assert.ok(rightPolicies.length > 0, 'the right click was held back')
+    assert.ok(!rightClick.details.execution.earlierPressTookEffect)
   })
 } finally {
   child.kill()
