@@ -288,6 +288,86 @@
       "done.en": "Read the page",
       "error.zh": "没能读取网页内容",
       "error.en": "Couldn't read the page"
+    },
+    "postcondition": {
+      "running.zh": "正在 Chatter 中点击「Send」",
+      "running.en": "Clicking “Send” in Chatter",
+      "done.zh": "没能在 Chatter 中点击「Send」",
+      "done.en": "Couldn't click “Send” in Chatter",
+      "error.zh": "没能在 Chatter 中点击「Send」",
+      "error.en": "Couldn't click “Send” in Chatter"
+    },
+    "stepError": {
+      "running.zh": "正在 Chatter 中点击「Zhang San」",
+      "running.en": "Clicking “Zhang San” in Chatter",
+      "done.zh": "没能在 Chatter 中点击「Send」(第 2 步,共 2 步)",
+      "done.en": "Couldn't click “Send” in Chatter (step 2 of 2)",
+      "error.zh": "没能在 Chatter 中完成这些操作",
+      "error.en": "Couldn't finish the actions in Chatter"
+    },
+    "didnt": {
+      "running.zh": "正在 Chatter 中点击「Send」",
+      "running.en": "Clicking “Send” in Chatter",
+      "done.zh": "已在 Chatter 中点击「Send」",
+      "done.en": "Clicked “Send” in Chatter",
+      "error.zh": "没能在 Chatter 中点击「Send」",
+      "error.en": "Couldn't click “Send” in Chatter"
+    },
+    "earlierPress": {
+      "running.zh": "正在 Chatter 中点击「Send」",
+      "running.en": "Clicking “Send” in Chatter",
+      "done.zh": null,
+      "done.en": null,
+      "error.zh": "没能在 Chatter 中点击「Send」",
+      "error.en": "Couldn't click “Send” in Chatter"
+    },
+    "renamed": {
+      "running.zh": "正在 Chatter 中点击「Zhang San」",
+      "running.en": "Clicking “Zhang San” in Chatter",
+      "done.zh": "已在 Chatter 中点击「Zhang San」",
+      "done.en": "Clicked “Zhang San” in Chatter",
+      "error.zh": "没能在 Chatter 中点击「Zhang San」",
+      "error.en": "Couldn't click “Zhang San” in Chatter"
+    },
+    "pressRenamed": {
+      "running.zh": "正在 Chatter 中点击「Pause」",
+      "running.en": "Clicking “Pause” in Chatter",
+      "done.zh": "已在 Chatter 中点击「Pause」",
+      "done.en": "Clicked “Pause” in Chatter",
+      "error.zh": "没能在 Chatter 中点击「Pause」",
+      "error.en": "Couldn't click “Pause” in Chatter"
+    },
+    "notReadyObserve": {
+      "running.zh": "正在查看屏幕",
+      "running.en": "Looking at the screen",
+      "done.zh": "没能查看屏幕",
+      "done.en": "Couldn't look at the screen",
+      "error.zh": "没能查看屏幕",
+      "error.en": "Couldn't look at the screen"
+    },
+    "notReadyAct": {
+      "running.zh": "正在 Chatter 中点击「Send」",
+      "running.en": "Clicking “Send” in Chatter",
+      "done.zh": "没能在 Chatter 中点击「Send」",
+      "done.en": "Couldn't click “Send” in Chatter",
+      "error.zh": "没能在 Chatter 中点击「Send」",
+      "error.en": "Couldn't click “Send” in Chatter"
+    },
+    "notReadyRead": {
+      "running.zh": "正在 Chatter 中读取「See you tomorrow」",
+      "running.en": "Reading “See you tomorrow” in Chatter",
+      "done.zh": "没能在 Chatter 中读取「See you tomorrow」",
+      "done.en": "Couldn't read “See you tomorrow” in Chatter",
+      "error.zh": "没能在 Chatter 中读取「See you tomorrow」",
+      "error.en": "Couldn't read “See you tomorrow” in Chatter"
+    },
+    "ensureNoWindow": {
+      "running.zh": "正在打开 Notes",
+      "running.en": "Opening Notes",
+      "done.zh": null,
+      "done.en": null,
+      "error.zh": "没能打开 Notes",
+      "error.en": "Couldn't open Notes"
     }
   }
 }

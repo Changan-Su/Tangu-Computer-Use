@@ -492,7 +492,10 @@ const spyRings = () => {
   const stops = []
   const subs = []
   let running = true
-  const st = (live, sessionId) => (live
+  let stoppingNow = false // 宿主的停止请求进行中:phaseOf 回 { phase: 'idle', runId: 原来那个 }
+  const st = (live, sessionId) => (live && stoppingNow
+    ? { phase: 'idle', runId: RUN, sessionId: 's1', since: 0, textChars: 0, reasoningChars: 0 }
+    : live
     ? { phase: 'tool', tool: 'act_ui', toolStage: 'exec', runId: RUN, sessionId: 's1', since: 0, textChars: 0, reasoningChars: 0 }
     : { phase: 'idle', runId: null, sessionId, since: 0, textChars: 0, reasoningChars: 0 })
   const tangu = {
@@ -547,6 +550,23 @@ const spyRings = () => {
   await sleep(10)
   A.deepEqual(stops, [{ runId: RUN }], '停止必须带这一轮的 runId(绝不去停别的)')
   A.equal(stopBtn.disabled, true, '停止发出去以后先禁用,别连发')
+  // 评审第 1 条:停止请求进行中,宿主回同一个 runId 的 idle —— 那是「停止中」,不是结束
+  {
+    const turnsNow = () => reqs.filter((r) => r.path === '/overlay-turn').length
+    stoppingNow = true
+    subs.filter((s) => s.arg && s.arg.runId === RUN).forEach((s) => s.cb(st(true, null)))
+    await sleep(T.TICK_MS * 2 + 80)
+    A.equal(turnsNow(), 0, '停止中(同一个 runId 的 idle)不许发 /overlay-turn')
+    A.ok(!byClass(root2(), 'cu-live-badge')[0].className.includes('on'), '停止中不许标「已完成」')
+    A.ok(stopBtn.className.includes('on') && stopBtn.disabled === true, '停止中:停止按钮留着、保持禁用')
+    // 停止没成:这一轮又回到在跑 → 恢复成进行中,按钮还给用户
+    stoppingNow = false
+    subs.filter((s) => s.arg && s.arg.runId === RUN).forEach((s) => s.cb(st(true, null)))
+    await sleep(T.TICK_MS * 2 + 80)
+    A.equal(turnsNow(), 0, '停止没成、又在跑:仍不收尾')
+    A.ok(stopBtn.className.includes('on') && stopBtn.disabled === false, '停止没成、又在跑:停止按钮重新可按')
+    A.equal(byClass(root2(), 'cu-live-status')[0].textContent, 'Clicking “Send”', '停止没成:状态句还是进行中')
+  }
 
   // 静止帧(unchanged、不带协议 20 的字段)不许把光标和状态句闪没
   {
@@ -636,6 +656,76 @@ const spyRings = () => {
   disposeTop()
 }
 
+// ── 评审第 6 条:没有视图开着时,顶层记下一轮在跑就对它建定向订阅 —— 主区切去别的会话,那一轮结束也要及时发 end ──
+for (const legacy of [false, true]) {
+  const reqs = []
+  const subs = []
+  const sessions = { sA: null, sB: null, sC: null } // 会话 → 正在跑的 runId
+  const finished = {}                               // 会话 → 刚结束的 runId(按会话取时回 done)
+  let mainSid = 'sA'
+  let stopping = null                               // 正在停止的 runId
+  const sessionStatus = (sid) => {
+    const rid = sessions[sid]
+    if (rid && stopping === rid) return { phase: 'idle', runId: rid, sessionId: sid, since: 0, textChars: 0, reasoningChars: 0 }
+    if (rid) return { phase: 'tool', tool: 'act_ui', toolStage: 'exec', runId: rid, sessionId: sid, since: 0, textChars: 0, reasoningChars: 0 }
+    if (finished[sid]) return { phase: 'done', runId: finished[sid], sessionId: sid, since: 0, textChars: 0, reasoningChars: 0 }
+    return { phase: 'idle', runId: null, sessionId: sid, since: 0, textChars: 0, reasoningChars: 0 }
+  }
+  const statusFor = (arg) => {
+    if (arg && typeof arg === 'object') {
+      if (legacy) return { phase: 'idle', runId: null, sessionId: arg, since: 0, textChars: 0, reasoningChars: 0 } // 旧宿主:参数原样当会话 id
+      const sid = Object.keys(sessions).find((k) => sessions[k] === arg.runId)
+      return sid ? sessionStatus(sid) : { phase: 'idle', runId: null, sessionId: null, since: 0, textChars: 0, reasoningChars: 0 }
+    }
+    return sessionStatus(arg === undefined ? mainSid : arg)
+  }
+  const tangu = {
+    request: async (engine, path, opts) => { reqs.push({ path, body: opts && opts.body }); return { ok: true } },
+    agentStatus: statusFor,
+    subscribeAgentStatus: (cb, arg) => { const s = { cb, arg }; subs.push(s); return () => { const i = subs.indexOf(s); if (i >= 0) subs.splice(i, 1) } },
+  }
+  const dispose = new Function('ctx', src)({ registerView() {}, tangu })
+  const fire = (pred) => subs.filter(pred).forEach((s) => s.cb(statusFor(s.arg)))
+  const mainSubs = (s) => s.arg === undefined
+  const directed = (rid, sid) => (s) => (legacy ? s.arg === sid : s.arg && typeof s.arg === 'object' && s.arg.runId === rid)
+  const ends = () => reqs.filter((r) => r.path === '/overlay-turn').map((r) => r.body.runId)
+  const tag = legacy ? '旧宿主' : '新宿主'
+  // A 会话里跑 RA、B 会话里跑 RB:主区先后看到两轮,两轮都要各自定向订阅
+  sessions.sA = 'RA'
+  fire(mainSubs)
+  mainSid = 'sB'
+  sessions.sB = 'RB'
+  fire(mainSubs)
+  A.ok(subs.some(directed('RA', 'sA')), `${tag}:顶层看到 RA 在跑就对它定向订阅`)
+  A.ok(subs.some(directed('RB', 'sB')), `${tag}:同时在跑的第二轮也要盯住(不止一个)`)
+  // 主区切去空闲的 C;A 停止中 → 不收尾
+  mainSid = 'sC'
+  fire(mainSubs)
+  stopping = 'RA'
+  fire(directed('RA', 'sA'))
+  A.deepEqual(ends(), [], `${tag}:停止中(同一个 runId 的 idle)不收尾`)
+  // A 真结束:主区(在 C)不会变,只有定向订阅报上来 → 发 end,并退订
+  stopping = null
+  sessions.sA = null
+  finished.sA = 'RA'
+  fire(directed('RA', 'sA'))
+  A.deepEqual(ends(), ['RA'], `${tag}:主区在别的会话时,RA 结束也要及时发 end`)
+  A.ok(!subs.some(directed('RA', 'sA')), `${tag}:结束后退掉 RA 的定向订阅`)
+  A.ok(subs.some(directed('RB', 'sB')), `${tag}:RB 还在跑,它的订阅留着`)
+  sessions.sB = null
+  finished.sB = 'RB'
+  fire(directed('RB', 'sB'))
+  A.deepEqual(ends(), ['RA', 'RB'], `${tag}:RB 结束也各自发 end`)
+  // 卸载:还没收尾的那几轮的订阅一并退掉
+  sessions.sA = 'RA2'
+  finished.sA = undefined
+  mainSid = 'sA'
+  fire(mainSubs)
+  A.ok(subs.some(directed('RA2', 'sA')), `${tag}:新一轮照样订阅`)
+  dispose()
+  A.equal(subs.length, 0, `${tag}:停用后顶层订阅(含定向的)全部退掉`)
+}
+
 // ══ 过程行的句子(ctx.registerToolLabel,契约 §2.4 / §3 卡 8)══
 {
   // ① 认领的名单 == 引擎半身真正注册的工具(src/tools.ts 的 SPECS);新加一个工具忘了认领,这里红
@@ -650,6 +740,9 @@ const spyRings = () => {
   const outline = readFileSync(new URL('./src/vendor/outline.ts', import.meta.url), 'utf8')
   const viewTs = readFileSync(new URL('./src/vendor/view.ts', import.meta.url), 'utf8')
   const jevRun = readFileSync(new URL('./src/jevRun.ts', import.meta.url), 'utf8')
+  const fgNote = readFileSync(new URL('./src/foregroundNote.ts', import.meta.url), 'utf8')
+  const toolsTs = readFileSync(new URL('./src/tools.ts', import.meta.url), 'utf8')
+  const onboarding = readFileSync(new URL('./src/onboarding.ts', import.meta.url), 'utf8')
   for (const [file, text, frag] of [
     ['bridge.ts', bridge, '`Attempted ${executedActions.length} UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}.`'],
     ['bridge.ts', bridge, 'Returned state ${capture.capture.stateId}.'],
@@ -670,6 +763,30 @@ const spyRings = () => {
     ['bridge.ts', bridge, 'return `${node.ref} ${node.role}${node.subrole ? `/${node.subrole}` : ""}${identifier} ${JSON.stringify(label)}'],
     ['bridge.ts', bridge, 'node.identifier ? ` id=${JSON.stringify(node.identifier)}` : ""'],
     ['jevRun.ts', jevRun, 'requestedSteps: params.steps.length'],
+    // 评审第 2 / 3 / 4 条依赖的模板
+    ['foregroundNote.ts', fgNote, 'return `[execution] ${JSON.stringify(summary)}\\n'],
+    ['foregroundNote.ts', fgNote, 'earlierPressTookEffect: exec.earlierPressTookEffect || undefined,'],
+    ['foregroundNote.ts', fgNote, "error: s.error ? { code: s.error.code, message: s.error.message?.slice(0, 384) } : undefined,"],
+    ['bridge.ts', bridge, 'message: `The action was delivered but its postcondition was not satisfied within ${timeoutMs}ms.`'],
+    ['bridge.ts', bridge, 'Nothing was sent to ${target.appName} — ${target.windowTitle}: the page has changed since this element was last pressed. Returned state ${capture.capture.stateId}.'],
+    ['bridge.ts', bridge, 'Found ${ranked.totalMatches} outline match${ranked.totalMatches === 1 ? "" : "es"}; returned ${matches.length}.'],
+    ['bridge.ts', bridge, 'Found ${totalMatches} matching root${totalMatches === 1 ? "" : "s"}; returned ${windows.length}'],
+    ['bridge.ts', bridge, '"No roots are currently visible to tangu-computer-use."'],
+    ['bridge.ts', bridge, '(gone ? "Condition disappeared." : "Condition appeared.")'],
+    ['bridge.ts', bridge, 'text: `Evaluation value: ${JSON.stringify(result.value)}`'],
+    ['bridge.ts', bridge, 'text: `${formatOutlineNodeLabel(target)}\\npath: ${outlineNodePath(target)}'],
+    ['bridge.ts', bridge, 'Use stateId ${result.capture.stateId} for subsequent actions and queries.'],
+    ['view.ts', viewTs, 'return `~ ${change.ref} (${change.path.join(" > ")}) ${[fields, supplemental].filter(Boolean).join(", ") || "changed"}`'],
+    ['view.ts', viewTs, 'return node.title || node.description || node.value || node.identifier'],
+    ['tools.ts', toolsTs, "return 'Jev is disabled or unavailable on this platform.'"],
+    ['tools.ts', toolsTs, '`Computer Use is not ready: ${e?.message || e}`'],
+    ['tools.ts', toolsTs, "return [installNote, guidance ?? fallback].filter(Boolean).join('\\n');"],
+    ['tools.ts', toolsTs, 'const how = !front ? `Opened ${name} in the background; it did not take the foreground.`'],
+    ['tools.ts', toolsTs, "return 'ensure_app (background launch) is macOS-only."],
+    ['onboarding.ts', onboarding, 'return `Computer Use still needs macOS ${names} for'],
+    ['onboarding.ts', onboarding, "'Installed the Computer Use desktop helper automatically.'"],
+    ['onboarding.ts', onboarding, "'Updated the Computer Use desktop helper to match this plugin version.'"],
+    ['onboarding.ts', onboarding, 'return `Could not install the Computer Use helper automatically (${detail}). Run \\`tangu computer-use setup\\` in a terminal.`;'],
     ['jevRun.ts', jevRun, "report(abort.aborted ? 'cancelled' : 'stopped'"],
   ]) A.ok(text.includes(frag), `vendor 结果文字的模板变了(${file}):${frag.slice(0, 60)}… —— 同步改 main.js 的解析与 harness/fixtures/tool-calls.json`)
 
@@ -744,6 +861,17 @@ const spyRings = () => {
     ['launch', R, '正在打开 example.com', 'Opening example.com'],
     ['navigate', D, '已打开 forum.example.org', 'Opened forum.example.org'],
     ['evaluate', R, '正在读取网页内容', 'Reading the page'],
+    // 评审第 2 条:有 [execution] 摘要先看它 —— 执行器报了错就是没成,哪怕后面照样写着「Attempted N」
+    ['postcondition', D, '没能在 Chatter 中点击「Send」', "Couldn't click “Send” in Chatter"],
+    ['stepError', D, '没能在 Chatter 中点击「Send」(第 2 步,共 2 步)', "Couldn't click “Send” in Chatter (step 2 of 2)"],
+    // 投递了、效果没确认(didnt / unknown):句子说的是「点了」不是「点成了」
+    ['didnt', D, '已在 Chatter 中点击「Send」', 'Clicked “Send” in Chatter'],
+    // 评审第 4 条:差量里改了名 → 用新名字,不沿链取回旧的「Send」
+    ['pressRenamed', R, '正在 Chatter 中点击「Pause」', 'Clicking “Pause” in Chatter'],
+    // 评审第 3 条:没就绪时工具正常返回指导文字 —— 不许说「已…」
+    ['notReadyObserve', D, '没能查看屏幕', "Couldn't look at the screen"],
+    ['notReadyAct', D, '没能在 Chatter 中点击「Send」', "Couldn't click “Send” in Chatter"],
+    ['notReadyRead', D, '没能在 Chatter 中读取「See you tomorrow」', "Couldn't read “See you tomorrow” in Chatter"],
   ]
   const covered = new Set()
   for (const [id, phase, zh, en] of table) {
@@ -759,6 +887,30 @@ const spyRings = () => {
   A.deepEqual([...covered].sort(), [...T.CU_TOOLS].sort(), '表驱动断言必须覆盖每一种工具')
   // 认不出结果(没有做成的证据)→ 空,不替它报「已…」
   A.equal(run('unknownDone', D, 'zh'), null, '结果里认不出做成没做成 → 空(宿主照旧显示)')
+  A.equal(run('earlierPress', D, 'zh'), null, '这次什么都没发(earlierPressTookEffect)→ 空:既不是「已点击」也不是「没能」')
+  A.equal(run('ensureNoWindow', D, 'zh'), null, '打开了但还没有窗口 → 空,不说「已打开」')
+  // 评审第 3 条:每个工具「做完」都要有自己的成功证据;指导文字 / 认不出的结果 → 出错句 / 空
+  {
+    const guide = 'Computer Use still needs macOS Accessibility and Screen Recording for "tangu-computer-use". Open System Settings → Privacy & Security. Ask the user to turn the switch on for tangu-computer-use, then retry — this is a system security setting, only the user can grant it.'
+    const notReadyLine = 'Updated the Computer Use desktop helper to match this plugin version.\nComputer Use is not ready: helper_not_running'
+    const cases = [
+      ['find_roots', { app: 'Chatter' }], ['observe_ui', {}], ['search_ui', { stateId: 's5', text: 'Send' }], ['expand_ui', { stateId: 's1', ref: '@e15' }],
+      ['inspect_ui', { stateId: 's5', ref: '@e14' }], ['read_text', { stateId: 's4', ref: '@e20' }], ['wait_for', { stateId: 's4', text: 'Delivered' }],
+      ['ensure_app', { app: 'Notes' }], ['launch_browser', { url: 'https://example.com' }], ['navigate_browser', { stateId: 'b1', url: 'https://example.com/x' }],
+      ['evaluate_browser', { stateId: 'b1', expression: '1' }], ['jev_ui', { root: '@r1', steps: [{ action: 'click', target: 'Send' }] }],
+    ]
+    for (const [tool, args] of cases) for (const res of [guide, notReadyLine, 'Jev is disabled or unavailable on this platform.']) {
+      const r = T.describeCall({ tool, args, result: res, phase: 'done', locale: 'zh', earlier: [] }, () => undefined)
+      A.ok(r && /^没能/.test(r.text), `${tool}:正常返回的指导文字必须说「没能…」,得到 ${r && r.text}`)
+    }
+    // 认不出的正常结果(不是指导、也没有该工具的成功模板)→ 空;read_text 回的是原文,没有模板,不在此列
+    for (const [tool, args] of cases) {
+      if (tool === 'read_text' || tool === 'jev_ui') continue
+      A.equal(T.describeCall({ tool, args, result: 'Something else entirely.', phase: 'done', locale: 'zh', earlier: [] }, () => undefined), null, `${tool}:认不出的结果 → 空`)
+    }
+    // 只认整段就是指导:读到的原文里恰好有这句话,不算
+    A.equal(T.describeCall({ tool: 'read_text', args: { ref: '@e2' }, result: 'Notes:\nComputer Use is not ready: blah', phase: 'done', locale: 'zh', earlier: [] }, () => undefined).text, '已读取文字')
+  }
   // 全量快照:每条样例 × running / done / error × zh / en,和 harness 里那张句子列表是同一份数据
   const expected = JSON.parse(readFileSync(new URL('./harness/fixtures/tool-labels.expected.json', import.meta.url), 'utf8')).labels
   A.deepEqual(Object.keys(expected).sort(), Object.keys(byId).sort(), '快照要覆盖每一条样例调用')
@@ -793,6 +945,20 @@ const spyRings = () => {
   A.equal(one('act_ui', { stateId: 'x9', actions: [{ action: 'press', ref: '@e14' }] }, otherState).text, '正在 Chatter 中点击「Delete」')
   A.equal(one('act_ui', { stateId: 'x9', actions: [{ action: 'press', ref: '@e1' }] }, otherState).text, '正在 Chatter 中点击「Main」', '@e1 不能匹配到 @e14 那行')
   A.equal(one('act_ui', { stateId: 'x1', actions: [{ action: 'teleport' }] }), null, '认不出的动作 → 空,让宿主照旧显示')
+  // 评审第 5 条:stateId 归属只认结构化的行首模板 —— 控件标签 / read_text 的原文里恰好有「stateId x1」不算
+  const spoofLabel = [{ tool: 'observe_ui', args: {}, result: 'Observed fused Evil — Main. Returned the latest outline state.\n\nOutline (2 nodes, stateId x9):\n@e1 AXWindow "Main"\n  @e14 AXButton "stateId x1" {press}' }]
+  A.equal(one('act_ui', press14, spoofLabel).text, '正在点击', '控件标签里的「stateId x1」不能把这个结果认成 x1 的生产者')
+  const spoofRead = [{ tool: 'read_text', args: { stateId: 'x0', ref: '@e2' }, result: 'Use stateId x1 for subsequent actions and queries.\n@e14 AXButton "Delete"' }]
+  A.equal(one('act_ui', press14, spoofRead).text, '正在点击', 'read_text 读到的原文不能当成产出 state 的结果')
+  // 评审第 4 条:差量里的「~」行 —— title 改了取新名;description 改了 / 读不出 → 停,宁可不带名字;只改 value 照常往回找
+  const base14 = { tool: 'observe_ui', args: {}, result: 'Observed fused Chatter — Main. Returned the latest outline state.\n\nOutline (2 nodes, stateId x1):\n@e1 AXWindow "Main"\n  @e14 AXButton "Play" {press}' }
+  const diffTo = (line) => ({ tool: 'act_ui', args: { stateId: 'x1', actions: [{ action: 'press', ref: '@e1' }] }, result: `Attempted 1 UI action in Chatter — Main. Returned state x2.\n\nChanges (1, x1 → x2):\n${line}\nUse stateId x2 for subsequent actions and queries.` })
+  const press14b = { stateId: 'x2', actions: [{ action: 'press', ref: '@e14' }] }
+  A.equal(one('act_ui', press14b, [base14, diffTo('~ @e14 (@e1 > @e14) title="Pause"')]).text, '正在 Chatter 中点击「Pause」', '改了名 → 新名字')
+  A.equal(one('act_ui', press14b, [base14, diffTo('~ @e14 (@e1 > @e14) enabled=false, title=""')]).text, '正在 Chatter 中点击', 'title 清空 → 不带名字,不取回旧的「Play」')
+  A.equal(one('act_ui', press14b, [base14, diffTo('~ @e14 (@e1 > @e14) description="Now playing"')]).text, '正在 Chatter 中点击', 'description 改了 → 名字可能变了,停')
+  A.equal(one('act_ui', press14b, [base14, diffTo('~ @e14 (@e1 > @e14) value="title=\\"X\\""')]).text, '正在 Chatter 中点击「Play」', '只改 value(哪怕值里有「title=」)→ 照常往回找')
+  A.equal(one('act_ui', press14b, [base14, diffTo('~ @e14 (@e1 > @e14) selected=true, actions=["press"]')]).text, '正在 Chatter 中点击「Play」', '和名字无关的字段 → 照常往回找')
   A.equal(one('act_ui', { stateId: 'x1', actions: [] }), null)
   A.equal(one('act_ui', '{not json'), null, '参数不是 JSON → 空')
   A.equal(one('act_ui', JSON.stringify(press14)).text, '正在点击', '参数是 JSON 字符串时照样解析')

@@ -30,7 +30,7 @@
           }
         ]
       },
-      "result": "[execution] {\"outcome\":\"did\",\"strictBackground\":false,\"steps\":[{\"outcome\":\"did\",\"delivery\":\"ax\",\"policy\":\"background\"}]}\nThe native executor confirmed this action; still verify the requested task result. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nAttempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s2.\n\nChanges (1, s1 → s2):\n~ @e4 (AXWindow > AXRow) selected=true\nUse stateId s2 for subsequent actions and queries."
+      "result": "[execution] {\"outcome\":\"worked\",\"strictBackground\":false,\"steps\":[{\"outcome\":\"worked\",\"delivery\":\"ax\",\"policy\":\"background\"}]}\nThe native executor confirmed this action; still verify the requested task result. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nAttempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s2.\n\nChanges (1, s1 → s2):\n~ @e4 (@e1 > @e4) selected=true\nUse stateId s2 for subsequent actions and queries."
     },
     {
       "id": "setText",
@@ -45,7 +45,7 @@
           }
         ]
       },
-      "result": "[execution] {\"outcome\":\"did\",\"strictBackground\":false,\"steps\":[{\"outcome\":\"did\",\"delivery\":\"ax\",\"policy\":\"background\"}]}\nThe native executor confirmed this action; still verify the requested task result. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nAttempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s3.\n\nChanges (1, s2 → s3):\n~ @e12 (AXWindow > AXTextArea) value=\"See you tomorrow\"\nUse stateId s3 for subsequent actions and queries."
+      "result": "[execution] {\"outcome\":\"worked\",\"strictBackground\":false,\"steps\":[{\"outcome\":\"worked\",\"delivery\":\"ax\",\"policy\":\"background\"}]}\nThe native executor confirmed this action; still verify the requested task result. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nAttempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s3.\n\nChanges (1, s2 → s3):\n~ @e12 (@e1 > @e12) value=\"See you tomorrow\"\nUse stateId s3 for subsequent actions and queries."
     },
     {
       "id": "pressSend",
@@ -59,7 +59,7 @@
           }
         ]
       },
-      "result": "[execution] {\"outcome\":\"did\",\"strictBackground\":false,\"steps\":[{\"outcome\":\"did\",\"delivery\":\"ax\",\"policy\":\"background\"}]}\nThe native executor confirmed this action; still verify the requested task result. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nThis press went through accessibility, in the background. If the returned state shows it changed nothing, press the same element again: the repeat goes out as a real click and takes the foreground.\nAttempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s4.\n\nChanges (2, s3 → s4):\n+ @e20 under @e9 \"See you tomorrow\"\n~ @e12 (AXWindow > AXTextArea) value=\"\"\nUse stateId s4 for subsequent actions and queries.",
+      "result": "[execution] {\"outcome\":\"worked\",\"strictBackground\":false,\"steps\":[{\"outcome\":\"worked\",\"delivery\":\"ax\",\"policy\":\"background\"}]}\nThe native executor confirmed this action; still verify the requested task result. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nThis press went through accessibility, in the background. If the returned state shows it changed nothing, press the same element again: the repeat goes out as a real click and takes the foreground.\nAttempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s4.\n\nChanges (2, s3 → s4):\n+ @e20 under @e9 \"See you tomorrow\"\n~ @e12 (@e1 > @e12) value=\"\"\nUse stateId s4 for subsequent actions and queries.",
       "errorResult": "Helper command act timed out after 120000ms."
     },
     {
@@ -84,7 +84,7 @@
           }
         ]
       },
-      "result": "[execution] {\"outcome\":\"unknown\",\"strictBackground\":false,\"steps\":[]}\nThe input was attempted; its effect is UNVERIFIED, not proven failed. A canvas can change without accessibility confirmation. Inspect the returned state before any retry, including a retry with another tool. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nAttempted 3 UI actions in Chatter — Chatter — Zhang San. Returned state s5.\n\nOutline (7 nodes, stateId s5, full view: root changed):\n@e1 AXWindow \"Chatter — Zhang San\"\n  @e4 AXRow \"Zhang San\" {press}\n  @e12 AXTextArea \"Message\" {setText}\n  @e14 AXButton \"Send\" {press}\n  @e15 AXButton {press}\n[foreground] The target window became foreground during this action, even if delivery used accessibility input. The target app may have activated itself."
+      "result": "[execution] {\"outcome\":\"unknown\",\"strictBackground\":false,\"steps\":[{\"outcome\":\"worked\",\"delivery\":\"ax\",\"policy\":\"background\"},{\"outcome\":\"unknown\",\"delivery\":\"hid\",\"policy\":\"background\"},{\"outcome\":\"unknown\",\"delivery\":\"hid\",\"policy\":\"background\"}]}\nThe input was attempted; its effect is UNVERIFIED, not proven failed. A canvas can change without accessibility confirmation. Inspect the returned state before any retry, including a retry with another tool. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nAttempted 3 UI actions in Chatter — Chatter — Zhang San. Returned state s5.\n\nOutline (7 nodes, stateId s5, full view: root changed):\n@e1 AXWindow \"Chatter — Zhang San\"\n  @e4 AXRow \"Zhang San\" {press}\n  @e12 AXTextArea \"Message\" {setText}\n  @e14 AXButton \"Send\" {press}\n  @e15 AXButton {press}\n[foreground] The target window became foreground during this action, even if delivery used accessibility input. The target app may have activated itself."
     },
     {
       "id": "stopped",
@@ -160,7 +160,7 @@
         "stateId": "s5",
         "text": "Send"
       },
-      "result": "@e14 AXButton \"Send\" [exact]\n  path: AXWindow \"Chatter — Zhang San\" ▸ AXButton \"Send\""
+      "result": "Found 1 outline match; returned 1.\n@e14 AXButton \"Send\" [exact]\n  path: AXWindow \"Chatter — Zhang San\" ▸ AXButton \"Send\""
     },
     {
       "id": "inspect",
@@ -479,7 +479,144 @@
         "stateId": "b1",
         "expression": "document.title"
       },
-      "result": "navigate_browser completed for @r3 \"Forum\". State b2.\n@e1 RootWebArea \"Forum\"\nEvaluation value: \"Forum\""
+      "result": "evaluate_browser completed for @r3 \"Forum\". State b2.\n@e1 RootWebArea \"Forum\"\nEvaluation value: \"Forum\""
+    },
+    {
+      "id": "postcondition",
+      "note": "后置条件没满足:vendor 照样写「Attempted N」,失败在 [execution] 的顶层 error",
+      "tool": "act_ui",
+      "args": {
+        "stateId": "s5",
+        "actions": [
+          {
+            "action": "press",
+            "ref": "@e14"
+          }
+        ]
+      },
+      "result": "[execution] {\"outcome\":\"unknown\",\"strictBackground\":false,\"steps\":[{\"outcome\":\"unknown\",\"delivery\":\"ax\",\"policy\":\"background\"}],\"error\":{\"code\":\"postcondition_failed\",\"message\":\"The action was delivered but its postcondition was not satisfied within 2000ms.\"}}\nThe executor reported a failure. Check the error and current state before deciding what to do. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nAttempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s17.\n\nChanges (0, s5 → s17):\n(no element changes)\nUse stateId s17 for subsequent actions and queries."
+    },
+    {
+      "id": "stepError",
+      "note": "第 2 步报错、摘要行没写第几步:按 [execution] 的 steps 定位",
+      "tool": "act_ui",
+      "args": {
+        "stateId": "s5",
+        "actions": [
+          {
+            "action": "press",
+            "ref": "@e4"
+          },
+          {
+            "action": "press",
+            "ref": "@e14"
+          }
+        ]
+      },
+      "result": "[execution] {\"outcome\":\"unknown\",\"strictBackground\":false,\"steps\":[{\"outcome\":\"worked\",\"delivery\":\"ax\",\"policy\":\"background\"},{\"outcome\":\"unknown\",\"delivery\":\"ax\",\"policy\":\"background\",\"error\":{\"code\":\"ax_press_failed\",\"message\":\"AXPress returned -25204.\"}}],\"error\":{\"code\":\"ax_press_failed\",\"message\":\"AXPress returned -25204.\"}}\nThe executor reported a failure. Check the error and current state before deciding what to do. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nStopped UI action sequence: ax_press_failed: AXPress returned -25204.. Earlier actions may have completed. Returned state s18."
+    },
+    {
+      "id": "didnt",
+      "note": "投递了、效果没确认(outcome didnt,没有 error):句子说的是「点了」,照样「已点击」",
+      "tool": "act_ui",
+      "args": {
+        "stateId": "s5",
+        "actions": [
+          {
+            "action": "press",
+            "ref": "@e14"
+          }
+        ]
+      },
+      "result": "[execution] {\"outcome\":\"didnt\",\"strictBackground\":false,\"steps\":[{\"outcome\":\"didnt\",\"delivery\":\"ax\",\"policy\":\"background\"}]}\nThe executor reported a failure. Check the error and current state before deciding what to do. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nAttempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s19."
+    },
+    {
+      "id": "earlierPress",
+      "note": "这次什么都没发(上一次按下去的晚生效了)→ 空",
+      "tool": "act_ui",
+      "args": {
+        "stateId": "s5",
+        "actions": [
+          {
+            "action": "press",
+            "ref": "@e14"
+          }
+        ]
+      },
+      "result": "[execution] {\"outcome\":\"worked\",\"strictBackground\":false,\"steps\":[],\"earlierPressTookEffect\":\"page\"}\nNothing was sent this time. The earlier press of this element showed no change in its result; since then the page has changed (see the changes in this result), so that press most likely took effect late.\nNothing was sent to Chatter — Chatter — Zhang San: the page has changed since this element was last pressed. Returned state s20."
+    },
+    {
+      "id": "renamed",
+      "note": "差量里 @e14 改了名(~ … title=\"Pause\")",
+      "tool": "act_ui",
+      "args": {
+        "stateId": "s5",
+        "actions": [
+          {
+            "action": "press",
+            "ref": "@e4"
+          }
+        ]
+      },
+      "result": "Attempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s21.\n\nChanges (1, s5 → s21):\n~ @e14 (@e1 > @e14) title=\"Pause\"\nUse stateId s21 for subsequent actions and queries."
+    },
+    {
+      "id": "pressRenamed",
+      "note": "按改了名的 @e14:取新名字,不沿链取回旧的「Send」",
+      "tool": "act_ui",
+      "args": {
+        "stateId": "s21",
+        "actions": [
+          {
+            "action": "press",
+            "ref": "@e14"
+          }
+        ]
+      },
+      "result": "Attempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s22."
+    },
+    {
+      "id": "notReadyObserve",
+      "note": "权限没开:工具正常返回一段指导文字,不能说「已查看」",
+      "tool": "observe_ui",
+      "args": {
+        "root": "@r1"
+      },
+      "result": "Computer Use still needs macOS Accessibility for \"tangu-computer-use\". System Settings has been opened at the Accessibility pane. Ask the user to turn the switch on for tangu-computer-use, then retry — this is a system security setting, only the user can grant it."
+    },
+    {
+      "id": "notReadyAct",
+      "note": "helper 没就绪(前面带一条安装说明)",
+      "tool": "act_ui",
+      "args": {
+        "stateId": "s5",
+        "actions": [
+          {
+            "action": "press",
+            "ref": "@e14"
+          }
+        ]
+      },
+      "result": "Installed the Computer Use desktop helper automatically.\nComputer Use is not ready: helper_not_running"
+    },
+    {
+      "id": "notReadyRead",
+      "note": "read_text 回的是原文,只能靠「不是指导文字」判",
+      "tool": "read_text",
+      "args": {
+        "stateId": "s4",
+        "ref": "@e20"
+      },
+      "result": "Computer Use is not ready: helper_not_running"
+    },
+    {
+      "id": "ensureNoWindow",
+      "note": "打开了但还没有窗口:不算打开好了",
+      "tool": "ensure_app",
+      "args": {
+        "app": "Notes"
+      },
+      "result": "Opened Notes, but no window is observable yet. Give it a moment and call observe_ui.\nNo roots matched the supplied filters."
     }
   ]
 }

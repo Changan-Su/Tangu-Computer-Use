@@ -536,16 +536,32 @@ function appInResult(text) {
   const m = /^Attempted \d+ UI actions? in (.+?) — /m.exec(text) || /^Observed \S+ (?:@r\d+ )?(.+?) — /m.exec(text)
   return m ? tlClip(m[1], TL_APP_MAX) : ''
 }
-/** 这段结果是不是**产出**了这个 stateId(observe 的 Outline 头、act 的 Returned state、差量的 Use stateId)。 */
+/**
+ * 这段结果是不是**产出**了这个 stateId。只认 vendor 拼的那几处**行首模板**,不在整段文字里搜「stateId X」——
+ * 控件标签(大纲行、差量行)里恰好有这几个字时,会把别的 state 的 App 名 / 控件名张冠李戴(评审第 5 条):
+ *   act 摘要行「Attempted … / Stopped UI action sequence … / Nothing was sent to … Returned state X.」(行尾)
+ *   observe 的大纲头「Outline (N nodes, stateId X」、差量头「Changes (N, A → X):」、「Use stateId X for subsequent …」
+ *   网页那条「<tool> completed for @rN "<title>". State X.」(标题是 JSON 串,按串整段跳过)
+ * 大纲 / 差量里的控件行都以「@eN」「+ / - / ~ @eN」开头,标签又是 JSON 串(换行被转义),碰不到这些行首。
+ */
 function producesState(text, id) {
-  // 网页那条路的结果是「<tool> completed for @rN "<title>". State <id>.」
-  return new RegExp(`(?:(?:stateId|Returned state) ${reEsc(id)}(?![A-Za-z0-9_-])|^\\S+ completed for .*\\. State ${reEsc(id)}\\.)`, 'm').test(text)
+  const x = reEsc(id)
+  return new RegExp([
+    `^(?:Attempted \\d+ UI actions? in |Stopped UI action sequence|Nothing was sent to )[^\\n]* Returned state ${x}\\.$`,
+    `^Outline \\(\\d+ nodes, stateId ${x}[,)]`,
+    `^Changes \\(\\d+, \\S+ → ${x}\\):`,
+    `^Use stateId ${x} for subsequent actions and queries\\.$`,
+    `^\\S+ completed for @r\\d+ "(?:[^"\\\\]|\\\\.)*"\\. State ${x}\\.$`,
+  ].join('|'), 'm').test(text)
 }
+// 会产出 state 的工具。read_text 回的是控件里的原文(可能恰好有一整行「Use stateId …」),它和其余只读工具一律不算。
+const STATE_TOOLS = new Set(['act_ui', 'jev_ui', 'observe_ui', 'wait_for', 'launch_browser', 'navigate_browser', 'evaluate_browser'])
 /** 产出 stateId 的那一条(从近到远)。 */
 function entryForState(id, list) {
   if (!id) return null
   for (let i = list.length - 1; i >= 0; i--) {
-    const t = tlText(list[i] && list[i].result)
+    const e = list[i]
+    const t = e && STATE_TOOLS.has(e.tool) ? tlText(e.result) : ''
     if (t && producesState(t, id)) return t
   }
   return null
@@ -575,6 +591,35 @@ function labelInText(text, ref) {
   try { const s = JSON.parse(m[1]); return s === '(unlabeled)' ? '' : tlClip(s) } catch { return '' }
 }
 /**
+ * 差量里「~ @eN (@e1 > @eN) key=JSON, key=JSON …」= 这个控件的字段变了(vendor view.ts 的 renderChanges)。
+ * 返回:undefined = 没有这一行(照常往回找);{ name } = 改了名,用新名字;{ stop: true } = 名字可能变了但读不出新名字 → 别再往回找。
+ * 规则(vendor 的标签取 title || description || value || identifier || text):
+ *   title 改成非空串 → 新名字;title 改成空 / 读不出;description / identifier 改了(名字多半就是它)→ 停。
+ *   只有 value / text 变了 → 照常往回找:那是内容(输入框打了字),有 title 的控件名字不变;
+ *   没有 title、靠 value 起名的控件会拿到旧内容当名字 —— 认这个小代价,否则每个输入框打完字都丢名字。
+ * key=JSON 从左往右逐个切(值是 JSON,里面可能恰好有「title=」),切不动就当读不出。
+ */
+function tildeChange(text, ref) {
+  const m = new RegExp(`^~ ${reEsc(ref)} \\([^)\\n]*\\) (.*)$`, 'm').exec(text)
+  if (!m) return undefined
+  const fields = {}
+  let rest = m[1]
+  if (rest === 'changed') return {}
+  const tok = /^([A-Za-z]+)=("(?:[^"\\]|\\.)*"|\[[^\]\n]*\]|\{[^}\n]*\}|-?\d+(?:\.\d+)?(?:e[+-]?\d+)?|true|false|null)(?:, |$)/
+  while (rest) {
+    const t = tok.exec(rest)
+    if (!t) return { stop: true }
+    try { fields[t[1]] = JSON.parse(t[2]) } catch { return { stop: true } }
+    rest = rest.slice(t[0].length)
+  }
+  if ('title' in fields) {
+    const s = typeof fields.title === 'string' ? tlClip(fields.title) : ''
+    return s ? { name: s } : { stop: true }
+  }
+  if ('description' in fields || 'identifier' in fields) return { stop: true }
+  return {}
+}
+/**
  * stateId 下 @eN 的名字:先找产出这个 state 的结果,再找对着同一个 state 的 search / expand / inspect;
  * 差量结果里没有就沿「A → B」的 A 往回(号在差量之间不变)。找不到 → ''。
  */
@@ -587,7 +632,8 @@ function labelForRef(ref, stateId, list) {
     for (let i = list.length - 1; i >= 0; i--) {
       const e = list[i]
       const ea = e && tlArgs(e.args)
-      if (ea && ea.stateId === id && e.tool !== 'act_ui' && e.tool !== 'wait_for') {
+      // 只认对着同一个 state 的 search / expand / inspect(read_text 回的是控件原文,不是结构化的行)
+      if (ea && ea.stateId === id && (e.tool === 'search_ui' || e.tool === 'expand_ui' || e.tool === 'inspect_ui')) {
         const l = labelInText(tlText(e.result), ref)
         if (l) return l
       }
@@ -596,6 +642,10 @@ function labelForRef(ref, stateId, list) {
     if (!t) return ''
     const l = labelInText(t, ref)
     if (l) return l
+    // 差量里这个控件改了名(「~ @eN (…) title="Pause"」):用新名字;读不出新名字 → 宁可不带名字,别沿链取回旧名
+    const ch = tildeChange(t, ref)
+    if (ch && ch.name) return ch.name
+    if (ch && ch.stop) return ''
     const diff = new RegExp(`^Changes \\(\\d+, (\\S+) → ${reEsc(id)}\\)`, 'm').exec(t)
     id = diff ? diff[1] : null
   }
@@ -656,6 +706,35 @@ function jevStep(s, preview) {
   }
 }
 
+/**
+ * 工具没跑起来、正常返回了一段指导文字(src/tools.ts 的 execute:权限没开 / helper 没就绪 / Jev 关着;src/onboarding.ts 拼的话)。
+ * 调用照样是 done,但什么都没做 —— 按「没能…」说。⚠️只认**整段就是指导**:前面至多一条安装说明(装好 / 升级 / 没装成),
+ * 不在正文里搜(read_text 回的是控件原文,里面可能恰好有这几个字)。
+ */
+const NOT_READY_RE = /^(?:(?:Installed the Computer Use desktop helper automatically\.|Updated the Computer Use desktop helper to match this plugin version\.|Could not install the Computer Use helper automatically \([\s\S]*?\)\. Run `tangu computer-use setup` in a terminal\.)\n)?(?:Computer Use is not ready: |Computer Use still needs macOS |Jev is disabled or unavailable on this platform\.)/
+const notReady = (text) => NOT_READY_RE.test(text)
+
+/**
+ * act_ui 结果里的执行摘要(src/foregroundNote.ts 的 executionNote:一行「[execution] {…}」,前面可能还有一条安装说明,所以按行找)。
+ * 字段以 executionSummary 为准:顶层 outcome / error / earlierPressTookEffect,steps[] 每步 outcome / error;**没有 performed 字段**。
+ * 返回 { failedAt?: 第几步(0 起), failed: bool, nothingSent: bool } 或 null(没有摘要 / 解析不了)。
+ * ⚠️口径:句子说的是「点了」,不是「点成了」—— 动作确实投递了、效果没确认(outcome didnt / unknown)照样说「已点击」;
+ *   只有执行器报了错(顶层或某一步有 error,例如 postcondition_failed:后置条件没满足时 vendor 仍然写「Attempted N …」)才说「没能…」;
+ *   earlierPressTookEffect = 这次什么都没发(上一次按下去的晚生效了)→ 既不是「已点击」也不是「没能」,交给宿主照旧显示。
+ */
+function execSummary(text) {
+  const m = /^\[execution\] (\{.*\})$/m.exec(text)
+  if (!m) return null
+  let s
+  try { s = JSON.parse(m[1]) } catch { return null }
+  if (!s || typeof s !== 'object') return null
+  if (s.earlierPressTookEffect) return { failed: false, nothingSent: true }
+  const steps = Array.isArray(s.steps) ? s.steps : []
+  const k = steps.findIndex((st) => st && typeof st === 'object' && st.error)
+  if (k >= 0) return { failed: true, failedAt: k, nothingSent: false }
+  return { failed: Boolean(s.error), nothingSent: false }
+}
+
 /** 一句话:phase × 有没有 App × 动词 × 对象,外加批量的「(共 N 步)」/「(第 i 步,共 N 步)」。 */
 function tlSentence(locale, phase, verb, app, obj, suffix) {
   const ph = phase === 'running' ? 'run' : phase === 'error' ? 'err' : 'done'
@@ -672,9 +751,13 @@ function tlSentence(locale, phase, verb, app, obj, suffix) {
 function describeCall(call, iconOf) {
   if (!call || typeof call !== 'object' || !CU_TOOLS.includes(call.tool)) return null
   const L = call.locale === 'en' ? 'en' : 'zh'
-  const phase = call.phase === 'running' || call.phase === 'error' ? call.phase : 'done'
+  let phase = call.phase === 'running' || call.phase === 'error' ? call.phase : 'done'
   const args = tlArgs(call.args) || {}
   const result = phase === 'running' ? '' : tlText(call.result)
+  // 正常返回了「还没就绪」的指导文字 = 什么都没做,按出错说(每个工具都一样,下面不必再各自判)
+  if (phase === 'done' && notReady(result)) phase = 'error'
+  // 做完的句子**只在有成功证据时**说「已…」;各工具的证据见下面每一支,认不出 → 空(宿主照旧显示)
+  const done = phase === 'done'
   const earlier = Array.isArray(call.earlier) ? call.earlier.slice(-40) : []
   const q = (s) => tlFmt(L, 'tl.q', { s })
   const o = (k, vars) => tlFmt(L, `tl.o.${k}`, vars)
@@ -728,9 +811,13 @@ function describeCall(call, iconOf) {
             did = preview ? 1 : Number.isInteger(rep.requestedSteps) && rep.requestedSteps >= 1 ? rep.requestedSteps : n
           } else return null
         } else {
+          // 有执行摘要先看它:执行器报了错就是没成,哪怕后面照样写着「Attempted N …」(评审第 2 条)
+          const sum = execSummary(result)
+          if (sum && sum.nothingSent) return null
           const stop = /^Stopped UI action sequence(?: at action (\d+))?/m.exec(result)
           const att = /^Attempted (\d+) UI actions? in /m.exec(result)
-          if (stop) failedAt = stop[1] ? Number(stop[1]) - 1 : 0
+          if (stop) failedAt = stop[1] ? Number(stop[1]) - 1 : sum && sum.failedAt !== undefined ? sum.failedAt : 0
+          else if (sum && sum.failed) { if (sum.failedAt !== undefined) failedAt = sum.failedAt; else failedSomewhere = true }
           else if (/^The UI action sequence stopped: /m.test(result)) failedSomewhere = true
           else if (att) did = Number(att[1])
           else if (/^The action was delivered\b/m.test(result) || /^act_ui completed for /m.test(result)) did = n
@@ -750,6 +837,8 @@ function describeCall(call, iconOf) {
       return out(say('done', count - 1, count > 1 ? tlFmt(L, 'tl.steps', { n: count }) : ''), app)
     }
     case 'observe_ui': {
+      // 证据:摘要行「Observed <mode> …」;网页根是「observe_ui completed for @rN …」
+      if (done && !/^(?:Observed \S+ |observe_ui completed for @r\d+ )/m.test(result)) return null
       const app = (result && appInResult(result)) || appForRoot(args.root, earlier)
       return out(tlSentence(L, phase, 'look', '', app || o('screen')), app)
     }
@@ -758,7 +847,9 @@ function describeCall(call, iconOf) {
       const name = tlClip(typeof args.app === 'string' && args.app ? args.app : typeof args.text === 'string' ? args.text : '', TL_APP_MAX)
         || bundleId
       const obj = name ? o('appWindows', { app: name }) : o('windows')
-      if (phase === 'done' && /^No roots /m.test(result)) return out(tlFmt(L, 'tl.notFound', { obj }), name, bundleId)
+      // 证据:「Found N matching root(s); returned K.」;「No roots matched … / No roots are currently visible …」= 没找到
+      if (done && /^No roots (?:matched the supplied filters|are currently visible to )/m.test(result)) return out(tlFmt(L, 'tl.notFound', { obj }), name, bundleId)
+      if (done && !/^Found \d+ matching roots?; returned \d+/m.test(result)) return null
       return out(tlSentence(L, phase, 'find', '', obj), name, bundleId)
     }
     case 'ensure_app': {
@@ -766,21 +857,29 @@ function describeCall(call, iconOf) {
       const app = tlClip(typeof args.app === 'string' ? args.app.replace(/\/+$/, '').split('/').pop().replace(/\.app$/i, '') : '', TL_APP_MAX)
         || bundleId
       if (!app) return null
-      const failed = phase === 'error' || (phase === 'done' && /^(?:Could not launch |ensure_app requires|ensure_app aborted|.+ is running but has no window )/m.test(result))
+      const failed = phase === 'error' || (done && /^(?:Could not launch |ensure_app requires|ensure_app aborted|ensure_app \(background launch\) is macOS-only|.+ is running but has no window )/m.test(result))
+      // 证据:回来的根列表里有窗口行(「- @rN <kind> <App> pid N …」)。「Opened X, but no window is observable yet.」不算打开好了 → 空
+      if (!failed && done && !/^- @r\d+ \S+ .+? pid \d+ /m.test(result)) return null
       return out(tlSentence(L, failed ? 'error' : phase, 'open', '', app), app, bundleId)
     }
     case 'search_ui': {
+      // 证据:「Found N outline match(es); returned K.」(前面可能有一段 note),或命中行「@eN <role> "<label>" [<reason>…]」
+      if (done && !/^Found \d+ outline match(?:es)?; returned \d+\./m.test(result) && !/^@e\d+ \S+ "(?:[^"\\]|\\.)*" \[/m.test(result)) return null
       const app = appForState(args.stateId, earlier)
       const text = tlClip(args.text)
       return out(tlSentence(L, phase, 'search', app, text ? q(text) : o('element')), app)
     }
     case 'expand_ui':
     case 'inspect_ui': {
+      // 证据:首行是控件本身「@eN <role> …」,下一行「path: …」
+      if (done && !/^@e\d+ [^\n]*\npath: /m.test(result)) return null
       const app = appForState(args.stateId, earlier)
       const name = labelForRef(args.ref, args.stateId, earlier)
       return out(tlSentence(L, phase, 'look', app, name ? q(name) : o('element')), app)
     }
     case 'read_text': {
+      // read_text 回的就是读到的原文,没有模板可认:成功证据只能是「不是指导文字」(上面 notReady 已改判成出错);
+      // vendor 读失败是抛错(phase error),不会正常返回。
       if (typeof args.ref === 'string' && /^@o/.test(args.ref)) return out(tlSentence(L, phase, 'read', '', o('more')))
       const app = appForState(args.stateId, earlier)
       const name = labelForRef(args.ref, args.stateId, earlier)
@@ -790,17 +889,22 @@ function describeCall(call, iconOf) {
       const app = appForState(args.stateId, earlier)
       const target = tlClip(args.text) || labelForRef(args.ref, args.stateId, earlier)
       const obj = !target ? o('change') : args.until === 'absent' ? o('gone', { q: q(target) }) : q(target)
-      // 等超时是正常返回(「Timed out after Nms waiting for condition.」),不能说「已等到」
-      const timedOut = phase === 'done' && /^Timed out after \d+ms waiting for condition\./m.test(result)
+      // 证据:「Condition appeared. / Condition disappeared.」;等超时是正常返回(「Timed out after Nms …」),按没等到说
+      const timedOut = done && /^Timed out after \d+ms waiting for condition\./m.test(result)
+      if (done && !timedOut && !/^Condition (?:appeared|disappeared)\.$/m.test(result)) return null
       return out(tlSentence(L, timedOut ? 'error' : phase, 'wait', app, obj), app)
     }
     case 'launch_browser':
-      return out(tlSentence(L, phase, 'open', '', hostOf(args.url) || o('browser')))
     case 'navigate_browser': {
+      // 证据:「<本工具名> completed for @rN "<title>". State X.」
+      if (done && !new RegExp(`^${call.tool} completed for @r\\d+ `, 'm').test(result)) return null
       const host = hostOf(args.url)
+      if (call.tool === 'launch_browser') return out(tlSentence(L, phase, 'open', '', host || o('browser')))
       return host ? out(tlSentence(L, phase, 'open', '', host)) : null
     }
     case 'evaluate_browser':
+      // 证据:「Evaluation value: …」
+      if (done && !/^Evaluation value: /m.test(result)) return null
       return out(tlSentence(L, phase, 'read', '', o('page')))
     default:
       return null
@@ -845,9 +949,9 @@ const isAgentPhaseOver = (st) => !st || st.phase === 'idle' || st.phase === 'don
 function runRecord(runId) {
   let rec = runs.get(runId)
   if (!rec) {
-    rec = { base: null, count: null, helperActive: null, sawRunning: false, statusEnded: false, viaRunArg: null }
+    rec = { base: null, count: null, helperActive: null, sawRunning: false, statusEnded: false, viaRunArg: null, stopping: false, resumed: 0 }
     runs.set(runId, rec)
-    while (runs.size > RUNS_KEEP) runs.delete(runs.keys().next().value)
+    while (runs.size > RUNS_KEEP) { const old = runs.keys().next().value; runs.delete(old); unwatchRun(old) }
   }
   return rec
 }
@@ -1112,32 +1216,61 @@ function readRunStatus(runId) {
   return undefined
 }
 
-/** 用一份状态推进某一轮:先得**看到它在跑**,之后它不在跑了才算结束。 */
+/**
+ * 用一份状态推进某一轮:先得**看到它在跑**,之后它不在跑了才算结束。
+ * ⚠️「停止中」不是结束(评审第 1 条):宿主在停止请求进行中回 { phase: 'idle', runId: 原来那个 }(agentStatus.ts 的 phaseOf,
+ * stoppingBySession 那一支)。同一个 runId 的 idle 只记 stopping,不发 overlay-turn、不锁 statusEnded;
+ * 停止没成、它又回到在跑 → stopping 清掉、resumed 加一(视图据此把停止按钮还给用户)。
+ * 真结束 = runId 没了 / 换成别的 / 同一个 runId 明确 done·error(按会话取时 done / error 也带着原来的 runId)。
+ * 拿不到状态(null / 不是对象)= 不知道,不据此收尾。
+ */
 function applyRunStatus(runId, st) {
   const rec = runs.get(runId)
-  if (!rec || st === undefined || rec.statusEnded) return
-  if (st && st.runId === runId && !isAgentPhaseOver(st)) { rec.sawRunning = true; return }
-  if (rec.sawRunning) { rec.statusEnded = true; endTurn(runId); unwatchRun(runId) }
+  if (!rec || !st || typeof st !== 'object' || rec.statusEnded) return
+  if (st.runId === runId) {
+    if (st.phase === 'done' || st.phase === 'error') { if (rec.sawRunning) finishRun(runId, rec); return }
+    rec.sawRunning = true
+    if (st.phase === 'idle') { rec.stopping = true; return }
+    if (rec.stopping) { rec.stopping = false; rec.resumed++ }
+    return
+  }
+  if (rec.sawRunning) finishRun(runId, rec)
+}
+function finishRun(runId, rec) {
+  rec.statusEnded = true
+  rec.stopping = false
+  endTurn(runId)
+  unwatchRun(runId)
 }
 const pollRunStatus = (runId) => applyRunStatus(runId, readRunStatus(runId))
 
-// 新宿主上,对最近一轮单独订阅一路 { runId } 状态 —— 视图看不见(6 s 慢速)时也能及时收尾。悬浮小画面不订。
-let watchedRun = null
-let watchedRunOff = null
+// 每一轮单独订阅一路状态 —— 视图看不见(6 s 慢速)、或根本没有视图、主区切去了别的会话时也能及时收尾(评审第 6 条)。
+// 新宿主按 { runId };旧宿主不认 { runId }(会把它当会话 id、回 idle,和结束长得一样),只按已知的会话 id 订。
+// 同时在跑的不止一轮时各盯各的;结束、被挤出记录、停用插件时退订。悬浮小画面不订。
+const watches = new Map() // runId → 退订函数
 function unwatchRun(runId) {
-  if (runId && runId !== watchedRun) return
-  if (watchedRunOff) { try { watchedRunOff() } catch { /* 宿主会统一收 */ } }
-  watchedRun = null
-  watchedRunOff = null
+  const ids = runId === undefined ? [...watches.keys()] : [runId]
+  for (const id of ids) {
+    const off = watches.get(id)
+    watches.delete(id)
+    if (typeof off === 'function') { try { off() } catch { /* 宿主会统一收 */ } }
+  }
 }
 function watchRun(runId) {
   const tg = ctx.tangu
   const rec = runs.get(runId)
-  if (!rec || rec.viaRunArg !== true || rec.statusEnded || watchedRun === runId) return
+  if (!rec || rec.statusEnded || watches.has(runId)) return
   if (!tg || typeof tg.subscribeAgentStatus !== 'function' || !tracksTurns(globalThis.document)) return
-  unwatchRun()
-  watchedRun = runId
-  try { watchedRunOff = tg.subscribeAgentStatus((st) => applyRunStatus(runId, st), { runId }) } catch { watchedRun = null }
+  let arg
+  if (rec.viaRunArg === true) arg = { runId }
+  else if (rec.viaRunArg === false && typeof rec.sessionId === 'string' && rec.sessionId) arg = rec.sessionId
+  else return
+  watches.set(runId, null)
+  try {
+    const off = tg.subscribeAgentStatus((st) => applyRunStatus(runId, st), arg)
+    if (watches.has(runId)) watches.set(runId, off)
+    else if (typeof off === 'function') off() // 订阅回调里当场就收尾了
+  } catch { watches.delete(runId) }
 }
 
 /** 每个视图拿到的每一帧(含 unchanged / 不带图的)都过一遍这里:记基数、计数、helper 的进行中,顺手问一次状态。 */
@@ -1432,6 +1565,7 @@ ctx.registerView({
     let shownDone = ''
     let stopRun = null
     let stoppingRun = null
+    let stopResumedAt = 0   // 点停止那一刻这一轮的 resumed;之后它变大 = 停止没成、又回到在跑 → 按钮还给用户
 
     function placeOverlay() {
       if (!natW || !natH) return
@@ -1524,12 +1658,16 @@ ctx.registerView({
       const can = Boolean(runId) && Boolean(ctx.tangu && typeof ctx.tangu.stop === 'function')
       stopRun = can ? runId : null
       btnStop.className = can ? 'cu-live-stop on' : 'cu-live-stop'
-      btnStop.disabled = can && stoppingRun === runId
+      // 停止中(本视图刚点过,或宿主状态已经是「停止中」——别处叫停的也算)→ 按钮留着但禁用,等这一轮真的结束
+      const rec = can ? runs.get(runId) : null
+      btnStop.disabled = can && (stoppingRun === runId || Boolean(rec && rec.stopping))
     }
     on(btnStop, 'click', () => {
       const runId = stopRun
       if (!runId || stoppingRun === runId) return
       stoppingRun = runId
+      const rec = runs.get(runId)
+      stopResumedAt = rec ? rec.resumed : 0
       btnStop.disabled = true
       let p
       try { p = Promise.resolve(ctx.tangu.stop({ runId })) } catch { p = Promise.resolve(false) }
@@ -1601,6 +1739,8 @@ ctx.registerView({
       const locale = currentLocale()
       setStatus(statusText(locale, { ended, lastAction: a }))
       setDone(ended ? doneText(locale, runId ? runSteps(runId) : null) : '')
+      const rec = runId ? runs.get(runId) : null
+      if (stoppingRun && stoppingRun === runId && rec && rec.resumed > stopResumedAt) stoppingRun = null // 停止没成,又在跑了
       setStop(ended ? null : runId)
     }
 
@@ -1852,8 +1992,9 @@ const teardown = []
         rec.sawRunning = true
         if (typeof st.sessionId === 'string') rec.sessionId = st.sessionId
       }
-      // 每次主区状态变了,把还没收尾的几轮都问一遍(它们各自按会话 id / runId 问,不会被主区切会话骗)。
-      for (const [id, rec] of runs) if (rec.sawRunning && !rec.statusEnded) pollRunStatus(id)
+      // 每次主区状态变了,把还没收尾的几轮都问一遍(它们各自按会话 id / runId 问,不会被主区切会话骗),
+      // 问过以后知道走哪条通道了,就对每一轮建定向订阅:之后主区切去别的会话,那一轮结束也会自己报上来。
+      for (const [id, rec] of [...runs]) if (rec.sawRunning && !rec.statusEnded) { pollRunStatus(id); watchRun(id) }
     }
     let off = null
     try { off = tg.subscribeAgentStatus(onStatus) } catch { off = null }
