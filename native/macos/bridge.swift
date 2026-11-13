@@ -385,6 +385,34 @@ struct PidWindow {
 	let origin: CGPoint
 }
 
+/// 先到再点(协议 20):主线程 perform 完光标的飞行后,把到达时刻和叠层看不看得见交回给 act 所在的线程。
+final class ArrivalReply: @unchecked Sendable {
+	private let lock = NSLock()
+	private let done = DispatchSemaphore(value: 0)
+	private var report: (arrival: Double, onScreen: Bool)?
+
+	func fulfill(arrival: Double, onScreen: Bool) {
+		lock.lock()
+		report = (arrival, onScreen)
+		lock.unlock()
+		done.signal()
+	}
+
+	/// 最多等 timeout 秒;主线程没来得及回话就是 nil(那就不等光标)。
+	func wait(timeout: Double) -> (arrival: Double, onScreen: Bool)? {
+		guard done.wait(timeout: .now() + max(0, timeout)) == .success else { return nil }
+		lock.lock()
+		defer { lock.unlock() }
+		return report
+	}
+}
+
+/// 一批 act 共用的等光标预算(ArrivalBudget 是值类型,这里包一层给 actBatch 逐步传进 act)。只在一条连接线程上用。
+final class ArrivalBudgetBox {
+	var budget: ArrivalBudget
+	init(seconds: Double = ArrivalWait.batchBudget) { budget = ArrivalBudget(seconds: seconds) }
+}
+
 final class Bridge {
 	private let protocolVersion = 20
 	/// 截图里变了超过这么多像素(缩到最长边 800 后)才算「画面变了」:光标闪烁、JPEG 噪声在这之下。
@@ -710,6 +738,20 @@ final class Bridge {
 			DispatchQueue.main.async { MainActor.assumeIsolated { AgentOverlayTurn.shared.requestEnd(runId: command.runId) } }
 		}
 		return ["ok": true]
+	}
+
+	/// 先到再点:等主线程报回到达时刻(≤ 0.2 s),再睡掉还没飞完的那段。叠层看不见、主线程没回话、预算用完都不等。
+	/// 花掉的时间(含等回话)记进这一批的预算;不算进 executeCoordinates 里那 1.5 s 的截图预算(那边从截第一张时才起算)。
+	private func awaitApproach(_ reply: ArrivalReply, budget box: ArrivalBudgetBox) {
+		let started = OverlayClock.now()
+		defer { box.budget.spend(OverlayClock.now() - started) }
+		let replyWait = box.budget.grant(ArrivalWait.replyTimeout)
+		guard replyWait > 0, let report = reply.wait(timeout: replyWait), report.onScreen else { return }
+		var left = box.budget
+		let now = OverlayClock.now()
+		left.spend(now - started)
+		let sleep = left.grant(ArrivalWait.remaining(arrival: report.arrival, now: now))
+		if sleep > 0 { usleep(useconds_t(sleep * 1_000_000)) }
 	}
 
 	private func controlledSnapshot() -> (windowId: UInt32, pid: Int32, at: Date)? {
@@ -2214,7 +2256,8 @@ final class Bridge {
 		return payloadNode(element: element)
 	}
 
-	private func act(_ request: [String: Any]) throws -> [String: Any] {
+	/// arrivalBudget:这一批为等光标还能花的时间(actBatch 传同一个进来;单条 act 自己开一个,见 ArrivalBudget)。
+	private func act(_ request: [String: Any], arrivalBudget: ArrivalBudgetBox = ArrivalBudgetBox()) throws -> [String: Any] {
 		let lookId = try stringArg(request, "lookId")
 		guard let record = lookRecord(for: lookId) else {
 			throw BridgeFailure(message: "Look id '\(lookId)' is no longer available", code: "stale_look")
@@ -2249,20 +2292,50 @@ final class Bridge {
 		var element: AXUIElement?
 		var rawPoint: CGPoint?
 		var preflightCapsUnknown = false
-		let eventsLive = !deferRootDelta && ensureRootObserver(pid: pid)
-		let eventCursor = eventsLive ? rootEventCursor(pid: pid) : 0
-		let beforeRootSnapshot = deferRootDelta ? [:] : rootMetadataSnapshot(pid: pid)
-		let beforeCgSignature = deferRootDelta ? [] : cgRootSignature(pid: pid)
-		let beforeFrontmostPid = deferRootDelta ? nil : NSWorkspace.shared.frontmostApplication?.processIdentifier
-		let beforeSheetCount = windowElement(pid: pid, windowId: record.windowId).map { sheetElements(of: $0).count } ?? 0
-		let beforeFocusedWindow = focusedWindowSummary(pid: pid)
-		let beforeValue: String?
-		let beforeSelected: String?
-		func finish(_ response: [String: Any]) -> [String: Any] {
-			if deferRootDelta { return response }
-			return attachRootDelta(to: response, before: beforeRootSnapshot, beforeFrontmostPid: beforeFrontmostPid, pid: pid, eventsLive: eventsLive, eventCursor: eventCursor, beforeCgSignature: beforeCgSignature)
+
+		/// `viaAx = true`:这一下是用 AX 直接按压 / 写值完成的,压根没发物理事件 —— 无论 delivery 名义上
+		/// 是什么,系统指针都没动过,所以虚拟光标该画。否则前台策略下用 AX 打成的那一下毫无反馈。
+		///
+		/// 协议 20:抢前台(HID)的点击不画光标(07-29 定的),只在落点画一圈环;抢前台的打字只描输入框。
+		/// 按键不画。cue 里的坐标一律是全局 CG 点 / 矩形。
+		/// reply(先到再点):主线程 perform 完把这段飞行的到达时刻报回来。返回 false = 什么都没投(不画),别去等 reply。
+		@discardableResult
+		func cue(_ requested: AgentCursor.Cue, at point: CGPoint, viaAx: Bool = false, reply: ArrivalReply? = nil) -> Bool {
+			guard supportsAgentCursor, overlay.enabled else { return false }
+			var cue = requested
+			if !viaAx && delivery == "hid" {
+				switch cue {
+				case .click(let count): cue = .ringOnly(count: count)
+				case .field(let rect): cue = .fieldOnly(rect: rect)
+				case .ringOnly, .fieldOnly: break
+				default: return false
+				}
+			} else if !viaAx && policy == "ax_only" {
+				return false
+			}
+			// 钉在这一点上接住事件的那扇窗口上方(目标,或它画进截图的下拉 / 菜单),而不是压在所有窗口之上。
+			let candidates = onScreenWindows()
+			let target = candidates.first { $0.id == record.windowId && $0.pid == pid }
+			let anchor = target.map { pointerWindowId(target: $0, candidates: candidates, at: point) } ?? record.windowId
+			let layer = candidates.first { $0.id == anchor }?.layer
+			let windowId = record.windowId
+			let requestReduce = overlay.reduceMotion
+			DispatchQueue.main.async {
+				MainActor.assumeIsolated {
+					// 减少动态:宿主说的,或者系统设置里开着,任一为真。
+					let reduce = requestReduce || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+					AgentCursor.shared.perform(cue, at: point, above: anchor, layer: layer, target: windowId, reduceMotion: reduce)
+					if let reply {
+						let report = AgentCursor.shared.approachReport()
+						reply.fulfill(arrival: report.arrival, onScreen: report.onScreen)
+					}
+				}
+			}
+			return true
 		}
 
+		// 先找到要动的那个元素 / 那一点。只读、不取证:按前证据(下面的 before 快照、beforeValue、pixelsBefore)
+		// 一律放到「等光标飞到」之后再取,取证 → 投递的间隔和以前一样。
 		if let ref = target["ref"] as? String {
 			var refound = false
 			let cached = refStore.element(for: ref)
@@ -2281,17 +2354,59 @@ final class Bridge {
 			}
 			if refound { performed["refound"] = true }
 			element = stored
-			beforeValue = stringAttribute(stored, attribute: kAXValueAttribute as CFString)
-			beforeSelected = stringAttribute(stored, attribute: kAXSelectedTextAttribute as CFString)
 		} else if let xNumber = target["x"] as? NSNumber, let yNumber = target["y"] as? NSNumber {
 			guard record.hasImage else {
 				throw BridgeFailure(message: "Coordinate targeting is unavailable for this outline-only root", code: "coordinate_unavailable_for_root")
 			}
 			rawPoint = lookPoint(record: record, x: xNumber.doubleValue, y: yNumber.doubleValue)
-			beforeValue = nil
-			beforeSelected = nil
 		} else {
 			throw BridgeFailure(message: "act target must include ref or x/y", code: "invalid_args")
+		}
+
+		// 先到再点(协议 20):落点一算出来就让光标起飞,和下面的按前准备(装 AX 观察器)并行;取证之前只等还没飞完的那段。
+		// 会不会画光标、要不要等,见 ArrivalWait.plan(和下面各条路的分支、cue 的守卫一一对应)。
+		var approach: ArrivalReply?
+		do {
+			let isPress = action == "press" || action == "click"
+			let leftSingleClick = (params["button"] as? String ?? "left") == "left" && ((params["clickCount"] as? NSNumber)?.intValue ?? 1) <= 1
+			let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXTextView", "AXSearchField", "AXComboBox", "AXEditableText", "AXSecureTextField"]
+			let pressElement = isPress ? element : nil
+			let plan = ArrivalWait.plan(
+				action: action, viaElement: element != nil,
+				elementPressable: pressElement.map { supportsAction($0, action: kAXPressAction as CFString) } ?? false,
+				elementNeedsPointer: pressElement.map { hasAncestorRole($0, role: "AXWebArea") || textRoles.contains(stringAttribute($0, attribute: kAXRoleAttribute as CFString) ?? "") } ?? false,
+				delivery: delivery, policy: policy, leftSingleClick: leftSingleClick,
+				cursorEnabled: supportsAgentCursor && overlay.enabled, clickAfterArrival: overlay.clickAfterArrival, reduceMotion: overlay.reduceMotion
+			)
+			// 拖动先飞到起点;其余飞到元素中点 / 坐标点(和后面 cue 的落点同一个,到了那边 d = 0、不再飞)。
+			var point: CGPoint?
+			if action == "drag", let first = (params["path"] as? [[String: Any]])?.first,
+				let x = (first["x"] as? NSNumber)?.doubleValue, let y = (first["y"] as? NSNumber)?.doubleValue {
+				point = lookPoint(record: record, x: x, y: y)
+			} else if let element, let frame = frameForElement(element) {
+				point = CGPoint(x: frame.midX, y: frame.midY)
+			} else {
+				point = rawPoint
+			}
+			// 主线程上绝不等(常驻 helper 的 act 都在各连接自己的线程上跑,这里只是兜底)。
+			if case .approach(let viaAx) = plan, !Thread.isMainThread, let point {
+				let reply = ArrivalReply()
+				if cue(.move, at: point, viaAx: viaAx, reply: reply) { approach = reply }
+			}
+		}
+		let eventsLive = !deferRootDelta && ensureRootObserver(pid: pid)
+		if let approach { awaitApproach(approach, budget: arrivalBudget) }
+		let eventCursor = eventsLive ? rootEventCursor(pid: pid) : 0
+		let beforeRootSnapshot = deferRootDelta ? [:] : rootMetadataSnapshot(pid: pid)
+		let beforeCgSignature = deferRootDelta ? [] : cgRootSignature(pid: pid)
+		let beforeFrontmostPid = deferRootDelta ? nil : NSWorkspace.shared.frontmostApplication?.processIdentifier
+		let beforeSheetCount = windowElement(pid: pid, windowId: record.windowId).map { sheetElements(of: $0).count } ?? 0
+		let beforeFocusedWindow = focusedWindowSummary(pid: pid)
+		let beforeValue = element.flatMap { stringAttribute($0, attribute: kAXValueAttribute as CFString) }
+		let beforeSelected = element.flatMap { stringAttribute($0, attribute: kAXSelectedTextAttribute as CFString) }
+		func finish(_ response: [String: Any]) -> [String: Any] {
+			if deferRootDelta { return response }
+			return attachRootDelta(to: response, before: beforeRootSnapshot, beforeFrontmostPid: beforeFrontmostPid, pid: pid, eventsLive: eventsLive, eventCursor: eventCursor, beforeCgSignature: beforeCgSignature)
 		}
 
 		func coordinatePoint() throws -> CGPoint {
@@ -2300,40 +2415,6 @@ final class Bridge {
 			}
 			if let rawPoint { return rawPoint }
 			throw BridgeFailure(message: "No coordinate grounding is available", code: "coordinate_unavailable")
-		}
-
-		/// `viaAx = true`:这一下是用 AX 直接按压 / 写值完成的,压根没发物理事件 —— 无论 delivery 名义上
-		/// 是什么,系统指针都没动过,所以虚拟光标该画。否则前台策略下用 AX 打成的那一下毫无反馈。
-		///
-		/// 协议 20:抢前台(HID)的点击不画光标(07-29 定的),只在落点画一圈环;抢前台的打字只描输入框。
-		/// 按键不画。cue 里的坐标一律是全局 CG 点 / 矩形。
-		func cue(_ requested: AgentCursor.Cue, at point: CGPoint, viaAx: Bool = false) {
-			guard supportsAgentCursor, overlay.enabled else { return }
-			var cue = requested
-			if !viaAx && delivery == "hid" {
-				switch cue {
-				case .click(let count): cue = .ringOnly(count: count)
-				case .field(let rect): cue = .fieldOnly(rect: rect)
-				case .ringOnly, .fieldOnly: break
-				default: return
-				}
-			} else if !viaAx && policy == "ax_only" {
-				return
-			}
-			// 钉在这一点上接住事件的那扇窗口上方(目标,或它画进截图的下拉 / 菜单),而不是压在所有窗口之上。
-			let candidates = onScreenWindows()
-			let target = candidates.first { $0.id == record.windowId && $0.pid == pid }
-			let anchor = target.map { pointerWindowId(target: $0, candidates: candidates, at: point) } ?? record.windowId
-			let layer = candidates.first { $0.id == anchor }?.layer
-			let windowId = record.windowId
-			let requestReduce = overlay.reduceMotion
-			DispatchQueue.main.async {
-				MainActor.assumeIsolated {
-					// 减少动态:宿主说的,或者系统设置里开着,任一为真。
-					let reduce = requestReduce || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-					AgentCursor.shared.perform(cue, at: point, above: anchor, layer: layer, target: windowId, reduceMotion: reduce)
-				}
-			}
 		}
 
 		/// 打字 / setText 的目标输入框:光标停到它前缘中线、描一圈边。拿不到框就不画。
@@ -2679,6 +2760,8 @@ final class Bridge {
 
 		var steps: [[String: Any]] = []
 		var stoppedAt: Int?
+		// 先到再点:整批为等光标最多多花 2.0 s,用完后面的步骤照旧边飞边点。
+		let arrivalBudget = ArrivalBudgetBox()
 		for (index, action) in actions.enumerated() {
 			var deferred = action
 			deferred["deferRootDelta"] = true
@@ -2687,7 +2770,7 @@ final class Bridge {
 				if let value = request[key] { deferred[key] = value }
 			}
 			do {
-				let step = try act(deferred)
+				let step = try act(deferred, arrivalBudget: arrivalBudget)
 				steps.append(step)
 				if (step["outcome"] as? String) == "didnt" { stoppedAt = index; break }
 			} catch let failure as BridgeFailure {

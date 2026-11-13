@@ -64,6 +64,19 @@ final class AgentCursor {
 
     var hasOverlay: Bool { overlay != nil }
 
+    /// 上一次 perform 之前叠层窗口在不在屏上(先到再点用:刚拿到前面的窗口 occlusionState 还没更新,见 ArrivalWait)。
+    private var wasOnScreenBeforePerform = false
+
+    /// 先到再点:刚 perform 过的这段飞行什么时候到(没在飞 = now),以及叠层此刻看不看得见(看不见就不等)。
+    func approachReport(now explicitNow: Double? = nil) -> (arrival: Double, onScreen: Bool) {
+        let now = explicitNow ?? clock()
+        let arrival = renderer.scene.segments.last.map { max(now, $0.end) } ?? now
+        let onScreen = overlay.map {
+            ArrivalWait.overlayOnScreen(isVisible: $0.isVisible, wasVisibleBefore: wasOnScreenBeforePerform, occlusionVisible: $0.occlusionState.contains(.visible))
+        } ?? false
+        return (arrival, onScreen)
+    }
+
     func animate(to point: CGPoint, above windowId: UInt32, layer: Int? = nil, target: UInt32 = 0) {
         perform(.move, at: point, above: windowId, layer: layer, target: target)
     }
@@ -77,6 +90,7 @@ final class AgentCursor {
         teardownTask?.cancel()
         teardownTask = nil
 
+        wasOnScreenBeforePerform = overlay?.isVisible == true
         let window = ensureWindow()
         // Tangu 补丁:覆盖层必须横跨**所有**屏幕,并且每次都重新对齐 —— 显示器可能中途插拔/改摆位。
         // 上游只开主屏那么大(见 ensureWindow),于是副屏上的点击把光标画到了覆盖层之外 = 用户看不见,

@@ -21,6 +21,7 @@ struct AgentOverlayRenderTests {
         testPalette()
         if let fixtures = value("--fixtures") { testFixtures(URL(fileURLWithPath: fixtures)) }
         testFlight()
+        testArrival()
         testTurnModel()
         testScene()
         let out = URL(fileURLWithPath: value("--out") ?? NSTemporaryDirectory()).appendingPathComponent("", isDirectory: true)
@@ -139,6 +140,81 @@ struct AgentOverlayRenderTests {
         expect(reduced.presence.value(at: 20.5) == 0 && near(reduced.presence.value(at: 20.7), 1), "减少动态:在目的地重新淡入")
         let f = reduced.cursorFrame(at: 21)
         expect(f.scale == 1 && f.blur == 0 && f.wobble == 0, "减少动态:不缩、不糊、不摆")
+    }
+
+    // MARK: - 先到再点
+
+    static func testArrival() {
+        // 到达时刻:起飞时就算好 = start + clamp(距离 / 1100, 0.18, 0.45);<6pt 是 0。
+        var scene = CursorScene()
+        scene.place(CursorPose.resting(atTip: CGPoint(x: 100, y: 100)))
+        scene.show(at: 50)
+        let far = scene.fly(toTip: CGPoint(x: 1300, y: 100), at: 50)
+        expect(near(far, 50.45), "1200pt 远:0.45 s 后到(上限),实际 \(far - 50)")
+        // 投递前再叫一次同一个落点(cue 的那一下):还在路上 → 到达时刻不变、不重新规划。
+        let mid = scene.pose(at: 50.2)
+        expect(near(scene.fly(toTip: CGPoint(x: 1300, y: 100), at: 50.2), far), "同一落点再叫一次:到达时刻不变")
+        expect(scene.pose(at: 50.2) == mid && scene.segments.count == 1, "同一落点再叫一次:不换路")
+        // 到了以后再叫:距离 0 → d = 0,到达 = 现在。
+        expect(near(scene.fly(toTip: CGPoint(x: 1300, y: 100), at: 51), 51), "已经到了:不飞,到达 = 现在")
+        expect(near(scene.fly(toTip: CGPoint(x: 1304, y: 100), at: 52), 52), "离落点不到 6pt:d = 0")
+        let near330 = scene.fly(toTip: CGPoint(x: 974, y: 100), at: 53)
+        expect(near(near330, 53.3), "330pt:0.3 s,实际 \(near330 - 53)")
+
+        // 只等没飞完的那段。
+        expect(near(ArrivalWait.remaining(arrival: 10.3, now: 10.1), 0.2), "还剩 0.2 s 就只等 0.2 s")
+        expect(ArrivalWait.remaining(arrival: 10, now: 10.1) == 0, "已经到了不等")
+        expect(ArrivalWait.remaining(arrival: 20, now: 10) == ArrivalWait.maxFlight, "再远也只等一段飞行(0.45 s)")
+        expect(ArrivalWait.remaining(arrival: .nan, now: 10) == 0 && ArrivalWait.remaining(arrival: .infinity, now: 10) == 0, "算不出来就不等")
+
+        // 每批总共最多多等 2.0 s,用完不再等。
+        var budget = ArrivalBudget()
+        expect(near(budget.remaining, 2.0), "预算缺省 2.0 s")
+        for _ in 0..<4 { budget.spend(budget.grant(0.45)) }
+        expect(near(budget.remaining, 0.2), "四次各 0.45 s 后还剩 0.2 s,实际 \(budget.remaining)")
+        expect(near(budget.grant(0.45), 0.2), "第五次只给剩下的 0.2 s")
+        budget.spend(budget.grant(0.45))
+        expect(budget.grant(0.3) == 0 && budget.remaining == 0, "用完以后一点都不给")
+        budget.spend(1)
+        expect(budget.remaining == 0, "不会扣成负数")
+        expect(ArrivalBudget().grant(-1) == 0 && ArrivalBudget().grant(.nan) == 0, "不合法的请求不给")
+        // 20 步各要等满 0.45 s:总共只等 2.0 s。
+        var batch = ArrivalBudget()
+        var waited = 0.0
+        for _ in 0..<20 { let g = batch.grant(0.45); waited += g; batch.spend(g) }
+        expect(near(waited, 2.0), "20 步的一批总共只多等 2.0 s,实际 \(waited)")
+
+        // 叠层在不在屏上:没显示不等;刚拿到前面时 occlusionState 还没更新,不按它判。
+        expect(!ArrivalWait.overlayOnScreen(isVisible: false, wasVisibleBefore: true, occlusionVisible: true), "窗口没在屏上:不等")
+        expect(!ArrivalWait.overlayOnScreen(isVisible: true, wasVisibleBefore: true, occlusionVisible: false), "完全被盖住:不等")
+        expect(ArrivalWait.overlayOnScreen(isVisible: true, wasVisibleBefore: true, occlusionVisible: true), "看得见:等")
+        expect(ArrivalWait.overlayOnScreen(isVisible: true, wasVisibleBefore: false, occlusionVisible: false), "刚拿到前面:按看得见算")
+
+        // 各种「不等」/「等」的判定。
+        func plan(_ action: String, element: Bool = false, pressable: Bool = false, needsPointer: Bool = false,
+                  delivery: String = "pid", policy: String = "default", leftSingle: Bool = true,
+                  enabled: Bool = true, after: Bool = true, reduce: Bool = false) -> ArrivalWait.Plan {
+            ArrivalWait.plan(action: action, viaElement: element, elementPressable: pressable, elementNeedsPointer: needsPointer,
+                             delivery: delivery, policy: policy, leftSingleClick: leftSingle,
+                             cursorEnabled: enabled, clickAfterArrival: after, reduceMotion: reduce)
+        }
+        expect(plan("click") == .approach(viaAx: false), "后台坐标点击:等")
+        expect(plan("moveMouse") == .approach(viaAx: false) && plan("drag") == .approach(viaAx: false) && plan("scroll") == .approach(viaAx: false), "后台移动 / 拖动 / 滚动:等")
+        expect(plan("press", element: true, pressable: true) == .approach(viaAx: true), "按 ref 的 AXPress:等")
+        expect(plan("press", element: true, pressable: true, delivery: "hid", policy: "foreground") == .approach(viaAx: true), "前台策略下 AXPress 打成的那下也画光标:等")
+        expect(plan("scroll", element: true, delivery: "hid", policy: "foreground") == .approach(viaAx: true), "按 ref 的 AX 滚动:等")
+        expect(plan("click", delivery: "hid", policy: "foreground") == .skip(.foreground), "抢前台的坐标点击(只画环):不等")
+        expect(plan("press", element: true, needsPointer: true, delivery: "hid", policy: "foreground") == .skip(.foreground), "网页 / 文本框走前台物理点击:不等")
+        expect(plan("press", element: true, needsPointer: true) == .skip(.noCursor), "网页 / 文本框在后台注定被拒:不等")
+        expect(plan("press", element: true, pressable: true, needsPointer: true, policy: "ax_only") == .approach(viaAx: true), "ax_only 下网页元素照旧试 AXPress:等")
+        expect(plan("click", policy: "ax_only") == .approach(viaAx: true), "ax_only 坐标左键单击先试后台 AXPress:等")
+        expect(plan("click", policy: "ax_only", leftSingle: false) == .skip(.noCursor) && plan("drag", policy: "ax_only") == .skip(.noCursor), "ax_only 下的物理事件不画光标:不等")
+        expect(plan("click", enabled: false) == .skip(.overlayOff), "「操作可视化」关着:不等")
+        expect(plan("click", after: false) == .skip(.optedOut), "clickAfterArrival = false:不等")
+        expect(plan("click", reduce: true) == .skip(.reduceMotion), "减少动态:不等")
+        for action in ["typeText", "keypress", "setText", "wait"] {
+            expect(plan(action) == .skip(.notPointer), "\(action) 不等")
+        }
     }
 
     // MARK: - 整轮状态机

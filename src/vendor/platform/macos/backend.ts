@@ -3,6 +3,7 @@ import { parseLookResponse, type LookResponse } from "../../outline.ts";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type { ComputerUsePlatformBackend, FramePoints, HelperActResult, PlatformActRequest, PlatformApp, PlatformFocusWindowResult, PlatformFrontmostResult, PlatformObserveRequest, PlatformReadTextRequest, PlatformReadTextResponse, PlatformRoot, PlatformRootKind, PlatformRootQuery, PlatformTarget, PlatformWaitForRequest, PlatformWaitForResponse } from "../types.ts";
 import { macosHelper } from "./helper.ts";
+import { overlayActExtras } from "../../../overlayState.ts";
 
 function parseApps(result: unknown): PlatformApp[] {
 	const array = Array.isArray(result) ? result : (result as any)?.apps;
@@ -119,13 +120,15 @@ export const macosBackend: Pick<ComputerUsePlatformBackend, "listApps" | "listRo
 		}, options));
 	},
 
+	// Forsion patch (helper protocol 20): overlayActExtras() adds the overlay fields (clickAfterArrival, colours, runId).
 	async act(request: PlatformActRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<HelperActResult> {
-		return await macosHelper.command<HelperActResult>("act", { ...helperAction(request), cursorOverlay: getComputerUseConfig().cursor_overlay }, options);
+		return await macosHelper.command<HelperActResult>("act", { ...helperAction(request), cursorOverlay: getComputerUseConfig().cursor_overlay, ...overlayActExtras() }, options);
 	},
 
 	async actBatch(requests: PlatformActRequest[], options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<HelperActResult> {
 		const cursorOverlay = getComputerUseConfig().cursor_overlay;
-		return await macosHelper.command<HelperActResult>("actBatch", { actions: requests.map((request) => ({ ...helperAction(request), cursorOverlay })) }, options);
+		const extras = overlayActExtras();
+		return await macosHelper.command<HelperActResult>("actBatch", { actions: requests.map((request) => ({ ...helperAction(request), cursorOverlay, ...extras })) }, options);
 	},
 
 	async readText(args: PlatformReadTextRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<PlatformReadTextResponse> {

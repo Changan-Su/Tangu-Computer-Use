@@ -96,7 +96,7 @@ struct OverlayActOptions: Equatable {
     /// 宿主说的「减少动态」。helper 另外自己读系统设置,两者任一为真就按减少动态处理(见 AgentCursor)。
     var reduceMotion: Bool
     var runId: String?
-    /// 缺省 true。这一段只读进来,「先到再点」在下一段用它。
+    /// 缺省 true:点击类动作等光标飞到再投递(ArrivalWait)。false = 照旧立刻投递(负对照)。
     var clickAfterArrival: Bool
 
     static let keys = ["cursorOverlay", "overlayStyle", "reduceMotion", "runId", "clickAfterArrival"]
@@ -288,6 +288,11 @@ struct CursorScene: Equatable {
             }
             return t
         }
+        // 先到再点:投递前已经让光标起飞去这一点了(bridge 的 approach),到了投递那一下再叫一次同一个落点 ——
+        // 还在路上就别重新规划(半空中换一条路会抖一下),到达时刻照旧;已经到了,下面算出来的距离 < 6 pt,d = 0。
+        if placed, case .flight(let current)? = segments.last, current.to == target, current.arrival > t {
+            return current.arrival
+        }
         let flight = CursorFlight(from: pose(at: t), to: target, start: t)
         rest = target
         segments = [.flight(flight)]
@@ -472,6 +477,110 @@ extension FieldEffect {
         if u < 0.12 { return u / 0.12 }
         if u < Self.hold { return 1 }
         return max(0, 1 - (u - Self.hold) / Self.fade)
+    }
+}
+
+// MARK: - 先到再点
+
+/// 「先到再点」的纯判定(协议 20,非上游)。bridge 在取按前证据之前先让光标起飞,只等还没飞完的那一段,
+/// 再照旧取证、投递。这里只有判定和算术;起飞、等待、取证在 bridge.swift 的 act 里。
+enum ArrivalWait {
+    /// 最长的一段飞行(CursorFlight.duration 的上限)。到达时刻算出来再远也只等这么多。
+    static let maxFlight = 0.45
+    /// 等主线程把到达时刻报回来最多等这么久(主线程忙就不等光标,照旧投递)。
+    static let replyTimeout = 0.2
+    /// 一批(actBatch)为等光标最多多花的时间;单条 act 也按这个上限算(一条最多等 maxFlight,碰不到它)。
+    static let batchBudget = 2.0
+    /// 会画光标的动作(点击、移动、滚动、拖动)。打字 / 按键 / setText 不等。
+    static let pointerActions: Set<String> = ["press", "click", "moveMouse", "scroll", "drag"]
+
+    enum Skip: String, Equatable {
+        /// 不是指针动作。
+        case notPointer
+        /// 「操作可视化」关着(或不是常驻 helper,不画光标)。
+        case overlayOff
+        /// clickAfterArrival == false(负对照)。
+        case optedOut
+        /// 减少动态:光标不飞,没什么可等。
+        case reduceMotion
+        /// 抢前台(HID)的物理事件:本来就不画光标(07-29)。
+        case foreground
+        /// 这条路不画光标(ax_only 下的物理事件、注定被拒的网页按压)。
+        case noCursor
+    }
+
+    enum Plan: Equatable {
+        /// 起飞并等到达;viaAx = 这一下会用 AX 完成(不发物理事件),光标照画。
+        case approach(viaAx: Bool)
+        case skip(Skip)
+    }
+
+    /// 这一条 act 会不会画光标、要不要等。照着 act() 里各条路的分支和 cue() 的守卫写,两边改一边要同步改。
+    /// - viaElement:按 ref 找到了元素(否则是 x/y 坐标)。
+    /// - elementPressable:元素支持 AXPress。elementNeedsPointer:元素在网页里或是文本框(AXPress 打不动,要真实指针)。
+    /// - leftSingleClick:左键单击(坐标点击只有这种会先试后台 AXPress)。
+    static func plan(
+        action: String, viaElement: Bool, elementPressable: Bool, elementNeedsPointer: Bool,
+        delivery: String, policy: String, leftSingleClick: Bool,
+        cursorEnabled: Bool, clickAfterArrival: Bool, reduceMotion: Bool
+    ) -> Plan {
+        guard pointerActions.contains(action) else { return .skip(.notPointer) }
+        guard cursorEnabled else { return .skip(.overlayOff) }
+        guard clickAfterArrival else { return .skip(.optedOut) }
+        guard !reduceMotion else { return .skip(.reduceMotion) }
+        let isPress = action == "press" || action == "click"
+        if viaElement && isPress {
+            if elementNeedsPointer && policy != "ax_only" {
+                // 前台策略走坐标物理点击;别的策略直接抛 foreground_required。
+                return policy == "foreground" ? coordinates(isPress: true, viaElement: true, delivery: delivery, policy: policy, leftSingleClick: leftSingleClick) : .skip(.noCursor)
+            }
+            if elementPressable { return .approach(viaAx: true) }
+        }
+        // 按 ref 的滚动先试 AX 滚动(不发物理事件)。
+        if viaElement && action == "scroll" { return .approach(viaAx: true) }
+        return coordinates(isPress: isPress, viaElement: viaElement, delivery: delivery, policy: policy, leftSingleClick: leftSingleClick)
+    }
+
+    /// executeCoordinates 那条路:抢前台不画;ax_only 只有坐标左键单击(先试后台 AXPress)画;其余(pid 投递)画。
+    private static func coordinates(isPress: Bool, viaElement: Bool, delivery: String, policy: String, leftSingleClick: Bool) -> Plan {
+        if delivery == "hid" { return .skip(.foreground) }
+        if policy == "ax_only" {
+            return isPress && !viaElement && leftSingleClick ? .approach(viaAx: true) : .skip(.noCursor)
+        }
+        return .approach(viaAx: false)
+    }
+
+    /// 还要等多久:max(0, 到达 − 现在),不超过一段飞行;算不出来(NaN / ∞)就不等。
+    static func remaining(arrival: Double, now: Double) -> Double {
+        let left = arrival - now
+        guard left.isFinite, left > 0 else { return 0 }
+        return min(maxFlight, left)
+    }
+
+    /// 叠层此刻在不在屏上。窗口刚在这一下被拿到前面时 occlusionState 还没来得及更新(系统异步通知),
+    /// 那时不按它判 —— 否则最显眼的第一次飞入永远不等。
+    static func overlayOnScreen(isVisible: Bool, wasVisibleBefore: Bool, occlusionVisible: Bool) -> Bool {
+        guard isVisible else { return false }
+        return wasVisibleBefore ? occlusionVisible : true
+    }
+}
+
+/// 一批(或一条)act 为等光标还能花多少时间。只增不减地扣;用完后面的步骤不再等(光标照旧边飞边点)。
+struct ArrivalBudget: Equatable {
+    private(set) var remaining: Double
+
+    init(seconds: Double = ArrivalWait.batchBudget) { remaining = max(0, seconds) }
+
+    /// 想等 wanted 秒,能给多少(不扣)。
+    func grant(_ wanted: Double) -> Double {
+        guard wanted.isFinite, wanted > 0 else { return 0 }
+        return min(wanted, remaining)
+    }
+
+    /// 实际花掉 spent 秒(含等主线程回话的时间)。
+    mutating func spend(_ spent: Double) {
+        guard spent.isFinite, spent > 0 else { return }
+        remaining = max(0, remaining - spent)
     }
 }
 
