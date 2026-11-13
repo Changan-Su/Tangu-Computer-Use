@@ -595,6 +595,12 @@ struct LiveFrameOwner: Equatable {
     var windowId: UInt32
     var pid: Int32
     var runId: String?
+
+    /// 同一扇窗口、同一轮(nil 和 nil 也算同一轮)。pid 只记不比:look() 登记窗口时 pid 取 CG 的窗口归属,act 的 pid
+    /// 来自请求,两者对同一扇窗口本应一致,但不为它冒「每帧都丢最近动作」的险 —— 窗口号本身全局唯一。
+    func owns(_ other: LiveFrameOwner) -> Bool {
+        windowId == other.windowId && runId == other.runId
+    }
 }
 
 /// helper 记下的最近一次动作(liveView 回包用)。坐标一律是全局 CG 点(左上原点)。
@@ -654,12 +660,12 @@ enum LiveViewExtras {
         return (round4(x), round4(y))
     }
 
-    /// frame:这一帧画面是谁的(和截图用的同一份快照)。最近动作的归属和它对不上(别的窗口 / 进程 / 一轮)就不带
+    /// frame:这一帧画面是谁的(和截图用的同一份快照)。最近动作的归属和它对不上(别的窗口 / 一轮)就不带
     /// cursor / lastAction —— 否则会把 B 的画面配上迟到的 A 的动作;actionCount / turnActive / runId 照给。
     static func fields(last: LiveActionRecord?, actionCount: Int, runId: String?, turnActive: Bool, frame: LiveFrameOwner, windowBounds: CGRect?, now: Double) -> [String: Any] {
         var out: [String: Any] = ["actionCount": actionCount, "turnActive": turnActive]
         if let runId { out["runId"] = runId }
-        guard let last, last.owner == frame else { return out }
+        guard let last, frame.owns(last.owner) else { return out }
         var action: [String: Any] = ["kind": last.kind, "seq": last.seq, "ageMs": max(0, Int(((now - last.at) * 1000).rounded()))]
         if let point = last.point, let bounds = windowBounds, let f = fraction(point, in: bounds) {
             action["x"] = f.x

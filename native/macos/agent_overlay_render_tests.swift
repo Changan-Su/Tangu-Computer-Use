@@ -159,11 +159,12 @@ struct AgentOverlayRenderTests {
         let empty = LiveViewExtras.fields(last: nil, actionCount: 0, runId: nil, turnActive: false, frame: frame, windowBounds: bounds, now: 0)
         expect(Set(empty.keys) == ["actionCount", "turnActive"], "还没有动作:只给计数和轮次")
         expect(out["lastAction"] != nil, "旧调用方(没有 runId)的动作配同样没有 runId 的这一帧:照给")
+        let otherPid = LiveViewExtras.fields(last: record, actionCount: 17, runId: "run_01HZX8Q2W3", turnActive: true, frame: LiveFrameOwner(windowId: 42, pid: 8, runId: "run_01HZX8Q2W3"), windowBounds: bounds, now: 100)
+        expect(otherPid["lastAction"] != nil, "同一扇窗口、同一轮,pid 记得不一样(look 取 CG 归属):照给,不比 pid")
 
         // 归属:这一帧是 B 的窗口 / B 这一轮,最近动作是迟到的 A —— 不能拼在一起。cursor / lastAction 不给,计数和轮次照给。
         for (name, other) in [
             ("别的窗口", LiveFrameOwner(windowId: 43, pid: 7, runId: "run_01HZX8Q2W3")),
-            ("别的进程", LiveFrameOwner(windowId: 42, pid: 8, runId: "run_01HZX8Q2W3")),
             ("别的一轮", LiveFrameOwner(windowId: 42, pid: 7, runId: "run_B")),
             ("这一帧是旧调用方登记的", LiveFrameOwner(windowId: 42, pid: 7, runId: nil)),
         ] {

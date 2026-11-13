@@ -237,4 +237,9 @@ early.abort();
 await new Promise((r) => setTimeout(r, 0));
 assert.equal(ended.at(-1), 't:run_early', '超时之前的 abort(用户中止)照发');
 
+// tools.ts 的接线:监听带上这个工具的 timeoutMs、返回时摘掉(上面的行为测的是 watchRunAbort 本身,这里钉住调用点)。
+const toolsSource = readFileSync(path.join(root, 'src/tools.ts'), 'utf8');
+assert.match(toolsSource, /const unwatch = watchRunAbort\(tcx\.runId, tcx\.signal, undefined, undefined, \{ timeoutMs: spec\.timeoutMs \}\);/, 'tools.ts 挂监听时要带 spec.timeoutMs(工具超时不发 end)');
+assert.match(toolsSource, /finally \{ unwatch\(\); \}/, 'tools.ts 返回时要摘掉监听');
+
 console.log('overlay routes check passed');
