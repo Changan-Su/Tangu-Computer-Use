@@ -95,6 +95,48 @@ const MSG = {
     'done.bare': '已完成',
     'btn.stop': '停止',
     'btn.stopTip': '停止这一轮',
+    'btn.pip': '移到悬浮窗',
+    'btn.pipTip': '在置顶的悬浮小窗里看这个画面',
+    'btn.putBack': '放回去',
+    'btn.putBackTip': '关掉悬浮窗,画面回到原处',
+    // 过程行的句子(ctx.registerToolLabel)。{v} 动词、{obj} 对象、{app} 应用名;中文按「中西文之间留空格」拼(见 joinZh)。
+    'tl.run': '正在{v}{obj}',
+    'tl.run.app': '正在{app}中{v}{obj}',
+    'tl.done': '已{v}{obj}',
+    'tl.done.app': '已在{app}中{v}{obj}',
+    'tl.err': '没能{v}{obj}',
+    'tl.err.app': '没能在{app}中{v}{obj}',
+    'tl.notFound': '没有找到{obj}',
+    'tl.q': '「{s}」',
+    'tl.steps': '(共 {n} 步)',
+    'tl.stepOf': '(第 {i} 步,共 {n} 步)',
+    'tl.o.screen': '屏幕',
+    'tl.o.windows': '窗口',
+    'tl.o.appWindows': '{app}的窗口',
+    'tl.o.element': '界面元素',
+    'tl.o.text': '文字',
+    'tl.o.more': '后续输出',
+    'tl.o.change': '界面变化',
+    'tl.o.gone': '{q}消失',
+    'tl.o.browser': '浏览器',
+    'tl.o.page': '网页内容',
+    'tl.v.click.run': '点击', 'tl.v.click.done': '点击', 'tl.v.click.err': '点击',
+    'tl.v.doubleClick.run': '双击', 'tl.v.doubleClick.done': '双击', 'tl.v.doubleClick.err': '双击',
+    'tl.v.rightClick.run': '右键点击', 'tl.v.rightClick.done': '右键点击', 'tl.v.rightClick.err': '右键点击',
+    'tl.v.type.run': '输入', 'tl.v.type.done': '输入', 'tl.v.type.err': '输入',
+    'tl.v.clear.run': '清空', 'tl.v.clear.done': '清空', 'tl.v.clear.err': '清空',
+    'tl.v.key.run': '按下', 'tl.v.key.done': '按下', 'tl.v.key.err': '按下',
+    'tl.v.scroll.run': '滚动', 'tl.v.scroll.done': '滚动', 'tl.v.scroll.err': '滚动',
+    'tl.v.drag.run': '拖动', 'tl.v.drag.done': '拖动', 'tl.v.drag.err': '拖动',
+    'tl.v.move.run': '移动指针', 'tl.v.move.done': '移动指针', 'tl.v.move.err': '移动指针',
+    'tl.v.locate.run': '定位', 'tl.v.locate.done': '定位', 'tl.v.locate.err': '定位',
+    'tl.v.look.run': '查看', 'tl.v.look.done': '查看', 'tl.v.look.err': '查看',
+    'tl.v.find.run': '查找', 'tl.v.find.done': '找到', 'tl.v.find.err': '找到',
+    'tl.v.search.run': '查找', 'tl.v.search.done': '查找', 'tl.v.search.err': '查找',
+    'tl.v.read.run': '读取', 'tl.v.read.done': '读取', 'tl.v.read.err': '读取',
+    'tl.v.wait.run': '等待', 'tl.v.wait.done': '等到', 'tl.v.wait.err': '等到',
+    'tl.v.open.run': '打开', 'tl.v.open.done': '打开', 'tl.v.open.err': '打开',
+    'tl.v.act.run': '操作', 'tl.v.act.done': '完成这些操作', 'tl.v.act.err': '完成这些操作',
   },
   en: {
     'err.unsupported_platform': "The live view is macOS only for now (on Windows the helper is a child process the desktop app can't reach).",
@@ -152,6 +194,47 @@ const MSG = {
     'done.bare': 'Done',
     'btn.stop': 'Stop',
     'btn.stopTip': 'Stop this run',
+    'btn.pip': 'Move to floating window',
+    'btn.pipTip': 'Watch this picture in a small window that stays on top',
+    'btn.putBack': 'Put back',
+    'btn.putBackTip': 'Close the floating window and show the picture here again',
+    'tl.run': '{v} {obj}',
+    'tl.run.app': '{v} {obj} in {app}',
+    'tl.done': '{v} {obj}',
+    'tl.done.app': '{v} {obj} in {app}',
+    'tl.err': "Couldn't {v} {obj}",
+    'tl.err.app': "Couldn't {v} {obj} in {app}",
+    'tl.notFound': 'Found no {obj}',
+    'tl.q': '“{s}”',
+    'tl.steps': '({n} steps)',
+    'tl.stepOf': '(step {i} of {n})',
+    'tl.o.screen': 'the screen',
+    'tl.o.windows': 'windows',
+    'tl.o.appWindows': '{app} windows',
+    'tl.o.element': 'an element',
+    'tl.o.text': 'text',
+    'tl.o.more': 'more of the output',
+    'tl.o.change': 'a change',
+    'tl.o.gone': '{q} to disappear',
+    'tl.o.browser': 'the browser',
+    'tl.o.page': 'the page',
+    'tl.v.click.run': 'Clicking', 'tl.v.click.done': 'Clicked', 'tl.v.click.err': 'click',
+    'tl.v.doubleClick.run': 'Double-clicking', 'tl.v.doubleClick.done': 'Double-clicked', 'tl.v.doubleClick.err': 'double-click',
+    'tl.v.rightClick.run': 'Right-clicking', 'tl.v.rightClick.done': 'Right-clicked', 'tl.v.rightClick.err': 'right-click',
+    'tl.v.type.run': 'Typing', 'tl.v.type.done': 'Typed', 'tl.v.type.err': 'type',
+    'tl.v.clear.run': 'Clearing', 'tl.v.clear.done': 'Cleared', 'tl.v.clear.err': 'clear',
+    'tl.v.key.run': 'Pressing', 'tl.v.key.done': 'Pressed', 'tl.v.key.err': 'press',
+    'tl.v.scroll.run': 'Scrolling', 'tl.v.scroll.done': 'Scrolled', 'tl.v.scroll.err': 'scroll',
+    'tl.v.drag.run': 'Dragging', 'tl.v.drag.done': 'Dragged', 'tl.v.drag.err': 'drag',
+    'tl.v.move.run': 'Moving the pointer', 'tl.v.move.done': 'Moved the pointer', 'tl.v.move.err': 'move the pointer',
+    'tl.v.locate.run': 'Locating', 'tl.v.locate.done': 'Located', 'tl.v.locate.err': 'locate',
+    'tl.v.look.run': 'Looking at', 'tl.v.look.done': 'Looked at', 'tl.v.look.err': 'look at',
+    'tl.v.find.run': 'Finding', 'tl.v.find.done': 'Found', 'tl.v.find.err': 'find',
+    'tl.v.search.run': 'Searching for', 'tl.v.search.done': 'Searched for', 'tl.v.search.err': 'search for',
+    'tl.v.read.run': 'Reading', 'tl.v.read.done': 'Read', 'tl.v.read.err': 'read',
+    'tl.v.wait.run': 'Waiting for', 'tl.v.wait.done': 'Waited for', 'tl.v.wait.err': 'wait for',
+    'tl.v.open.run': 'Opening', 'tl.v.open.done': 'Opened', 'tl.v.open.err': 'open',
+    'tl.v.act.run': 'Working', 'tl.v.act.done': 'Finished the actions', 'tl.v.act.err': 'finish the actions',
   },
 }
 
@@ -378,6 +461,348 @@ function overlayPx(frac, natW, natH, scale, offX, offY) {
   return { x: offX + frac.x * natW * scale, y: offY + frac.y * natH * scale }
 }
 
+// ── 过程行的句子(ctx.registerToolLabel,契约 §2.4 / §3 卡 8)──────────────────────────────
+// 「正在查看 Chatter」「正在 Chatter 中点击「发送」」「已在 Chatter 中输入「明天见」」。纯函数、同步、便宜:宿主每次渲染都会调。
+// 数据只有这次调用的 args / result 和同一条回答里更早的本插件调用(earlier):
+//   - App 名只在结果文字里:act 的「Attempted N UI actions in <App> — <Title>.」、observe 的「Observed <mode> [@rN ]<App> — <Title>.」、
+//     find_roots 的「- @rN <kind> <App> pid …」。
+//   - 控件名只在**拥有那个 stateId 的**结果里:大纲行「@e12 AXButton "Send"」、搜索行同形、变化行「+ @e12 under @e3 "Send"」。
+//     差量结果(Changes (n, A → B))只列变了的,沿 A 往回找;**绝不拿别的 state 里同号的 @e**(号会重发,错名比没名更糟)。
+// 解析不出动作 → 返回空,宿主照旧显示。⚠️依赖的是 vendor 的结果文字格式:check.mjs 钉着这些模板片段,vendor 升级改了格式会红。
+// 本插件引擎半身的全部工具(src/tools.ts 的 SPECS;check.mjs 断言两边一致)。
+const CU_TOOLS = ['jev_ui', 'find_roots', 'observe_ui', 'search_ui', 'expand_ui', 'inspect_ui', 'act_ui',
+  'ensure_app', 'read_text', 'wait_for', 'launch_browser', 'navigate_browser', 'evaluate_browser']
+const TL_TEXT_MAX = 24
+const TL_APP_MAX = 32
+const TL_CHAIN_MAX = 12
+const BUNDLE_RE = /^[A-Za-z0-9][A-Za-z0-9.-]{0,254}$/
+
+/** 收空白、按码点截到 max(超了加省略号)。空 → ''。 */
+function tlClip(s, max = TL_TEXT_MAX) {
+  if (typeof s !== 'string') return ''
+  const t = s.replace(/\s+/g, ' ').trim()
+  const cps = Array.from(t)
+  return cps.length > max ? `${cps.slice(0, max).join('')}…` : t
+}
+const reEsc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const tlArgs = (a) => {
+  if (a && typeof a === 'object' && !Array.isArray(a)) return a
+  if (typeof a === 'string') {
+    try { const o = JSON.parse(a); return o && typeof o === 'object' && !Array.isArray(o) ? o : null } catch { return null }
+  }
+  return null
+}
+const tlText = (r) => (typeof r === 'string' ? r : '')
+
+const LATIN = /[A-Za-z0-9]/
+const CJK = /[㐀-鿿豈-﫿]/
+/** 中文拼句:中西文相邻处补一个空格(「已在 Chatter 中」「微信中」「按下 Return」),其余原样接上。 */
+function joinZh(parts) {
+  let s = ''
+  for (const p of parts) {
+    if (!p) continue
+    const a = s.slice(-1)
+    const b = p[0]
+    if (a && ((CJK.test(a) && LATIN.test(b)) || (LATIN.test(a) && CJK.test(b)))) s += ' '
+    s += p
+  }
+  return s
+}
+/** 按模板拼一句:中文走 joinZh,英文直接代入再收掉多余空格。 */
+function tlFmt(locale, key, vars) {
+  const table = MSG[locale] || MSG.zh
+  const raw = table[key] ?? MSG.zh[key]
+  if (raw === undefined) return ''
+  const parts = raw.split(/(\{\w+\})/).map((seg) => {
+    const m = /^\{(\w+)\}$/.exec(seg)
+    return m ? (vars && vars[m[1]] !== undefined ? String(vars[m[1]]) : '') : seg
+  })
+  if (locale === 'en') return parts.join('').replace(/ {2,}/g, ' ').trim()
+  return joinZh(parts)
+}
+
+/** 结果文字里的 App 名(act / observe 的摘要行;前面可能还有 [execution] / [policy] 行,所以按行找)。 */
+function appInResult(text) {
+  const m = /^Attempted \d+ UI actions? in (.+?) — /m.exec(text) || /^Observed \S+ (?:@r\d+ )?(.+?) — /m.exec(text)
+  return m ? tlClip(m[1], TL_APP_MAX) : ''
+}
+/** 这段结果是不是**产出**了这个 stateId(observe 的 Outline 头、act 的 Returned state、差量的 Use stateId)。 */
+function producesState(text, id) {
+  return new RegExp(`(?:stateId|Returned state) ${reEsc(id)}(?![A-Za-z0-9_-])`).test(text)
+}
+/** 产出 stateId 的那一条(从近到远)。 */
+function entryForState(id, list) {
+  if (!id) return null
+  for (let i = list.length - 1; i >= 0; i--) {
+    const t = tlText(list[i] && list[i].result)
+    if (t && producesState(t, id)) return t
+  }
+  return null
+}
+function appForState(id, list) {
+  const t = typeof id === 'string' && id ? entryForState(id, list) : null
+  return t ? appInResult(t) : ''
+}
+/** @rN 是哪个 App:find_roots / ensure_app 的根列表行,或带着它的 observe 摘要。 */
+function appForRoot(ref, list) {
+  if (typeof ref !== 'string' || !/^@r\d+$/.test(ref)) return ''
+  const rows = new RegExp(`^- ${reEsc(ref)} \\S+ (.+?) pid \\d+`, 'm')
+  const obs = new RegExp(`^Observed \\S+ ${reEsc(ref)} (.+?) — `, 'm')
+  for (let i = list.length - 1; i >= 0; i--) {
+    const t = tlText(list[i] && list[i].result)
+    const m = t && (rows.exec(t) || obs.exec(t))
+    if (m) return tlClip(m[1], TL_APP_MAX)
+  }
+  return ''
+}
+/** 一段文字里 @eN 的可读名(JSON 串着的那段);只有角色没有名字 → ''。 */
+function labelInText(text, ref) {
+  const re = new RegExp(`^[ \\t]*(?:\\+ )?${reEsc(ref)}(?: under @e\\d+)? (?:[^\\s"]+ )?("(?:[^"\\\\]|\\\\.)*")`, 'm')
+  const m = re.exec(text)
+  if (!m) return ''
+  try { const s = JSON.parse(m[1]); return s === '(unlabeled)' ? '' : tlClip(s) } catch { return '' }
+}
+/**
+ * stateId 下 @eN 的名字:先找产出这个 state 的结果,再找对着同一个 state 的 search / expand / inspect;
+ * 差量结果里没有就沿「A → B」的 A 往回(号在差量之间不变)。找不到 → ''。
+ */
+function labelForRef(ref, stateId, list) {
+  if (typeof ref !== 'string' || !/^@e\d+$/.test(ref) || typeof stateId !== 'string' || !stateId) return ''
+  const seen = new Set()
+  let id = stateId
+  for (let hop = 0; id && hop < TL_CHAIN_MAX && !seen.has(id); hop++) {
+    seen.add(id)
+    for (let i = list.length - 1; i >= 0; i--) {
+      const e = list[i]
+      const ea = e && tlArgs(e.args)
+      if (ea && ea.stateId === id && e.tool !== 'act_ui' && e.tool !== 'wait_for') {
+        const l = labelInText(tlText(e.result), ref)
+        if (l) return l
+      }
+    }
+    const t = entryForState(id, list)
+    if (!t) return ''
+    const l = labelInText(t, ref)
+    if (l) return l
+    const diff = new RegExp(`^Changes \\(\\d+, (\\S+) → ${reEsc(id)}\\)`, 'm').exec(t)
+    id = diff ? diff[1] : null
+  }
+  return ''
+}
+
+const MODIFIERS = new Set(['cmd', 'command', 'meta', 'ctrl', 'control', 'alt', 'option', 'opt', 'shift', 'fn'])
+const KEY_NAMES = { cmd: 'Cmd', command: 'Cmd', meta: 'Cmd', ctrl: 'Ctrl', control: 'Ctrl', alt: 'Option', option: 'Option', opt: 'Option', esc: 'Esc', escape: 'Esc', pageup: 'Page Up', pagedown: 'Page Down' }
+const keyName = (k) => {
+  const s = String(k).trim()
+  const low = s.toLowerCase()
+  if (KEY_NAMES[low]) return KEY_NAMES[low]
+  return s.length === 1 ? s.toUpperCase() : s.charAt(0).toUpperCase() + s.slice(1)
+}
+/** ["cmd","a"] → Cmd+A(除最后一个都是修饰键 = 一个组合);["return"] → Return;["cmd+a","delete"] → Cmd+A, Delete。 */
+function keysText(keys) {
+  if (!Array.isArray(keys)) return ''
+  const ks = keys.filter((k) => typeof k === 'string' && k.trim())
+  if (!ks.length) return ''
+  const chord = ks.length > 1 && ks.slice(0, -1).every((k) => MODIFIERS.has(k.trim().toLowerCase()))
+  const out = chord ? ks.map(keyName).join('+') : ks.map((k) => k.split('+').map(keyName).join('+')).join(', ')
+  return tlClip(out)
+}
+function hostOf(url) {
+  if (typeof url !== 'string' || !url.trim()) return ''
+  try { return tlClip(new URL(url).host.replace(/^www\./, ''), TL_APP_MAX) } catch { return tlClip(url, TL_APP_MAX) }
+}
+
+/** act_ui 的一步 → { verb, label?, text?, keys? };认不出 → null。 */
+function actStep(a) {
+  if (!a || typeof a !== 'object') return null
+  const ref = typeof a.ref === 'string' ? a.ref : ''
+  switch (a.action) {
+    case 'press': return { verb: 'click', ref }
+    case 'click': return { verb: a.button === 'right' ? 'rightClick' : Number(a.clickCount) === 2 ? 'doubleClick' : 'click', ref }
+    case 'setText': return typeof a.text === 'string' && a.text.trim() ? { verb: 'type', text: a.text } : { verb: 'clear', ref }
+    case 'typeText': return { verb: 'type', text: typeof a.text === 'string' ? a.text : '' }
+    case 'keypress': return { verb: 'key', keys: a.keys }
+    case 'scroll': return { verb: 'scroll', ref }
+    case 'drag': return { verb: 'drag' }
+    case 'moveMouse': return { verb: 'move' }
+    default: return null
+  }
+}
+/** jev_ui 的一步(目标是画面上的字,直接当名字用)。 */
+function jevStep(s, preview) {
+  if (!s || typeof s !== 'object') return null
+  const target = typeof s.target === 'string' ? s.target : ''
+  if (preview) return { verb: 'locate', name: target }
+  switch (s.action) {
+    case 'click': return { verb: 'click', name: target }
+    case 'double_click': return { verb: 'doubleClick', name: target }
+    case 'fill': return typeof s.text === 'string' && s.text.trim() ? { verb: 'type', text: s.text } : { verb: 'clear', name: target }
+    case 'type': return { verb: 'type', text: typeof s.text === 'string' ? s.text : '' }
+    case 'key': return { verb: 'key', keys: s.keys }
+    case 'scroll': return { verb: 'scroll', name: target }
+    default: return null
+  }
+}
+
+/** 一句话:phase × 有没有 App × 动词 × 对象,外加批量的「(共 N 步)」/「(第 i 步,共 N 步)」。 */
+function tlSentence(locale, phase, verb, app, obj, suffix) {
+  const ph = phase === 'running' ? 'run' : phase === 'error' ? 'err' : 'done'
+  const v = (MSG[locale] || MSG.zh)[`tl.v.${verb}.${ph}`]
+  if (!v) return ''
+  const s = tlFmt(locale, `tl.${ph}${app ? '.app' : ''}`, { v, obj: obj || '', app: app || '' })
+  return suffix ? s + (locale === 'en' ? ' ' : '') + suffix : s
+}
+
+/**
+ * describe 的本体(纯函数)。iconOf(app) → bundleId | undefined(实时画面学到的对应,只在内存里)。
+ * 返回 { text, icon? } 或 null(= 宿主照旧显示)。
+ */
+function describeCall(call, iconOf) {
+  if (!call || typeof call !== 'object' || !CU_TOOLS.includes(call.tool)) return null
+  const L = call.locale === 'en' ? 'en' : 'zh'
+  const phase = call.phase === 'running' || call.phase === 'error' ? call.phase : 'done'
+  const args = tlArgs(call.args) || {}
+  const result = phase === 'running' ? '' : tlText(call.result)
+  const earlier = Array.isArray(call.earlier) ? call.earlier.slice(-40) : []
+  const q = (s) => tlFmt(L, 'tl.q', { s })
+  const o = (k, vars) => tlFmt(L, `tl.o.${k}`, vars)
+  const out = (text, app, bundleId) => {
+    if (!text) return null
+    const id = bundleId || (app && iconOf ? iconOf(app) : undefined)
+    return typeof id === 'string' && BUNDLE_RE.test(id) ? { text, icon: { appBundleId: id } } : { text }
+  }
+  // 一步(act / jev 的)→ 对象
+  const stepObj = (st, stateId) => {
+    if (st.text !== undefined) return st.text.trim() ? q(tlClip(st.text)) : ''
+    if (st.keys !== undefined) return keysText(st.keys)
+    const name = st.name !== undefined ? tlClip(st.name) : labelForRef(st.ref, stateId, earlier)
+    return name ? q(name) : ''
+  }
+
+  switch (call.tool) {
+    case 'act_ui':
+    case 'jev_ui': {
+      const jev = call.tool === 'jev_ui'
+      const raw = jev ? args.steps : args.actions
+      if (!Array.isArray(raw) || !raw.length) return null
+      const steps = raw.map((s) => (jev ? jevStep(s, args.preview === true) : actStep(s)))
+      const stateId = typeof args.stateId === 'string' ? args.stateId : ''
+      const app = (result && appInResult(result)) || (jev ? appForRoot(args.root, earlier) : appForState(stateId, earlier))
+      const n = steps.length
+      const say = (ph, i, suffix) => {
+        const st = steps[i]
+        return st ? tlSentence(L, ph, st.verb, app, stepObj(st, stateId), suffix) : ''
+      }
+      if (phase === 'running') return out(say('running', 0), app)
+      // 做完:中途停下的按出错说(act 的「Stopped UI action sequence at action K」、jev 的 status stopped / cancelled)
+      let failedAt = null
+      let did = null
+      if (jev) {
+        let rep = null
+        try { const first = result.split('\n', 1)[0].trim(); if (first.startsWith('{')) rep = JSON.parse(first) } catch { rep = null }
+        if (rep && typeof rep === 'object') {
+          if (rep.status === 'stopped' || rep.status === 'cancelled') {
+            const lastTrace = Array.isArray(rep.steps) ? rep.steps[rep.steps.length - 1] : null
+            failedAt = lastTrace && Number.isInteger(lastTrace.step) && lastTrace.step >= 1 ? lastTrace.step - 1 : 0
+          } else if (Number.isInteger(rep.requestedSteps) && rep.requestedSteps >= 1) did = rep.requestedSteps
+        }
+      } else {
+        const stop = /^Stopped UI action sequence(?: at action (\d+))?/m.exec(result)
+        if (stop) failedAt = stop[1] ? Number(stop[1]) - 1 : 0
+        const att = /^Attempted (\d+) UI actions? in /m.exec(result)
+        if (att) did = Number(att[1])
+      }
+      if (failedAt !== null || phase === 'error') {
+        if (failedAt === null) {
+          // 宿主说出错 / 被截断,结果里看不出卡在哪一步:一步的照那一步说,多步的只说「没能完成这些操作」
+          return out(n === 1 ? say('error', 0) : tlSentence(L, 'error', 'act', app, ''), app)
+        }
+        const i = Math.min(Math.max(0, failedAt), n - 1)
+        return out(say('error', i, n > 1 ? tlFmt(L, 'tl.stepOf', { i: i + 1, n }) : ''), app)
+      }
+      const count = did !== null ? Math.min(Math.max(1, did), n) : n
+      return out(say('done', count - 1, count > 1 ? tlFmt(L, 'tl.steps', { n: count }) : ''), app)
+    }
+    case 'observe_ui': {
+      const app = (result && appInResult(result)) || appForRoot(args.root, earlier)
+      return out(tlSentence(L, phase, 'look', '', app || o('screen')), app)
+    }
+    case 'find_roots': {
+      const bundleId = typeof args.bundleId === 'string' && BUNDLE_RE.test(args.bundleId) ? args.bundleId : ''
+      const name = tlClip(typeof args.app === 'string' && args.app ? args.app : typeof args.text === 'string' ? args.text : '', TL_APP_MAX)
+        || bundleId
+      const obj = name ? o('appWindows', { app: name }) : o('windows')
+      if (phase === 'done' && /^No roots /m.test(result)) return out(tlFmt(L, 'tl.notFound', { obj }), name, bundleId)
+      return out(tlSentence(L, phase, 'find', '', obj), name, bundleId)
+    }
+    case 'ensure_app': {
+      const bundleId = typeof args.bundleId === 'string' && BUNDLE_RE.test(args.bundleId) ? args.bundleId : ''
+      const app = tlClip(typeof args.app === 'string' ? args.app.replace(/\/+$/, '').split('/').pop().replace(/\.app$/i, '') : '', TL_APP_MAX)
+        || bundleId
+      if (!app) return null
+      const failed = phase === 'error' || (phase === 'done' && /^(?:Could not launch |ensure_app requires|ensure_app aborted|.+ is running but has no window )/m.test(result))
+      return out(tlSentence(L, failed ? 'error' : phase, 'open', '', app), app, bundleId)
+    }
+    case 'search_ui': {
+      const app = appForState(args.stateId, earlier)
+      const text = tlClip(args.text)
+      return out(tlSentence(L, phase, 'search', app, text ? q(text) : o('element')), app)
+    }
+    case 'expand_ui':
+    case 'inspect_ui': {
+      const app = appForState(args.stateId, earlier)
+      const name = labelForRef(args.ref, args.stateId, earlier)
+      return out(tlSentence(L, phase, 'look', app, name ? q(name) : o('element')), app)
+    }
+    case 'read_text': {
+      if (typeof args.ref === 'string' && /^@o/.test(args.ref)) return out(tlSentence(L, phase, 'read', '', o('more')))
+      const app = appForState(args.stateId, earlier)
+      const name = labelForRef(args.ref, args.stateId, earlier)
+      return out(tlSentence(L, phase, 'read', app, name ? q(name) : o('text')), app)
+    }
+    case 'wait_for': {
+      const app = appForState(args.stateId, earlier)
+      const target = tlClip(args.text) || labelForRef(args.ref, args.stateId, earlier)
+      const obj = !target ? o('change') : args.until === 'absent' ? o('gone', { q: q(target) }) : q(target)
+      return out(tlSentence(L, phase, 'wait', app, obj), app)
+    }
+    case 'launch_browser':
+      return out(tlSentence(L, phase, 'open', '', hostOf(args.url) || o('browser')))
+    case 'navigate_browser': {
+      const host = hostOf(args.url)
+      return host ? out(tlSentence(L, phase, 'open', '', host)) : null
+    }
+    case 'evaluate_browser':
+      return out(tlSentence(L, phase, 'read', '', o('page')))
+    default:
+      return null
+  }
+}
+
+// 实时画面回包里学到的「App 名 → bundleId」(只在本次运行的内存里,给过程行的图标用)。
+const appBundles = new Map()
+const APP_BUNDLES_KEEP = 64
+function learnBundle(app, bundleId) {
+  if (typeof app !== 'string' || !app || typeof bundleId !== 'string' || !BUNDLE_RE.test(bundleId)) return
+  const key = tlClip(app, TL_APP_MAX)
+  if (appBundles.get(key) === bundleId) return
+  appBundles.delete(key)
+  appBundles.set(key, bundleId)
+  while (appBundles.size > APP_BUNDLES_KEEP) appBundles.delete(appBundles.keys().next().value)
+}
+
+// 旧宿主没有 registerToolLabel → 什么都不做,过程行照旧「电脑操作 · act ui」。describe 绝不抛错。
+try {
+  if (typeof ctx.registerToolLabel === 'function') {
+    ctx.registerToolLabel({
+      tool: CU_TOOLS.slice(),
+      describe(call) {
+        try { return describeCall(call, (app) => appBundles.get(app)) || undefined } catch { return undefined }
+      },
+    })
+  }
+} catch { /* 宿主拒收就照旧显示 */ }
+
 // ── 整轮(插件顶层,所有视图共用一份)────────────────────────────────────────────────
 // 每个 runId 一条记录:基数(这一轮开始前的 actionCount)、最新计数、helper 说的进行中、宿主状态说的结束。
 // 「结束」只认**看到过它在跑**的那条状态通道:旧宿主不认 { runId } 参数,会把它当会话 id、回一个 idle ——
@@ -479,6 +904,18 @@ function viewportBoxOf(natW, natH, stageW, stageH) {
 }
 
 /**
+ * 悬浮窗里舞台的高:宽 × 窗口比例(264 宽、800×524 的窗口 ≈ 173),夹在 [96, 300] —— 竖长的窗口不把小窗撑到半屏。
+ * 量不到尺寸时用 173(契约 §2.5「画面约 173」)。⚠️悬浮窗的高度随内容,舞台不能靠 flex 撑:那样量出来是 0,画面塌没。
+ */
+const PIP_STAGE_DEFAULT = 173
+const PIP_STAGE_MIN = 96
+const PIP_STAGE_MAX = 300
+function pipStageHeight(natW, natH, stageW) {
+  if (!(natW > 0 && natH > 0 && stageW > 0)) return PIP_STAGE_DEFAULT
+  return Math.round(Math.min(PIP_STAGE_MAX, Math.max(PIP_STAGE_MIN, (stageW * natH) / natW)))
+}
+
+/**
  * 平移量夹紧:图比舞台大时不许把边拖进舞台内部(否则会拖出一片空白再也找不回图);
  * 图比舞台小时一律居中。返回的是图片左上角相对舞台左上角的偏移。
  */
@@ -555,6 +992,26 @@ const CSS = `
 .cu-live-badge{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:var(--bg-card,var(--bg,#fff));border:1px solid var(--border,rgba(128,128,128,.25));color:var(--text,inherit);font-weight:500;white-space:nowrap;box-shadow:0 2px 10px rgba(0,0,0,.12)}
 .cu-live-badge.on{display:inline-flex}
 .cu-live-badge i{width:8px;height:8px;border-radius:999px;background:var(--cu-fill,#2c5f9e);flex:0 0 auto}
+/* 「移到悬浮窗 / 放回去」:窄的时候只留图标(标题和状态句先让位) */
+.cu-live{container-type:inline-size}
+.cu-live-pip{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;font:inherit;line-height:1;padding:3px 7px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--text-muted,var(--text-light,inherit));cursor:pointer;white-space:nowrap}
+.cu-live-pip-ic{display:flex;flex:0 0 auto}
+.cu-live-pip svg{display:block}
+.cu-live-pip:hover{background:var(--accent-light,var(--overlay-light,rgba(128,128,128,.14)));color:var(--accent-hover,var(--accent,inherit))}
+@container (max-width: 560px){.cu-live-pip-label{display:none}}
+/* 悬浮小画面(surface 'pip',264 宽,高度随内容):上面画面、下面一行状态句 + 停止 + 放回去。
+   ⚠️舞台高度由 JS 按宽 × 窗口比例写死(pipStageHeight),根不能 height:100% —— 宿主量的就是它的内容高。 */
+.cu-live.is-pip{height:auto;font-size:12px;container-type:normal}
+.cu-live.is-pip .cu-live-stage{flex:0 0 auto}
+.cu-live.is-pip .cu-live-head{border-bottom:0;border-top:1px solid var(--border,rgba(128,128,128,.25));height:35px;box-sizing:border-box;padding:0 6px 0 10px;gap:6px}
+.cu-live.is-pip .cu-live-age,.cu-live.is-pip .cu-live-zoom,.cu-live.is-pip .cu-live-zoom.on{display:none}
+.cu-live.is-pip .cu-live-title{flex:1 1 auto;max-width:none}
+.cu-live.is-pip .cu-live-head.has-status .cu-live-title{display:none}
+.cu-live.is-pip .cu-live-stop{padding:3px 7px}
+.cu-live.is-pip .cu-live-msg{padding:0 12px;line-height:1.45}
+.cu-live.is-pip .cu-live-msg b{margin-bottom:2px}
+.cu-live-back{flex:0 0 auto;font:inherit;line-height:1;padding:3px 7px;border-radius:7px;border:1px solid var(--border,rgba(128,128,128,.25));background:transparent;color:var(--text-muted,var(--text-light,inherit));cursor:pointer;white-space:nowrap}
+.cu-live-back:hover{color:var(--text,inherit)}
 /* 减少动态:状态句直接换、环固定大小只淡出、结束态不渐变(宿主设置里的「只淡入淡出」同样算) */
 @keyframes cu-live-ring-fade{0%{opacity:.95}100%{opacity:0}}
 @media (prefers-reduced-motion: reduce){
@@ -677,8 +1134,15 @@ ctx.registerView({
   // Agent Desk 卡片标题也用它(插件第一次动手时自己摆上 Desk,不带名字)。
   // ponytail: 装载时按语言取一次;切换界面语言后要重载插件才跟上(老宿主的视图标题只认字符串)。
   title: (ctx.getLocale ? ctx.getLocale() : 'zh') === 'en' ? 'Controlled window' : '被操控的窗口',
-  mount(el) {
+  mount(el, view) {
     const doc = el.ownerDocument || document
+    // 悬浮小画面(契约 §2.5):宿主在那扇 264 宽的置顶窗里挂这个视图,surface === 'pip' → 紧凑卡。
+    // 别处有 window.tangu.computerUsePip(只有 Electron 桌面)→ 头部给「移到悬浮窗」;网页 / 手机没有这个桥就不画。
+    const inPip = Boolean(view && typeof view === 'object' && view.surface === 'pip')
+    const pipBridge = () => {
+      const p = globalThis.window && window.tangu && window.tangu.computerUsePip
+      return p && typeof p.open === 'function' && typeof p.close === 'function' ? p : null
+    }
     let style = doc.getElementById('cu-live-style')
     if (!style) {
       style = doc.createElement('style')
@@ -690,7 +1154,7 @@ ctx.registerView({
     mountedViews++
 
     const root = doc.createElement('div')
-    root.className = 'cu-live'
+    root.className = inPip ? 'cu-live is-pip' : 'cu-live'
     const head = doc.createElement('div')
     head.className = 'cu-live-head'
     const dot = doc.createElement('span')
@@ -720,9 +1184,24 @@ ctx.registerView({
     const btnStop = mkBtn(tr('btn.stop'), tr('btn.stopTip'))
     btnStop.className = 'cu-live-stop'
     head.append(dot, title, status, age, zoomBar, btnStop)
+    // 「移到悬浮窗」↔「放回去」(悬浮窗开着时同一个按钮把它收回);悬浮窗里的是「放回去」。
+    let btnPip = null
+    let btnBack = null
+    let pipOpen = false
+    let pipCheckedAt = 0
+    if (inPip) {
+      btnBack = mkBtn(tr('btn.putBack'), tr('btn.putBackTip'))
+      btnBack.className = 'cu-live-back'
+      head.append(btnBack)
+    } else if (pipBridge()) {
+      btnPip = doc.createElement('button')
+      btnPip.className = 'cu-live-pip'
+      head.append(btnPip)
+    }
     const stage = doc.createElement('div')
     stage.className = 'cu-live-stage'
-    root.append(head, stage)
+    // 悬浮窗的高度随内容(宿主量根节点的高):画面放在上面,高度由宽 × 窗口比例算出来;说明一行在下面。
+    if (inPip) { stage.style.height = `${PIP_STAGE_DEFAULT}px`; root.append(stage, head) } else root.append(head, stage)
     el.appendChild(root)
 
     // 画布:宽高比跟着被操控窗口走(见 CSS 里的 --cu-ar)。缩放/平移的取景框就是它,不是整个舞台。
@@ -776,6 +1255,10 @@ ctx.registerView({
 
     /** 把画布变形成这一帧窗口的形状。几何全从它量,所以任何改变 natW/natH 或舞台尺寸的事之后都得先调它。 */
     const layoutViewport = () => {
+      if (inPip) {
+        const want = `${pipStageHeight(natW, natH, stage.clientWidth || 0)}px`
+        if (stage.style.height !== want) stage.style.height = want
+      }
       const box = viewportBoxOf(natW, natH, stage.clientWidth || 0, stage.clientHeight || 0)
       viewport.style.width = `${box.w}px`
       viewport.style.height = `${box.h}px`
@@ -1025,6 +1508,52 @@ ctx.registerView({
         if (!ok && stoppingRun === runId) { stoppingRun = null; if (!stopped && stopRun === runId) btnStop.disabled = false }
       })
     })
+    // ── 悬浮窗的入口 / 放回去 ──
+    const PIP_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.4"/><rect x="8" y="8" width="5" height="4" rx="1" fill="currentColor"/></svg>'
+    const paintPip = () => {
+      if (!btnPip) return
+      const text = tr(pipOpen ? 'btn.putBack' : 'btn.pip')
+      const tip = tr(pipOpen ? 'btn.putBackTip' : 'btn.pipTip')
+      const icon = doc.createElement('span')
+      icon.className = 'cu-live-pip-ic'
+      icon.innerHTML = PIP_ICON
+      const label = doc.createElement('span')
+      label.className = 'cu-live-pip-label'
+      label.textContent = text
+      btnPip.replaceChildren(icon, label)
+      btnPip.title = tip
+      btnPip.setAttribute('aria-label', text)
+    }
+    /** 悬浮窗开着没有(用户可能在悬浮窗上点了关闭):挂载时、点完后、之后每 3 s 至多问一次。 */
+    const refreshPip = () => {
+      const api = pipBridge()
+      pipCheckedAt = Date.now()
+      if (!btnPip || !api || typeof api.isOpen !== 'function') return
+      let p
+      try { p = Promise.resolve(api.isOpen()) } catch { return }
+      p.then((v) => { if (stopped) return; const next = v === true; if (next !== pipOpen) { pipOpen = next; paintPip() } }, () => {})
+    }
+    if (btnPip) {
+      paintPip()
+      refreshPip()
+      on(btnPip, 'click', () => {
+        const api = pipBridge()
+        if (!api) return
+        let p
+        try { p = Promise.resolve(pipOpen ? api.close() : api.open()) } catch (e) { p = Promise.reject(e) }
+        p.catch(() => {}).then(() => { if (!stopped) refreshPip() })
+      })
+    }
+    if (btnBack) {
+      on(btnBack, 'click', () => {
+        const api = pipBridge()
+        try {
+          if (api) Promise.resolve(api.close()).catch(() => {})
+          else if (view && typeof view.close === 'function') view.close()
+        } catch { /* 宿主的卡头上也有关闭 */ }
+      })
+    }
+
     const clearOverlay = () => {
       setCursor(null)
       setStatus('')
@@ -1057,8 +1586,9 @@ ctx.registerView({
 
     // 触控板捏合在 macOS 上就是 ctrlKey 的 wheel;普通滚轮这里也当缩放(它是个看图器)。
     // passive:false + preventDefault:否则滚轮会冒泡去滚外层面板。
+    // 悬浮窗只是瞄一眼:不缩放(没有缩放条,滚轮也不该被它吃掉)。
     on(viewport, 'wheel', (e) => {
-      if (!showingImage()) return
+      if (!showingImage() || inPip) return
       e.preventDefault()
       const p = localPoint(e)
       const factor = Math.exp(-(e.deltaY || 0) * (e.ctrlKey ? 0.01 : 0.0022))
@@ -1067,7 +1597,7 @@ ctx.registerView({
 
     // 双击:默认比例 ↔ 1:1 原始像素,在光标处切换
     on(viewport, 'dblclick', (e) => {
-      if (!showingImage()) return
+      if (!showingImage() || inPip) return
       const p = localPoint(e)
       if (atFit) zoomTo(1, p.x, p.y)
       else resetZoom()
@@ -1109,7 +1639,7 @@ ctx.registerView({
     // 键盘:+ / - / 0(0 = 恢复默认比例)
     stage.setAttribute('tabindex', '0')
     on(stage, 'keydown', (e) => {
-      if (!showingImage()) return
+      if (!showingImage() || inPip) return
       if (e.key === '+' || e.key === '=') { e.preventDefault(); zoomByStep(1.4) }
       else if (e.key === '-' || e.key === '_') { e.preventDefault(); zoomByStep(1 / 1.4) }
       else if (e.key === '0') { e.preventDefault(); resetZoom() }
@@ -1152,6 +1682,7 @@ ctx.registerView({
       timer = null
       if (stopped) return
       if (inFlight) return schedule(TICK_MS)
+      if (btnPip && Date.now() - pipCheckedAt > 3000) refreshPip()
       const api = globalThis.window && window.tangu && window.tangu.computerUseLiveView
       if (!api) {
         showMessage(tr('msg.needDesktop'), tr('msg.needDesktopDetail'))
@@ -1187,6 +1718,7 @@ ctx.registerView({
       }
 
       dot.className = 'cu-live-dot'
+      learnBundle(frame.app, frame.bundleId)
       const label = describe(frame)
       title.textContent = label
       title.title = label
@@ -1310,6 +1842,8 @@ globalThis.__CU_LIVE_TEST__ = {
   MSG, fmt, chroma, toHex, hexToRgb, relLuminance, edgeFor, pickFill, styleBody, statusText, stepCount, doneText,
   fracPoint, easeOut, tweenPoint, overlayPx, isMainWindow, reducedMotionIn, ENGINE_ID, FALLBACK_FILL,
   DOING_MS, LOOKING_AFTER_MS, TWEEN_MS,
+  CU_TOOLS, describeCall, tlClip, joinZh, keysText, labelForRef, appForState, appForRoot, appInResult, appBundles, learnBundle,
+  pipStageHeight, PIP_STAGE_DEFAULT,
 }
 
 // 停用 / 重载插件:拆掉顶层的观察器、订阅、定时器(视图实例各自的清理在 mount 返回的函数里)。

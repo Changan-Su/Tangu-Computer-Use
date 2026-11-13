@@ -1,0 +1,188 @@
+{
+  "_note": "过程行句子的样例调用(同一条回答里从早到晚)。结果文字照 vendor 的真实模板写(src/vendor/bridge.ts、outline.ts、view.ts,src/tools.ts 的 render 前缀),check.mjs 与 harness 共用。errorResult = 宿主报 phase:error 时给的结果文字。",
+  "calls": [
+    {
+      "id": "find",
+      "tool": "find_roots",
+      "args": { "app": "Chatter" },
+      "result": "Found 1 matching root; returned 1. Use @r refs with observe_ui({ root: \"@rN\" }).\n- @r1 window Chatter pid 5120 — Chatter — Zhang San (z 0, windowId 4211, frame 120,80 800x524, focused, main, onscreen)"
+    },
+    {
+      "id": "observe",
+      "tool": "observe_ui",
+      "args": { "root": "@r1" },
+      "result": "Observed fused @r1 Chatter — Chatter — Zhang San. Returned the latest outline state.\n\nOutline (6 nodes, stateId s1):\n@e1 AXWindow \"Chatter — Zhang San\"\n  @e4 AXRow \"Zhang San\" {press}\n  @e9 AXScrollArea \"Conversation\" {scroll} [scrollable 2/9]\n  @e12 AXTextArea \"Message\" {setText}\n  @e14 AXButton \"Send\" {press}\n  @e15 AXButton {press}",
+      "errorResult": "Root ref '@r1' is stale. Call find_roots again and choose a current window."
+    },
+    {
+      "id": "clickRow",
+      "tool": "act_ui",
+      "args": { "stateId": "s1", "actions": [{ "action": "click", "ref": "@e4" }] },
+      "result": "[execution] {\"outcome\":\"did\",\"strictBackground\":false,\"steps\":[{\"outcome\":\"did\",\"delivery\":\"ax\",\"policy\":\"background\"}]}\nThe native executor confirmed this action; still verify the requested task result. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nAttempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s2.\n\nChanges (1, s1 → s2):\n~ @e4 (AXWindow > AXRow) selected=true\nUse stateId s2 for subsequent actions and queries."
+    },
+    {
+      "id": "setText",
+      "tool": "act_ui",
+      "args": { "stateId": "s2", "actions": [{ "action": "setText", "ref": "@e12", "text": "See you tomorrow" }] },
+      "result": "[execution] {\"outcome\":\"did\",\"strictBackground\":false,\"steps\":[{\"outcome\":\"did\",\"delivery\":\"ax\",\"policy\":\"background\"}]}\nThe native executor confirmed this action; still verify the requested task result. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nAttempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s3.\n\nChanges (1, s2 → s3):\n~ @e12 (AXWindow > AXTextArea) value=\"See you tomorrow\"\nUse stateId s3 for subsequent actions and queries."
+    },
+    {
+      "id": "pressSend",
+      "tool": "act_ui",
+      "args": { "stateId": "s3", "actions": [{ "action": "press", "ref": "@e14" }] },
+      "result": "[execution] {\"outcome\":\"did\",\"strictBackground\":false,\"steps\":[{\"outcome\":\"did\",\"delivery\":\"ax\",\"policy\":\"background\"}]}\nThe native executor confirmed this action; still verify the requested task result. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nThis press went through accessibility, in the background. If the returned state shows it changed nothing, press the same element again: the repeat goes out as a real click and takes the foreground.\nAttempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s4.\n\nChanges (2, s3 → s4):\n+ @e20 under @e9 \"See you tomorrow\"\n~ @e12 (AXWindow > AXTextArea) value=\"\"\nUse stateId s4 for subsequent actions and queries.",
+      "errorResult": "Helper command act timed out after 120000ms."
+    },
+    {
+      "id": "batch",
+      "tool": "act_ui",
+      "args": { "stateId": "s4", "actions": [{ "action": "click", "ref": "@e12" }, { "action": "typeText", "text": "明天见,记得带上那份已经打印好的合同和两把伞" }, { "action": "keypress", "keys": ["return"] }] },
+      "result": "[execution] {\"outcome\":\"unknown\",\"strictBackground\":false,\"steps\":[]}\nThe input was attempted; its effect is UNVERIFIED, not proven failed. A canvas can change without accessibility confirmation. Inspect the returned state before any retry, including a retry with another tool. Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\nAttempted 3 UI actions in Chatter — Chatter — Zhang San. Returned state s5.\n\nOutline (7 nodes, stateId s5, full view: root changed):\n@e1 AXWindow \"Chatter — Zhang San\"\n  @e4 AXRow \"Zhang San\" {press}\n  @e12 AXTextArea \"Message\" {setText}\n  @e14 AXButton \"Send\" {press}\n  @e15 AXButton {press}\n[foreground] The target window became foreground during this action, even if delivery used accessibility input. The target app may have activated itself."
+    },
+    {
+      "id": "stopped",
+      "tool": "act_ui",
+      "args": { "stateId": "s5", "actions": [{ "action": "press", "ref": "@e14" }, { "action": "press", "ref": "@e15" }] },
+      "result": "Stopped UI action sequence at action 2: target_not_found: Ref '@e15' is no longer present. Earlier actions may have completed. Returned state s6."
+    },
+    {
+      "id": "search",
+      "tool": "search_ui",
+      "args": { "stateId": "s5", "text": "Send" },
+      "result": "@e14 AXButton \"Send\" [exact]\n  path: AXWindow \"Chatter — Zhang San\" ▸ AXButton \"Send\""
+    },
+    {
+      "id": "inspect",
+      "tool": "inspect_ui",
+      "args": { "stateId": "s5", "ref": "@e14" },
+      "result": "AXButton \"Send\"\npath: AXWindow \"Chatter — Zhang San\" ▸ AXButton \"Send\""
+    },
+    {
+      "id": "scroll",
+      "tool": "act_ui",
+      "args": { "stateId": "s1", "actions": [{ "action": "scroll", "ref": "@e9", "scrollY": 400 }] },
+      "result": "Attempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s7."
+    },
+    {
+      "id": "keys",
+      "tool": "act_ui",
+      "args": { "stateId": "s7", "actions": [{ "action": "keypress", "keys": ["cmd", "a"] }] },
+      "result": "Attempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s8."
+    },
+    {
+      "id": "rightClickXY",
+      "tool": "act_ui",
+      "args": { "stateId": "s8", "actions": [{ "action": "click", "x": 320, "y": 140, "button": "right" }] },
+      "result": "Attempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s9."
+    },
+    {
+      "id": "doubleClick",
+      "tool": "act_ui",
+      "args": { "stateId": "s1", "actions": [{ "action": "click", "ref": "@e4", "clickCount": 2 }] },
+      "result": "Attempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s10."
+    },
+    {
+      "id": "drag",
+      "tool": "act_ui",
+      "args": { "stateId": "s10", "actions": [{ "action": "drag", "path": [{ "x": 10, "y": 10 }, { "x": 200, "y": 40 }] }] },
+      "result": "Attempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s11."
+    },
+    {
+      "id": "move",
+      "tool": "act_ui",
+      "args": { "stateId": "s11", "actions": [{ "action": "moveMouse", "x": 50, "y": 60 }] },
+      "result": "Attempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s12."
+    },
+    {
+      "id": "clear",
+      "tool": "act_ui",
+      "args": { "stateId": "s1", "actions": [{ "action": "setText", "ref": "@e12", "text": "" }] },
+      "result": "Attempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s13."
+    },
+    {
+      "id": "waitFor",
+      "tool": "wait_for",
+      "args": { "stateId": "s4", "text": "Delivered" },
+      "result": "Condition met. Returned state s14."
+    },
+    {
+      "id": "waitGone",
+      "tool": "wait_for",
+      "args": { "stateId": "s4", "ref": "@e20", "until": "absent" },
+      "result": "Condition met. Returned state s15."
+    },
+    {
+      "id": "readText",
+      "tool": "read_text",
+      "args": { "stateId": "s4", "ref": "@e20" },
+      "result": "See you tomorrow"
+    },
+    {
+      "id": "readMore",
+      "tool": "read_text",
+      "args": { "ref": "@o3" },
+      "result": "…"
+    },
+    {
+      "id": "expand",
+      "tool": "expand_ui",
+      "args": { "stateId": "s1", "ref": "@e15" },
+      "result": "@e15 AXButton {press}"
+    },
+    {
+      "id": "jev",
+      "tool": "jev_ui",
+      "args": { "root": "@r1", "steps": [{ "action": "click", "target": "Zhang San", "expect": "the chat with Zhang San is shown" }, { "action": "type", "target": "message box", "text": "See you tomorrow" }, { "action": "click", "target": "Send", "expect": "See you tomorrow appears in the chat" }] },
+      "result": "{\"status\":\"completed\",\"model\":\"jev-1.14.0\",\"mode\":\"auto\",\"executor\":\"act_ui\",\"confirmedSteps\":3,\"attemptedSteps\":3,\"unattemptedSteps\":0,\"requestedSteps\":3,\"elapsedMs\":4120,\"foregroundTaken\":false,\"steps\":[{\"step\":1,\"action\":\"click\",\"status\":\"confirmed\"},{\"step\":2,\"action\":\"type\",\"status\":\"confirmed\"},{\"step\":3,\"action\":\"click\",\"status\":\"confirmed\"}]}\nAttempted 1 UI action in Chatter — Chatter — Zhang San. Returned state s16."
+    },
+    {
+      "id": "jevStopped",
+      "tool": "jev_ui",
+      "args": { "root": "@r1", "steps": [{ "action": "click", "target": "Zhang San" }, { "action": "click", "target": "Pinned files" }] },
+      "result": "{\"status\":\"stopped\",\"model\":\"jev-1.14.0\",\"mode\":\"auto\",\"executor\":\"act_ui\",\"confirmedSteps\":1,\"attemptedSteps\":1,\"unattemptedSteps\":1,\"requestedSteps\":2,\"elapsedMs\":2210,\"foregroundTaken\":false,\"steps\":[{\"step\":1,\"action\":\"click\",\"status\":\"confirmed\"},{\"step\":2,\"action\":\"click\",\"status\":\"stopped\"}],\"error\":\"Target not found.\"}"
+    },
+    {
+      "id": "ensure",
+      "tool": "ensure_app",
+      "args": { "app": "Notes", "bundleId": "com.apple.Notes" },
+      "result": "Opened com.apple.Notes in the background; it did not take the foreground.\nFound 1 matching root; returned 1. Use @r refs with observe_ui({ root: \"@rN\" }).\n- @r2 window Notes pid 812 — All iCloud (z 1, windowId 77, frame 0,0 900x600, onscreen)",
+      "errorResult": "Could not launch com.apple.Notes: not found. Check the app/bundleId is installed."
+    },
+    {
+      "id": "observeFront",
+      "tool": "observe_ui",
+      "args": {},
+      "result": "Observed semantic 微信 — 文件传输助手. Returned the latest outline state.\n\nOutline (3 nodes, stateId w1):\n@e1 AXWindow \"文件传输助手\"\n  @e2 AXTextArea \"输入\" {setText}\n  @e3 AXButton \"发送\" {press}"
+    },
+    {
+      "id": "wechatSend",
+      "tool": "act_ui",
+      "args": { "stateId": "w1", "actions": [{ "action": "press", "ref": "@e3" }] },
+      "result": "Attempted 1 UI action in 微信 — 文件传输助手. Returned state w2."
+    },
+    {
+      "id": "findNone",
+      "tool": "find_roots",
+      "args": { "text": "Calculator" },
+      "result": "No roots matched the supplied filters."
+    },
+    {
+      "id": "launch",
+      "tool": "launch_browser",
+      "args": { "url": "https://www.example.com/docs" },
+      "result": "Observed visual @r3 Chrome — Example Docs. Returned the latest outline state."
+    },
+    {
+      "id": "navigate",
+      "tool": "navigate_browser",
+      "args": { "stateId": "b1", "url": "https://forum.example.org/t/42" },
+      "result": "Navigated."
+    },
+    {
+      "id": "evaluate",
+      "tool": "evaluate_browser",
+      "args": { "stateId": "b1", "expression": "document.title" },
+      "result": "\"Example\""
+    }
+  ]
+}

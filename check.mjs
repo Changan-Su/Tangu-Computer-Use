@@ -629,5 +629,255 @@ const spyRings = () => {
   disposeTop()
 }
 
+// ══ 过程行的句子(ctx.registerToolLabel,契约 §2.4 / §3 卡 8)══
+{
+  // ① 认领的名单 == 引擎半身真正注册的工具(src/tools.ts 的 SPECS);新加一个工具忘了认领,这里红
+  const toolsSrc = readFileSync(new URL('./src/tools.ts', import.meta.url), 'utf8')
+  const specs = toolsSrc.slice(toolsSrc.indexOf('const SPECS'), toolsSrc.indexOf('];', toolsSrc.indexOf('const SPECS')))
+  const specNames = [...specs.matchAll(/^\s+name: '([a-z_]+)'/gm)].map((m) => m[1]).sort()
+  A.ok(specNames.length >= 13, `SPECS 里应读出全部工具名(读到 ${specNames.length} 个)`)
+  A.deepEqual([...T.CU_TOOLS].sort(), specNames, 'registerToolLabel 认领的工具必须正好是 src/tools.ts 的 SPECS')
+
+  // ② 格式金丝雀:句子靠的是 vendor 的结果文字。vendor 升级改了这些模板,这里先红,而不是句子悄悄降级
+  const bridge = readFileSync(new URL('./src/vendor/bridge.ts', import.meta.url), 'utf8')
+  const outline = readFileSync(new URL('./src/vendor/outline.ts', import.meta.url), 'utf8')
+  const viewTs = readFileSync(new URL('./src/vendor/view.ts', import.meta.url), 'utf8')
+  const jevRun = readFileSync(new URL('./src/jevRun.ts', import.meta.url), 'utf8')
+  for (const [file, text, frag] of [
+    ['bridge.ts', bridge, '`Attempted ${executedActions.length} UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}.`'],
+    ['bridge.ts', bridge, 'Returned state ${capture.capture.stateId}.'],
+    ['bridge.ts', bridge, '`Stopped UI action sequence${execution.stoppedAt !== undefined ? ` at action ${execution.stoppedAt + 1}` : ""}'],
+    ['bridge.ts', bridge, '`Observed ${mode} ${captureResult.target.windowRef ? `${captureResult.target.windowRef} ` : ""}${captureResult.target.appName} — ${captureResult.target.windowTitle}.'],
+    ['bridge.ts', bridge, 'Outline (${folded.nodeCount} nodes, stateId ${result.capture.stateId}'],
+    ['bridge.ts', bridge, 'Changes (${transition!.changedNodeCount}, ${base!.stateId} → ${result.capture.stateId}):'],
+    ['bridge.ts', bridge, '`- ${window.windowRef} ${window.kind} ${window.app} pid ${window.pid} — '],
+    ['bridge.ts', bridge, '"No roots matched the supplied filters."'],
+    ['bridge.ts', bridge, '`${match.ref} ${match.role || "Unknown"} ${JSON.stringify(match.label || "(unlabeled)")}'],
+    ['outline.ts', outline, '`${"  ".repeat(depth)}${node.ref} ${displayName(node)}'],
+    ['outline.ts', outline, '${label ? ` ${JSON.stringify(label)}` : ""}'],
+    ['view.ts', viewTs, '`+ ${change.ref}${change.parent ? ` under ${change.parent}` : ""} ${JSON.stringify(label(change.node))}`'],
+    ['jevRun.ts', jevRun, 'requestedSteps: params.steps.length'],
+    ['jevRun.ts', jevRun, "report(abort.aborted ? 'cancelled' : 'stopped'"],
+  ]) A.ok(text.includes(frag), `vendor 结果文字的模板变了(${file}):${frag.slice(0, 60)}… —— 同步改 main.js 的解析与 harness/fixtures/tool-calls.json`)
+
+  // ③ 表驱动:样例调用(结果照真实模板写)× 进行中 / 完成 / 出错 × zh / en
+  const { calls } = JSON.parse(readFileSync(new URL('./harness/fixtures/tool-calls.json', import.meta.url), 'utf8'))
+  const byId = Object.fromEntries(calls.map((c, i) => [c.id, i]))
+  const icons = new Map([['Chatter', 'com.example.chatter']])
+  const run = (id, phase, locale, iconOf = (a) => icons.get(a)) => {
+    const i = byId[id]
+    const c = calls[i]
+    const earlier = calls.slice(0, i).map(({ tool, args, result }) => ({ tool, args, result }))
+    return T.describeCall({ tool: c.tool, args: c.args, result: phase === 'error' ? c.errorResult : phase === 'running' ? undefined : c.result, phase, locale, earlier }, iconOf)
+  }
+  const R = 'running'
+  const D = 'done'
+  const E = 'error'
+  const table = [
+    // [样例, phase, zh, en]
+    ['find', R, '正在查找 Chatter 的窗口', 'Finding Chatter windows'],
+    ['find', D, '已找到 Chatter 的窗口', 'Found Chatter windows'],
+    ['find', E, '没能找到 Chatter 的窗口', "Couldn't find Chatter windows"],
+    ['findNone', D, '没有找到 Calculator 的窗口', 'Found no Calculator windows'],
+    ['observe', R, '正在查看 Chatter', 'Looking at Chatter'],
+    ['observe', D, '已查看 Chatter', 'Looked at Chatter'],
+    ['observe', E, '没能查看 Chatter', "Couldn't look at Chatter"],
+    ['observeFront', R, '正在查看屏幕', 'Looking at the screen'],
+    ['observeFront', D, '已查看微信', 'Looked at 微信'],
+    ['clickRow', R, '正在 Chatter 中点击「Zhang San」', 'Clicking “Zhang San” in Chatter'],
+    ['clickRow', D, '已在 Chatter 中点击「Zhang San」', 'Clicked “Zhang San” in Chatter'],
+    ['setText', R, '正在 Chatter 中输入「See you tomorrow」', 'Typing “See you tomorrow” in Chatter'],
+    ['setText', D, '已在 Chatter 中输入「See you tomorrow」', 'Typed “See you tomorrow” in Chatter'],
+    // 控件名在差量结果里没有:沿 s3 → s2 → s1 找回 observe 的大纲
+    ['pressSend', R, '正在 Chatter 中点击「Send」', 'Clicking “Send” in Chatter'],
+    ['pressSend', D, '已在 Chatter 中点击「Send」', 'Clicked “Send” in Chatter'],
+    ['pressSend', E, '没能在 Chatter 中点击「Send」', "Couldn't click “Send” in Chatter"],
+    // 批量:进行中说第一步;做完说最后一步并带步数(步数取结果里的 Attempted N)
+    ['batch', R, '正在 Chatter 中点击「Message」', 'Clicking “Message” in Chatter'],
+    ['batch', D, '已在 Chatter 中按下 Return(共 3 步)', 'Pressed Return in Chatter (3 steps)'],
+    ['batch', E, '没能在 Chatter 中完成这些操作', "Couldn't finish the actions in Chatter"],
+    // 中途停下:结果是正常返回(phase done),但不许说「已…」;卡住的那步没有名字(只有角色)→ 不带引号
+    ['stopped', R, '正在 Chatter 中点击「Send」', 'Clicking “Send” in Chatter'],
+    ['stopped', D, '没能在 Chatter 中点击(第 2 步,共 2 步)', "Couldn't click in Chatter (step 2 of 2)"],
+    ['search', R, '正在 Chatter 中查找「Send」', 'Searching for “Send” in Chatter'],
+    ['inspect', D, '已在 Chatter 中查看「Send」', 'Looked at “Send” in Chatter'],
+    ['expand', R, '正在 Chatter 中查看界面元素', 'Looking at an element in Chatter'],
+    ['scroll', D, '已在 Chatter 中滚动「Conversation」', 'Scrolled “Conversation” in Chatter'],
+    ['keys', D, '已在 Chatter 中按下 Cmd+A', 'Pressed Cmd+A in Chatter'],
+    ['rightClickXY', R, '正在 Chatter 中右键点击', 'Right-clicking in Chatter'],
+    ['doubleClick', D, '已在 Chatter 中双击「Zhang San」', 'Double-clicked “Zhang San” in Chatter'],
+    ['drag', R, '正在 Chatter 中拖动', 'Dragging in Chatter'],
+    ['move', D, '已在 Chatter 中移动指针', 'Moved the pointer in Chatter'],
+    ['clear', D, '已在 Chatter 中清空「Message」', 'Cleared “Message” in Chatter'],
+    ['waitFor', R, '正在 Chatter 中等待「Delivered」', 'Waiting for “Delivered” in Chatter'],
+    ['waitFor', D, '已在 Chatter 中等到「Delivered」', 'Waited for “Delivered” in Chatter'],
+    ['waitGone', R, '正在 Chatter 中等待「See you tomorrow」消失', 'Waiting for “See you tomorrow” to disappear in Chatter'],
+    ['readText', D, '已在 Chatter 中读取「See you tomorrow」', 'Read “See you tomorrow” in Chatter'],
+    ['readMore', R, '正在读取后续输出', 'Reading more of the output'],
+    ['jev', R, '正在 Chatter 中点击「Zhang San」', 'Clicking “Zhang San” in Chatter'],
+    ['jev', D, '已在 Chatter 中点击「Send」(共 3 步)', 'Clicked “Send” in Chatter (3 steps)'],
+    ['jevStopped', D, '没能在 Chatter 中点击「Pinned files」(第 2 步,共 2 步)', "Couldn't click “Pinned files” in Chatter (step 2 of 2)"],
+    ['ensure', R, '正在打开 Notes', 'Opening Notes'],
+    ['ensure', D, '已打开 Notes', 'Opened Notes'],
+    ['ensure', E, '没能打开 Notes', "Couldn't open Notes"],
+    ['wechatSend', D, '已在微信中点击「发送」', 'Clicked “发送” in 微信'],
+    ['launch', R, '正在打开 example.com', 'Opening example.com'],
+    ['navigate', D, '已打开 forum.example.org', 'Opened forum.example.org'],
+    ['evaluate', R, '正在读取网页内容', 'Reading the page'],
+  ]
+  const covered = new Set()
+  for (const [id, phase, zh, en] of table) {
+    A.ok(id in byId, `样例里没有 ${id}`)
+    covered.add(calls[byId[id]].tool)
+    for (const [locale, want] of [['zh', zh], ['en', en]]) {
+      const got = run(id, phase, locale)
+      A.ok(got && typeof got.text === 'string', `${id} / ${phase} / ${locale} 应给出句子`)
+      A.equal(got.text, want, `${id} / ${phase} / ${locale}`)
+      if (locale === 'en') A.ok(!/[㐀-鿿]/.test(got.text.replace(/[“”][^“”]*[“”]|微信/g, '')), `英文句子的骨架里不许有汉字:${got.text}`)
+    }
+  }
+  A.deepEqual([...covered].sort(), [...T.CU_TOOLS].sort(), '表驱动断言必须覆盖每一种工具')
+  // 图标:只在学到过「App 名 → bundleId」时给;ensure_app 直接用参数里的 bundleId
+  A.deepEqual(run('pressSend', D, 'zh').icon, { appBundleId: 'com.example.chatter' })
+  A.equal(run('wechatSend', D, 'zh').icon, undefined, '没学到过的 App 不给图标')
+  A.deepEqual(run('ensure', D, 'en', () => undefined).icon, { appBundleId: 'com.apple.Notes' })
+  A.equal(run('pressSend', D, 'zh', () => 'not a bundle id!').icon, undefined, '不像 bundleId 的不给')
+
+  // ④ 降级顺序:有 App 没控件名 →「正在 Chatter 中点击」;两样都没有 →「正在点击」;认不出动作 → 空
+  const one = (tool, args, earlier = [], phase = R, locale = 'zh', result) => T.describeCall({ tool, args, result, phase, locale, earlier }, () => undefined)
+  const press14 = { stateId: 'x1', actions: [{ action: 'press', ref: '@e14' }] }
+  A.equal(one('act_ui', press14).text, '正在点击', '跨消息(更早的调用不在 earlier 里)→ 不带 App 也不带名字')
+  A.equal(one('act_ui', press14, [], R, 'en').text, 'Clicking')
+  A.equal(one('act_ui', press14, [], D, 'zh', 'Attempted 1 UI action in Chatter — Main. Returned state x2.').text, '已在 Chatter 中点击', '做完了能从自己的结果拿到 App 名')
+  A.equal(one('act_ui', press14, [], D, 'en', 'Attempted 1 UI action in Chatter — Main. Returned state x2.').text, 'Clicked in Chatter')
+  const searchOnly = [{ tool: 'search_ui', args: { stateId: 'x1', text: 'Send' }, result: '@e14 AXButton "Send" [exact]\n  path: AXWindow ▸ AXButton "Send"' }]
+  A.equal(one('act_ui', press14, searchOnly).text, '正在点击「Send」', '只有同一个 state 的搜索结果:有名字、没有 App')
+  A.equal(one('act_ui', press14, searchOnly, R, 'en').text, 'Clicking “Send”')
+  // ⚠️别的 state 里同号的 @e 不算:号会重发,错名比没名更糟
+  const otherState = [{ tool: 'observe_ui', args: {}, result: 'Observed fused Chatter — Main. Returned the latest outline state.\n\nOutline (2 nodes, stateId x9):\n@e1 AXWindow "Main"\n  @e14 AXButton "Delete" {press}' }]
+  A.equal(one('act_ui', press14, otherState).text, '正在点击', '控件名只认拥有这个 stateId 的结果')
+  A.equal(one('act_ui', { stateId: 'x9', actions: [{ action: 'press', ref: '@e14' }] }, otherState).text, '正在 Chatter 中点击「Delete」')
+  A.equal(one('act_ui', { stateId: 'x9', actions: [{ action: 'press', ref: '@e1' }] }, otherState).text, '正在 Chatter 中点击「Main」', '@e1 不能匹配到 @e14 那行')
+  A.equal(one('act_ui', { stateId: 'x1', actions: [{ action: 'teleport' }] }), null, '认不出的动作 → 空,让宿主照旧显示')
+  A.equal(one('act_ui', { stateId: 'x1', actions: [] }), null)
+  A.equal(one('act_ui', '{not json'), null, '参数不是 JSON → 空')
+  A.equal(one('act_ui', JSON.stringify(press14)).text, '正在点击', '参数是 JSON 字符串时照样解析')
+  A.equal(one('navigate_browser', { stateId: 'b1' }), null, '没有网址 → 空')
+  A.equal(one('ensure_app', {}), null, '没有 App → 空')
+  A.equal(one('some_other_tool', { x: 1 }), null, '不是本插件的工具 → 空')
+  // 输入的文字截到 24 字加省略号(按码点,不拆 emoji)
+  const long = one('act_ui', { stateId: 'x1', actions: [{ action: 'typeText', text: '明天见,记得带上那份已经打印好的合同和两把伞,还有充电器' }] })
+  A.equal(long.text, '正在输入「明天见,记得带上那份已经打印好的合同和两把伞,还…」')
+  A.equal(Array.from('明天见,记得带上那份已经打印好的合同和两把伞,还').length, 24)
+  A.equal(Array.from(T.tlClip('😀'.repeat(30))).length, 25, '按码点截:24 个 + 省略号')
+  A.equal(T.tlClip('  a \n\t b  '), 'a b', '收空白')
+  A.equal(T.keysText(['cmd', 'shift', 'z']), 'Cmd+Shift+Z')
+  A.equal(T.keysText(['cmd+a', 'delete']), 'Cmd+A, Delete')
+  A.equal(T.keysText(['return']), 'Return')
+  A.equal(T.joinZh(['已在', 'QQ', '音乐', '中']), '已在 QQ 音乐中')
+  // 绝不抛错:坏输入一律当没有
+  const junk = [null, undefined, 3, 'x', {}, { tool: 'act_ui' }, { tool: 'act_ui', args: null, earlier: 'nope' },
+    { tool: 'act_ui', args: { stateId: 5, actions: [null, 7, { action: 'press', ref: 9 }] }, result: 42, phase: 'done', earlier: [null, 1, { tool: 'observe_ui', result: {} }] },
+    { tool: 'jev_ui', args: { root: {}, steps: 'x' }, phase: 'done' }, { tool: 'jev_ui', args: { steps: [{ action: 'click' }] }, result: '{"status":"stopped","steps":"?"}', phase: 'done' },
+    { tool: 'find_roots', args: { app: 7 }, phase: 'done', result: null }, { tool: 'wait_for', args: { ref: '@e1', stateId: '(' }, phase: 'running', earlier: [{ result: 'stateId (' }] }]
+  for (const c of junk) { let r; A.doesNotThrow(() => { r = T.describeCall(c, () => undefined) }, `坏输入不许抛:${JSON.stringify(c)}`); A.ok(r === null || (r && typeof r.text === 'string' && r.text)) }
+
+  // ⑤ 注册:新宿主上认领全部工具,describe 包着 try —— 宿主传来的东西再怪也只回 undefined
+  const contributions = []
+  const ctxL = { registerView() {}, registerToolLabel: (def) => contributions.push(def) }
+  const disposeL = new Function('ctx', src)(ctxL)
+  A.equal(contributions.length, 1, '应登记一份 registerToolLabel')
+  A.deepEqual([...contributions[0].tool].sort(), [...T.CU_TOOLS].sort())
+  const T2 = globalThis.__CU_LIVE_TEST__
+  T2.learnBundle('Chatter', 'com.example.chatter')
+  const viaHost = contributions[0].describe({ tool: 'observe_ui', args: { root: '@r1' }, phase: 'running', locale: 'en', earlier: [{ tool: 'find_roots', args: {}, result: calls[0].result }] })
+  A.deepEqual(viaHost, { text: 'Looking at Chatter', icon: { appBundleId: 'com.example.chatter' } }, '经宿主调用:图标来自实时画面学到的对应')
+  const evil = { get tool() { throw new Error('boom') } }
+  A.equal(contributions[0].describe(evil), undefined, 'describe 里抛错 → undefined(宿主照旧显示)')
+  A.equal(contributions[0].describe({ tool: 'act_ui', args: { actions: [{ action: '??' }] }, phase: 'running', locale: 'zh', earlier: [] }), undefined)
+  // 旧宿主:registerToolLabel 抛错也不能把插件弄坏
+  A.doesNotThrow(() => new Function('ctx', src)({ registerView() {}, registerToolLabel() { throw new Error('old host') } }))
+  if (typeof disposeL === 'function') disposeL()
+}
+
+// ══ 悬浮小画面(契约 §2.5,卡 7 的 C)══
+{
+  A.equal(T.pipStageHeight(800, 524, 264), 173, '264 宽、800×524 的窗口 ≈ 173')
+  A.equal(T.pipStageHeight(1080, 1920, 264), 300, '竖长的窗口夹到 300,不把小窗撑到半屏')
+  A.equal(T.pipStageHeight(2560, 600, 264), 96, '极宽的夹到 96')
+  A.equal(T.pipStageHeight(0, 0, 264), T.PIP_STAGE_DEFAULT, '量不到尺寸 → 缺省 173')
+  const pipCalls = []
+  let pipIsOpen = false
+  const bridge = {
+    open: async () => { pipCalls.push('open'); pipIsOpen = true; return true },
+    close: async () => { pipCalls.push('close'); pipIsOpen = false },
+    isOpen: async () => pipIsOpen,
+  }
+  const frame = { active: true, windowId: 4211, app: 'Chatter', bundleId: 'com.example.chatter', ageMs: 50, jpegBase64: 'AAAA', width: 800, height: 524, frameSeq: 1 }
+  const viewsP = []
+  const ctxP = { registerView: (v) => viewsP.push(v), getLocale: () => 'zh' }
+  const disposeP = new Function('ctx', src)(ctxP)
+  const btnOf = (host, cls) => byClass(host, cls)[0]
+  // 主区 / Desk:有桥 → 头部有「移到悬浮窗」;点了调 open(),开着时同一个按钮变「放回去」
+  globalThis.window = { tangu: { computerUseLiveView: async () => frame, computerUsePip: bridge } }
+  const hostM = mkNode('div')
+  const disposeM = viewsP[0].mount(hostM, { surface: 'main' })
+  await sleep(20)
+  const pipBtn = btnOf(hostM, 'cu-live-pip')
+  A.ok(pipBtn, '有 computerUsePip 桥 → 头部有「移到悬浮窗」')
+  A.ok(pipBtn.textContent.includes('移到悬浮窗') && pipBtn.attrs['aria-label'] === '移到悬浮窗')
+  A.equal(btnOf(hostM, 'cu-live-back'), undefined, '不在悬浮窗里就没有「放回去」那颗')
+  pipBtn.fire('click')
+  await sleep(20)
+  A.deepEqual(pipCalls, ['open'], '点「移到悬浮窗」→ open()')
+  A.ok(pipBtn.textContent.includes('放回去'), '悬浮窗开着 → 同一个按钮变「放回去」')
+  pipBtn.fire('click')
+  await sleep(20)
+  A.deepEqual(pipCalls, ['open', 'close'], '再点一下 → close()')
+  A.ok(pipBtn.textContent.includes('移到悬浮窗'))
+  disposeM()
+  // 网页 / 手机:没有这个桥 → 不画入口
+  globalThis.window = { tangu: { computerUseLiveView: async () => frame } }
+  const hostW = mkNode('div')
+  const disposeW = viewsP[0].mount(hostW)
+  await sleep(20)
+  A.equal(btnOf(hostW, 'cu-live-pip'), undefined, '没有 computerUsePip → 不画「移到悬浮窗」')
+  disposeW()
+  // 悬浮窗里:紧凑卡 —— 画面在上、一行说明在下,有「放回去」,没有「移到悬浮窗」,舞台高度按比例写死
+  globalThis.window = { tangu: { computerUseLiveView: async () => frame, computerUsePip: bridge } }
+  pipCalls.length = 0
+  const hostP = mkNode('div')
+  const disposePip = viewsP[0].mount(hostP, { surface: 'pip' })
+  const rootP = hostP.children[0]
+  A.ok(rootP.className.split(' ').includes('is-pip'), 'surface pip → 紧凑卡')
+  A.equal(rootP.children[0].className, 'cu-live-stage', '悬浮窗里画面在上')
+  A.ok(rootP.children[1].className.startsWith('cu-live-head'), '说明一行在下')
+  A.equal(rootP.children[0].style.height, '173px', '还没有画面时舞台先占 173')
+  rootP.children[0].clientWidth = 264
+  await sleep(T.TICK_MS + 40)
+  A.equal(rootP.children[0].style.height, '173px', '264 宽 × 800×524 → 173')
+  A.equal(btnOf(hostP, 'cu-live-pip'), undefined, '悬浮窗里不再给「移到悬浮窗」')
+  const back = btnOf(hostP, 'cu-live-back')
+  A.ok(back && back.textContent === '放回去')
+  back.fire('click')
+  await sleep(10)
+  A.deepEqual(pipCalls, ['close'], '「放回去」→ close()')
+  // 悬浮窗里不缩放:滚轮不被吃掉
+  let prevented = false
+  const vp = byClass(hostP, 'cu-live-viewport')[0]
+  vp.fire('wheel', { deltaY: -100, preventDefault() { prevented = true } })
+  A.equal(prevented, false, '悬浮窗里滚轮不缩放、不拦')
+  disposePip()
+  // 悬浮窗里没有桥(理论上不会):「放回去」退回视图自己的 close
+  globalThis.window = { tangu: { computerUseLiveView: async () => frame } }
+  let closedByView = 0
+  const hostQ = mkNode('div')
+  const disposeQ = viewsP[0].mount(hostQ, { surface: 'pip', close: () => { closedByView++ } })
+  btnOf(hostQ, 'cu-live-back').fire('click')
+  A.equal(closedByView, 1)
+  disposeQ()
+  if (typeof disposeP === 'function') disposeP()
+}
+
 console.log('✅ computer-use 插件自检通过')
 process.exit(0)

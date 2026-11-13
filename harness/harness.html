@@ -9,6 +9,11 @@
     state=live(缺省)| done    live = 一直在操作(动作循环);done = 做完 6 步就结束(假宿主状态转 idle,helper 报 turnActive:false)
     hold=3                     停在第 3 步不动(截图用,画面稳定)
     lang=zh(缺省)| en
+    surface=pip                264 宽的悬浮小画面紧凑卡(宿主给视图上下文 { surface: 'pip' },高度随内容)
+    nopip=1                    不给 window.tangu.computerUsePip(网页 / 手机):头部不该有「移到悬浮窗」
+    view=labels                不挂视图,只把 fixtures/tool-calls.json 的每条调用经假 registerToolLabel 渲染成过程行句子(进行中 / 完成 / 出错)
+    long=1                     控件名换成很长的一串(看省略号)
+    width=N                    主区视图容器宽(缺省 640;看窄的时候头部按钮让不让位)
 -->
 <style>
   :root{--bg:#f6f5f3;--bg-card:#ffffff;--text:#1f1f22;--text-muted:#6b6b73;--text-light:#6b6b73;--border:#e3e1dd;
@@ -27,6 +32,18 @@
   /* 宿主给视图的容器:Agent Desk 那种「高度由 flex 决定」的格子 */
   #frame{height:420px;width:640px;margin:16px;border:1px solid var(--border);border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
   #frame > *{flex:1 1 auto;min-height:0}
+  #frame.pip{width:264px;height:auto;display:block}
+  #frame.pip > *{flex:none}
+  #labels{margin:16px;max-width:760px;border:1px solid var(--border);border-radius:10px;background:var(--bg-card);overflow:hidden}
+  #labels .tl-row{display:grid;grid-template-columns:110px 64px 1fr;gap:10px;align-items:center;padding:6px 12px;border-top:1px solid var(--border)}
+  #labels .tl-row:first-child{border-top:0}
+  #labels .tl-id{color:var(--text-muted);font-family:ui-monospace,monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #labels .tl-ph{color:var(--text-muted);font-size:11px}
+  #labels .tl-ph.error{color:#c2410c}
+  #labels .tl-text{display:flex;align-items:center;gap:6px;min-width:0}
+  #labels .tl-ic{width:14px;height:14px;border-radius:4px;background:var(--accent);flex:0 0 auto;opacity:.85}
+  #labels .tl-ic.none{background:transparent;border:1px solid var(--border)}
+  #labels .tl-none{color:var(--text-muted);font-style:italic}
   #log{padding:8px 12px;color:var(--text-muted);white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:12px}
 </style>
 <div id="bar">
@@ -46,6 +63,7 @@
   <span id="stat"></span>
 </div>
 <div id="frame"></div>
+<div id="labels" hidden></div>
 <div id="log"></div>
 <script type="module">
 const qs = new URLSearchParams(location.search)
@@ -53,7 +71,12 @@ const PROTO = qs.get('proto') === '19' ? 19 : 20
 const STATE = qs.get('state') === 'done' ? 'done' : 'live'
 const HOLD = Number(qs.get('hold')) || 0
 const LANG = qs.get('lang') === 'en' ? 'en' : 'zh'
+const SURFACE = qs.get('surface') === 'pip' ? 'pip' : 'main'
+const VIEW = qs.get('view') === 'labels' ? 'labels' : 'live'
 const html = document.documentElement
+// 悬浮窗是另一扇窗:宿主给它 data-window="pip",插件顶层据此不在那里上报颜色 / 发 overlay-turn
+if (SURFACE === 'pip') { html.dataset.window = 'pip'; document.getElementById('frame').className = 'pip' }
+if (qs.get('width')) document.getElementById('frame').style.width = `${Number(qs.get('width'))}px`
 if (qs.get('theme') === 'dark') html.classList.add('dark')
 if (qs.get('skin') === 'classic') html.dataset.skin = 'classic'
 document.getElementById('dark').onclick = () => html.classList.toggle('dark')
@@ -112,6 +135,8 @@ const STEPS = [
   { kind: 'doubleClick', label: 'Zhang San', x: 0.16, y: 0.085, sent: true },
   { kind: 'click', label: 'Send', x: fixture.cursor.x, y: fixture.cursor.y, sent: true },
 ]
+// long=1:控件名换成很长的一串,看窄处(264 宽的悬浮窗)省略号顶不顶出去
+if (qs.get('long') === '1') STEPS.forEach((s) => { s.label = LANG === 'en' ? 'Reply to the whole conversation thread with attachments' : '回复整个对话串并附上所有附件和那份很长的说明' })
 const STEP_MS = 1200
 const PREV_MS = 400       // 开头先报一帧「上一轮」,给视图一个基数(11),好算出「6 步」
 const BASE_COUNT = 11
@@ -142,7 +167,15 @@ document.getElementById('end').onclick = () => { forcedEnd = true }
 
 let n = 0
 let lastImgKey = ''
+// ── 假的悬浮窗桥(契约 §2.5,只有 Electron 桌面有):记下调用,开没开着存在这里 ──
+let pipOpen = false
+const pipBridge = {
+  open: async () => { log('computerUsePip.open()'); pipOpen = true; return true },
+  close: async () => { log('computerUsePip.close()'); pipOpen = false },
+  isOpen: async () => pipOpen,
+}
 window.tangu = {
+  ...(qs.get('nopip') === '1' ? {} : { computerUsePip: pipBridge }),
   computerUseLiveView: async (o) => {
     if (PROTO === 19) {
       const [sw, sh] = document.getElementById('shape').value.split('x').map(Number)
@@ -196,8 +229,11 @@ const status = (live, sessionId) => (live
 const running = () => { const tl = timeline(); return !tl.prev && !tl.ended }
 window.__requests = []
 const views = []
+const toolLabels = []
 const ctx = {
   registerView: (v) => views.push(v), registerSetting() {}, registerCommand() {},
+  // 假的 registerToolLabel(契约 §2.4):只收登记,句子由下面的 renderLabels 按宿主的调用方式取
+  registerToolLabel: (def) => { toolLabels.push(def); log(`registerToolLabel: ${[].concat(def.tool).join(', ')}`) },
   getLocale: () => LANG,
   tangu: {
     request: async (engine, path, opts) => {
@@ -219,10 +255,40 @@ const src = await (await fetch('../main.js?t=' + Date.now())).text()
 const disposePlugin = new Function('ctx', src)(ctx)
 window.__disposePlugin = disposePlugin
 log('注册视图:', views.map(v => v.id).join(','), `· proto ${PROTO} · state ${STATE}`)
+// 过程行句子:每条样例调用 × 进行中 / 完成 / 出错,earlier = 它之前的调用(宿主给同一条回答里更早的本插件调用)
+async function renderLabels() {
+  const { calls } = await (await fetch('./fixtures/tool-calls.json')).json()
+  const box = document.getElementById('labels')
+  box.hidden = false
+  document.getElementById('frame').hidden = true
+  const owner = (tool) => toolLabels.find((d) => [].concat(d.tool).includes(tool))
+  const phaseName = { running: LANG === 'en' ? 'running' : '进行中', done: LANG === 'en' ? 'done' : '完成', error: LANG === 'en' ? 'error' : '出错' }
+  calls.forEach((c, i) => {
+    const earlier = calls.slice(0, i).map(({ tool, args, result }) => ({ tool, args, result }))
+    const phases = c.errorResult ? ['running', 'done', 'error'] : ['running', 'done']
+    for (const phase of phases) {
+      const def = owner(c.tool)
+      let out
+      try { out = def && def.describe({ tool: c.tool, args: c.args, result: phase === 'error' ? c.errorResult : phase === 'done' ? c.result : undefined, phase, locale: LANG, earlier }) } catch (e) { out = { text: `THREW ${e}` } }
+      const row = document.createElement('div')
+      row.className = 'tl-row'
+      const id = document.createElement('span'); id.className = 'tl-id'; id.textContent = `${c.id} · ${c.tool}`
+      const ph = document.createElement('span'); ph.className = `tl-ph ${phase}`; ph.textContent = phaseName[phase]
+      const tx = document.createElement('span'); tx.className = 'tl-text'
+      const ic = document.createElement('i'); ic.className = out && out.icon ? 'tl-ic' : 'tl-ic none'; ic.title = out && out.icon ? out.icon.appBundleId : ''
+      const t = document.createElement('span'); if (out && out.text) t.textContent = out.text; else { t.className = 'tl-none'; t.textContent = LANG === 'en' ? '(host default)' : '(宿主照旧显示)' }
+      tx.append(ic, t)
+      row.append(id, ph, tx)
+      box.appendChild(row)
+    }
+  })
+  window.__labelsReady = true
+}
+
 let dispose = null
 document.getElementById('mount').onclick = () => {
   if (dispose) return
-  dispose = views[0].mount(document.getElementById('frame'))
+  dispose = views[0].mount(document.getElementById('frame'), { surface: SURFACE })
   log('已挂载')
 }
 document.getElementById('unmount').onclick = () => { if (dispose) { dispose(); dispose = null; log('已卸载') } }
@@ -283,6 +349,10 @@ document.getElementById('measure').onclick = async () => {
     btn.disabled = false
   }
 }
-document.getElementById('mount').click()
+if (VIEW === 'labels') {
+  // 图标靠实时画面回包学到的「App 名 → bundleId」:先挂一下视图拿一帧,学到 Chatter 的再出句子
+  document.getElementById('mount').click()
+  setTimeout(() => { document.getElementById('unmount').click(); void renderLabels() }, 700)
+} else document.getElementById('mount').click()
 </script>
 </html>
