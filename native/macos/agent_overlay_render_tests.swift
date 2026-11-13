@@ -19,7 +19,12 @@ struct AgentOverlayRenderTests {
             args.firstIndex(of: flag).flatMap { args.indices.contains($0 + 1) ? args[$0 + 1] : nil }
         }
         testPalette()
-        if let fixtures = value("--fixtures") { testFixtures(URL(fileURLWithPath: fixtures)) }
+        if let fixtures = value("--fixtures") {
+            testFixtures(URL(fileURLWithPath: fixtures))
+            testLiveView(URL(fileURLWithPath: fixtures))
+        } else {
+            expect(false, "要带 --fixtures <scripts/fixtures>(样例比对)")
+        }
         testFlight()
         testArrival()
         testTurnModel()
@@ -96,6 +101,81 @@ struct AgentOverlayRenderTests {
         expect(OverlayTurnCommand.parse(["phase": "end"]) == OverlayTurnCommand(runId: nil), "不带 runId 的 end 也收")
         expect(OverlayTurnCommand.parse(["phase": "start", "runId": "x"]) == nil, "只收 end")
         expect(OverlayTurnCommand.parse(["phase": "end", "runId": 7]) == nil, "runId 不是字符串就不认")
+    }
+
+    // MARK: - liveView 回包的五个字段
+
+    /// JSON 里的值类型(布尔和数字分开;对象带上键和各自的类型)。
+    static func jsonType(_ value: Any) -> String {
+        if let number = value as? NSNumber { return CFGetTypeID(number) == CFBooleanGetTypeID() ? "bool" : "number" }
+        if value is String { return "string" }
+        if let object = value as? [String: Any] {
+            return "{" + object.keys.sorted().map { "\($0):\(jsonType(object[$0]!))" }.joined(separator: ",") + "}"
+        }
+        if let array = value as? [Any] { return "[" + array.map(jsonType).joined(separator: ",") + "]" }
+        return "null"
+    }
+
+    static func testLiveView(_ dir: URL) {
+        guard let data = try? Data(contentsOf: dir.appendingPathComponent("liveview-reply.v20.json")),
+            let sample = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            expect(false, "读不到 scripts/fixtures/liveview-reply.v20.json")
+            return
+        }
+        // 有光标、有最近动作、有 runId、这一轮在进行:窗口在 (100, 50) 起、800 × 524,点在样例那个比例上。
+        let bounds = CGRect(x: 100, y: 50, width: 800, height: 524)
+        let point = CGPoint(x: 100 + 0.6425 * 800, y: 50 + 0.8811 * 524)
+        let record = LiveActionRecord(kind: "click", seq: 17, at: 99.82, point: point, cursor: point, label: LiveViewExtras.label(title: "  Send\n", description: nil))
+        let built = LiveViewExtras.fields(last: record, actionCount: 17, runId: "run_01HZX8Q2W3", turnActive: true, windowBounds: bounds, now: 100)
+        // 过一遍 JSON(和真回包一样经 JSONSerialization 出去),再和样例比键集与类型。
+        guard let encoded = try? JSONSerialization.data(withJSONObject: built),
+            let reparsed = try? JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        else {
+            expect(false, "五个字段要能编成 JSON")
+            return
+        }
+        let names = Set(LiveViewExtras.fieldNames)
+        let expected = sample.filter { names.contains($0.key) }
+        expect(Set(expected.keys) == names, "样例里五个新字段都在(实际 \(expected.keys.sorted()))")
+        expect(Set(reparsed.keys) == Set(expected.keys), "组出来的键集 = 样例的五个字段(实际 \(reparsed.keys.sorted()))")
+        for name in LiveViewExtras.fieldNames {
+            let mine = reparsed[name].map(jsonType) ?? "missing", theirs = expected[name].map(jsonType) ?? "missing"
+            expect(mine == theirs, "\(name) 的类型和样例一致:组出来 \(mine),样例 \(theirs)")
+        }
+        let cursor = reparsed["cursor"] as? [String: Any], action = reparsed["lastAction"] as? [String: Any]
+        expect(near(cursor?["x"] as? Double ?? -1, 0.6425, 1e-4) && near(cursor?["y"] as? Double ?? -1, 0.8811, 1e-4), "cursor 是这一帧里的比例")
+        expect(action?["label"] as? String == "Send" && action?["ageMs"] as? Int == 180 && action?["seq"] as? Int == 17, "lastAction 的 label / ageMs / seq")
+
+        // 落在窗口外、不知道窗口在哪:不给坐标;没有动作:只有计数和轮次。
+        let outside = LiveActionRecord(kind: "scroll", seq: 3, at: 1, point: CGPoint(x: 50, y: 60), cursor: nil, label: nil)
+        let out = LiveViewExtras.fields(last: outside, actionCount: 3, runId: nil, turnActive: false, windowBounds: bounds, now: 2)
+        expect(out["cursor"] == nil && (out["lastAction"] as? [String: Any])?["x"] == nil, "窗口外的点不给坐标")
+        expect(out["runId"] == nil && (out["lastAction"] as? [String: Any])?["label"] == nil, "没有 runId / label 就不给")
+        let noBounds = LiveViewExtras.fields(last: record, actionCount: 17, runId: nil, turnActive: true, windowBounds: nil, now: 100)
+        expect(noBounds["cursor"] == nil, "不知道窗口在哪就不给 cursor")
+        let empty = LiveViewExtras.fields(last: nil, actionCount: 0, runId: nil, turnActive: false, windowBounds: bounds, now: 0)
+        expect(Set(empty.keys) == ["actionCount", "turnActive"], "还没有动作:只给计数和轮次")
+        expect(LiveViewExtras.fraction(CGPoint(x: 900, y: 574), in: bounds).map { $0.x == 1 && $0.y == 1 } == true, "右下角正好是 1")
+        expect(LiveViewExtras.fraction(CGPoint(x: 1, y: 1), in: .zero) == nil, "bounds 退化就不给")
+
+        // 元素名:标题优先,没有用描述;压空白、最长 60 字。
+        expect(LiveViewExtras.label(title: nil, description: " 发送 ") == "发送", "没有标题用描述")
+        expect(LiveViewExtras.label(title: "  ", description: "Close") == "Close", "标题全是空白算没有")
+        expect(LiveViewExtras.label(title: "a\n\tb   c", description: nil) == "a b c", "压空白")
+        expect(LiveViewExtras.label(title: String(repeating: "长", count: 80), description: nil)?.count == 60, "最长 60 字")
+        expect(LiveViewExtras.label(title: nil, description: nil) == nil, "读不到就不给")
+
+        // 动作种类。
+        expect(LiveViewExtras.kind(action: "click", button: nil, clickCount: nil) == "click", "click")
+        expect(LiveViewExtras.kind(action: "click", button: "left", clickCount: 2) == "doubleClick", "双击")
+        expect(LiveViewExtras.kind(action: "click", button: "right", clickCount: 1) == "rightClick", "右键")
+        expect(LiveViewExtras.kind(action: "press", button: nil, clickCount: nil) == "press", "press")
+        expect(LiveViewExtras.kind(action: "moveMouse", button: nil, clickCount: nil) == "move", "moveMouse → move")
+        expect(LiveViewExtras.kind(action: "typeText", button: nil, clickCount: nil) == "type" && LiveViewExtras.kind(action: "keypress", button: nil, clickCount: nil) == "key", "typeText → type,keypress → key")
+        expect(LiveViewExtras.kind(action: "wait", button: nil, clickCount: nil) == nil, "wait 不记")
+        let allKinds = ["click", "press", "moveMouse", "scroll", "drag", "typeText", "keypress", "setText"].compactMap { LiveViewExtras.kind(action: $0, button: nil, clickCount: nil) } + ["doubleClick", "rightClick"]
+        expect(Set(allKinds) == ["click", "doubleClick", "rightClick", "press", "scroll", "drag", "move", "type", "key", "setText"], "kind 正好是契约列的那十种")
     }
 
     // MARK: - 飞行

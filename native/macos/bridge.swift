@@ -455,6 +455,13 @@ final class Bridge {
 	private var controlledPid: Int32 = 0
 	private var controlledAt: Date?
 	private var highlightFollowTimer: Timer?
+	// 协议 20:liveView 回包里的光标 / 最近动作 / 动作计数 / runId / 这一轮还在不在(见 LiveViewExtras)。
+	// 和叠层开关无关:「操作可视化」关着也照记(整轮状态机在主线程那份会被开关清掉,这里另记一份,读的时候按时刻现算)。
+	private let liveLock = NSLock()
+	private var liveLastAction: LiveActionRecord?
+	private var liveActionCount = 0
+	private var liveRunId: String?
+	private var liveTurn = OverlayTurnModel()
 
 	func run() {
 		if CommandLine.arguments.contains("serve") {
@@ -719,14 +726,67 @@ final class Bridge {
 		controlledPid = pid
 		controlledAt = Date()
 		controlledLock.unlock()
+		liveLock.lock()
+		liveTurn.actStarted(runId: overlay.runId, at: OverlayClock.now())
+		if let runId = overlay.runId { liveRunId = runId }
+		liveLock.unlock()
 		guard supportsAgentCursor else { return }
 		DispatchQueue.main.async { MainActor.assumeIsolated { AgentOverlayTurn.shared.actStarted(windowId: windowId, options: overlay) } }
 	}
 
 	/// 一条 act 做完(成功、失败、抛错都算):整轮状态机据此在 0.3 s 后转入「在想」。
 	private func noteActFinished() {
+		liveLock.lock()
+		liveTurn.actEnded(at: OverlayClock.now())
+		liveLock.unlock()
 		guard supportsAgentCursor else { return }
 		DispatchQueue.main.async { MainActor.assumeIsolated { AgentOverlayTurn.shared.actEnded() } }
+	}
+
+	/// 记下一个动作(找到目标之后、取证之前调;读元素名放在这里,不占「取证 → 投递」的间隔)。返回它的 seq。
+	private func noteLiveAction(kind: String, point: CGPoint?, label: String?) -> Int {
+		liveLock.lock()
+		defer { liveLock.unlock() }
+		liveActionCount += 1
+		liveLastAction = LiveActionRecord(kind: kind, seq: liveActionCount, at: OverlayClock.now(), point: point, cursor: nil, label: label)
+		return liveActionCount
+	}
+
+	/// 这一下画了示意光标:记下它停的那一点(只改仍是这一个动作的那条记录)。
+	private func noteLiveCursor(seq: Int, at point: CGPoint) {
+		liveLock.lock()
+		if liveLastAction?.seq == seq { liveLastAction?.cursor = point }
+		liveLock.unlock()
+	}
+
+	/// 坐标点击命中了可按的元素(后台 AXPress):补上它的名字。
+	private func noteLiveLabel(seq: Int, _ label: String?) {
+		guard let label else { return }
+		liveLock.lock()
+		if liveLastAction?.seq == seq { liveLastAction?.label = label }
+		liveLock.unlock()
+	}
+
+	private func elementLabel(_ element: AXUIElement) -> String? {
+		LiveViewExtras.label(
+			title: stringAttribute(element, attribute: kAXTitleAttribute as CFString),
+			description: stringAttribute(element, attribute: kAXDescriptionAttribute as CFString)
+		)
+	}
+
+	/// liveView 回包的五个字段(只在按窗口截图的那条路上并进去)。
+	private func liveViewExtras(windowId: UInt32) -> [String: Any] {
+		let bounds = windowInfo(windowId: windowId)?.bounds
+		liveLock.lock()
+		defer { liveLock.unlock() }
+		let now = OverlayClock.now()
+		liveTurn.settle(at: now)
+		let turnActive: Bool
+		switch liveTurn.phase(at: now) {
+		case .acting, .thinking: turnActive = true
+		case .idle, .ending: turnActive = false
+		}
+		return LiveViewExtras.fields(last: liveLastAction, actionCount: liveActionCount, runId: liveRunId, turnActive: turnActive, windowBounds: bounds, now: now)
 	}
 
 	/// overlayTurn:只收 end。runId 对不上 / 没给 runId 而这一轮有 runId 时不做事,但照样回 ok(见 OverlayTurnModel)。
@@ -734,6 +794,9 @@ final class Bridge {
 		guard let command = OverlayTurnCommand.parse(request) else {
 			throw BridgeFailure(message: "overlayTurn only accepts phase \"end\" with an optional string runId", code: "invalid_args")
 		}
+		liveLock.lock()
+		liveTurn.requestEnd(runId: command.runId, at: OverlayClock.now())
+		liveLock.unlock()
 		if supportsAgentCursor {
 			DispatchQueue.main.async { MainActor.assumeIsolated { AgentOverlayTurn.shared.requestEnd(runId: command.runId) } }
 		}
@@ -786,6 +849,9 @@ final class Bridge {
 		// 退到**同样按窗口尺寸出图**的单帧兜底,所以第一帧照样立刻有画面、也照样没有留白。
 		// `source` 让调用方看得见走的哪条路。
 		if #available(macOS 14.0, *) {
+			// 协议 20:按窗口出图的这条路上带光标 / 最近动作(比例坐标 = 窗口 bounds 里的位置)。帧没变时也带:
+			// 叠层不在画面里,光标和 seq 照样在动。整屏出图的老路(下面 legacy)几何不同,不带。
+			payload.merge(liveViewExtras(windowId: controlled.windowId)) { current, _ in current }
 			let live = LiveWindowStream.shared
 			var source = "stream"
 			var image: CGImage?
@@ -814,6 +880,8 @@ final class Bridge {
 				payload["source"] = source
 				return payload
 			}
+			// 两条按窗口的路都没出图,下面退到整屏出图:那边的比例坐标不对,收回这几个字段。
+			for key in LiveViewExtras.fieldNames { payload.removeValue(forKey: key) }
 		}
 		// 最后一条老路(macOS <14,或上面两条都拿不到):上游的 captureWindow。它按整块屏幕出图,
 		// 窗口缩在左上角、四周留白 —— 有画面总比没有强,但打上 legacy 标记别让人以为这是正常尺寸。
@@ -2292,6 +2360,8 @@ final class Bridge {
 		var element: AXUIElement?
 		var rawPoint: CGPoint?
 		var preflightCapsUnknown = false
+		/// liveView 的「最近动作」里这一下的序号(找到目标后才记;没记的动作是 nil)。
+		var liveSeq: Int?
 
 		/// `viaAx = true`:这一下是用 AX 直接按压 / 写值完成的,压根没发物理事件 —— 无论 delivery 名义上
 		/// 是什么,系统指针都没动过,所以虚拟光标该画。否则前台策略下用 AX 打成的那一下毫无反馈。
@@ -2331,6 +2401,10 @@ final class Bridge {
 					}
 				}
 			}
+			if cue.drawsCursor, let liveSeq {
+				// 光标最后停在哪:拖动是松手那一点,其余就是这一下的落点(打字是输入框前缘)。
+				if case .drag(let points) = cue, let last = points.last { noteLiveCursor(seq: liveSeq, at: last) } else { noteLiveCursor(seq: liveSeq, at: point) }
+			}
 			return true
 		}
 
@@ -2361,6 +2435,20 @@ final class Bridge {
 			rawPoint = lookPoint(record: record, x: xNumber.doubleValue, y: yNumber.doubleValue)
 		} else {
 			throw BridgeFailure(message: "act target must include ref or x/y", code: "invalid_args")
+		}
+
+		// liveView 的「最近动作」:种类、落点(拖动记松手那一点)、被操作元素的名字。在取证之前读,不占取证 → 投递的间隔。
+		if let kind = LiveViewExtras.kind(action: action, button: params["button"] as? String, clickCount: (params["clickCount"] as? NSNumber)?.intValue) {
+			var point: CGPoint?
+			if action == "drag", let last = (params["path"] as? [[String: Any]])?.last,
+				let x = (last["x"] as? NSNumber)?.doubleValue, let y = (last["y"] as? NSNumber)?.doubleValue {
+				point = lookPoint(record: record, x: x, y: y)
+			} else if let element, let frame = frameForElement(element) {
+				point = CGPoint(x: frame.midX, y: frame.midY)
+			} else {
+				point = rawPoint
+			}
+			liveSeq = noteLiveAction(kind: kind, point: point, label: element.flatMap(elementLabel))
 		}
 
 		// 先到再点(协议 20):落点一算出来就让光标起飞,和下面的按前准备(装 AX 观察器)并行;取证之前只等还没飞完的那段。
@@ -2459,6 +2547,7 @@ final class Bridge {
 			performed["hitRole"] = hitRole
 			// 坐标点击没有 before/after 值可比,和后台物理事件一样无从自证 —— 如实说要调用方自己查。
 			performed["verification"] = "caller_required"
+			if let liveSeq { noteLiveLabel(seq: liveSeq, elementLabel(hit)) }
 			cue(.click(count: 1), at: point, viaAx: true)
 			return true
 		}

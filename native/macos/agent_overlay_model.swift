@@ -584,6 +584,81 @@ struct ArrivalBudget: Equatable {
     }
 }
 
+// MARK: - 实时画面回包里的光标与最近动作
+
+/// helper 记下的最近一次动作(liveView 回包用)。坐标一律是全局 CG 点(左上原点)。
+struct LiveActionRecord: Equatable {
+    var kind: String
+    var seq: Int
+    /// OverlayClock 时刻。
+    var at: Double
+    /// 落点(点击 / 滚动的那一点;拖动是松手的那一点)。
+    var point: CGPoint?
+    /// 示意光标停的那一点(画了光标才有;打字时是输入框前缘)。没有就用 point。
+    var cursor: CGPoint?
+    var label: String?
+}
+
+/// liveView 回包的五个新字段(协议 20,契约 §1.4):cursor / lastAction / actionCount / runId / turnActive。
+/// 只在按窗口截图的那条路上给;坐标换算成这一帧里的比例(0…1,左上原点),落在窗口外就不给。
+enum LiveViewExtras {
+    static let fieldNames = ["cursor", "lastAction", "actionCount", "runId", "turnActive"]
+    static let labelLimit = 60
+
+    /// act 的 action(+ 按键 / 次数)→ 回包里的 kind;不认识的(wait 等)不记。
+    static func kind(action: String, button: String?, clickCount: Int?) -> String? {
+        switch action {
+        case "click":
+            if button == "right" { return "rightClick" }
+            return (clickCount ?? 1) >= 2 ? "doubleClick" : "click"
+        case "press": return "press"
+        case "moveMouse": return "move"
+        case "scroll": return "scroll"
+        case "drag": return "drag"
+        case "typeText": return "type"
+        case "keypress": return "key"
+        case "setText": return "setText"
+        default: return nil
+        }
+    }
+
+    /// 被操作元素的可读名:AX 标题,没有就用描述。空白压成一个空格、去头尾,最长 60 字;读不到就是 nil。
+    static func label(title: String?, description: String?) -> String? {
+        for raw in [title, description] {
+            guard let raw else { continue }
+            let collapsed = raw.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
+            if !collapsed.isEmpty { return String(collapsed.prefix(labelLimit)) }
+        }
+        return nil
+    }
+
+    /// 全局点 → 这一帧里的比例(窗口 bounds 就是帧的范围)。落在窗口外、bounds 退化就是 nil。保留 4 位小数。
+    static func fraction(_ point: CGPoint, in bounds: CGRect) -> (x: Double, y: Double)? {
+        guard bounds.width > 0, bounds.height > 0, point.x.isFinite, point.y.isFinite else { return nil }
+        let x = Double((point.x - bounds.minX) / bounds.width), y = Double((point.y - bounds.minY) / bounds.height)
+        guard (0...1).contains(x), (0...1).contains(y) else { return nil }
+        func round4(_ v: Double) -> Double { (v * 10_000).rounded() / 10_000 }
+        return (round4(x), round4(y))
+    }
+
+    static func fields(last: LiveActionRecord?, actionCount: Int, runId: String?, turnActive: Bool, windowBounds: CGRect?, now: Double) -> [String: Any] {
+        var out: [String: Any] = ["actionCount": actionCount, "turnActive": turnActive]
+        if let runId { out["runId"] = runId }
+        guard let last else { return out }
+        var action: [String: Any] = ["kind": last.kind, "seq": last.seq, "ageMs": max(0, Int(((now - last.at) * 1000).rounded()))]
+        if let point = last.point, let bounds = windowBounds, let f = fraction(point, in: bounds) {
+            action["x"] = f.x
+            action["y"] = f.y
+        }
+        if let label = last.label { action["label"] = label }
+        out["lastAction"] = action
+        if let cursor = last.cursor ?? last.point, let bounds = windowBounds, let f = fraction(cursor, in: bounds) {
+            out["cursor"] = ["x": f.x, "y": f.y]
+        }
+        return out
+    }
+}
+
 // MARK: - 整轮状态机
 
 /// 一轮(同一个 runId)里叠层该处在哪一档。纯状态机:事件(act 开始 / 结束、overlayTurn end)+ 时刻 → 档位和下一个
