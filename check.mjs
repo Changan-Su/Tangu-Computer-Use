@@ -998,7 +998,16 @@ for (const legacy of [false, true]) {
   A.equal(contributions.length, 1, '应登记一份 registerToolLabel')
   A.deepEqual([...contributions[0].tool].sort(), [...T.CU_TOOLS].sort())
   const T2 = globalThis.__CU_LIVE_TEST__
+  // 宿主把句子缓存着(只在 call / 阶段 / 语言 / earlier 变了才再问);图标表是后来学到的 → 靠 revision 让它重算
+  A.equal(typeof contributions[0].revision, 'function', '登记时带 revision(图标表的版本)')
+  const rev0 = contributions[0].revision()
   T2.learnBundle('Chatter', 'com.example.chatter')
+  const rev1 = contributions[0].revision()
+  A.notEqual(rev1, rev0, '学到一条新的 App → bundleId:revision 必须变')
+  T2.learnBundle('Chatter', 'com.example.chatter')
+  A.equal(contributions[0].revision(), rev1, '同一条再学一遍:revision 不动(别让宿主白白重算)')
+  T2.learnBundle('Chatter', 'not a bundle id')
+  A.equal(contributions[0].revision(), rev1, '不合法的 bundleId 不收,revision 不动')
   const viaHost = contributions[0].describe({ tool: 'observe_ui', args: { root: '@r1' }, phase: 'running', locale: 'en', earlier: [{ tool: 'find_roots', args: {}, result: calls[0].result }] })
   A.deepEqual(viaHost, { text: 'Looking at Chatter', icon: { appBundleId: 'com.example.chatter' } }, '经宿主调用:图标来自实时画面学到的对应')
   const evil = { get tool() { throw new Error('boom') } }

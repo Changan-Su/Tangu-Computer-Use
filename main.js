@@ -913,6 +913,7 @@ function describeCall(call, iconOf) {
 
 // 实时画面回包里学到的「App 名 → bundleId」(只在本次运行的内存里,给过程行的图标用)。
 const appBundles = new Map()
+let bundlesRev = 0
 const APP_BUNDLES_KEEP = 64
 function learnBundle(app, bundleId) {
   if (typeof app !== 'string' || !app || typeof bundleId !== 'string' || !BUNDLE_RE.test(bundleId)) return
@@ -920,6 +921,7 @@ function learnBundle(app, bundleId) {
   if (appBundles.get(key) === bundleId) return
   appBundles.delete(key)
   appBundles.set(key, bundleId)
+  bundlesRev++ // 宿主把句子缓存着:图标表变了要让它知道(registerToolLabel 的 revision)
   while (appBundles.size > APP_BUNDLES_KEEP) appBundles.delete(appBundles.keys().next().value)
 }
 
@@ -931,6 +933,8 @@ try {
       describe(call) {
         try { return describeCall(call, (app) => appBundles.get(app)) || undefined } catch { return undefined }
       },
+      // 句子本身只看 call;图标表是看到实时画面后才学到的 —— 宿主缓存句子,靠这个数知道该重算了(不认 revision 的宿主忽略它)
+      revision: () => bundlesRev,
     })
   }
 } catch { /* 宿主拒收就照旧显示 */ }
