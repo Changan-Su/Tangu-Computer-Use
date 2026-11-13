@@ -33,6 +33,8 @@ const mkNode = (tag) => {
   n.appendChild = (c) => { n.children.push(c); c.parentNode = n; return c }
   n.append = (...cs) => cs.forEach((c) => n.appendChild(c))
   n.replaceChildren = (...cs) => { n.children.forEach((c) => { c.parentNode = null }); n.children.length = 0; own = ''; cs.forEach((c) => n.appendChild(c)) }
+  n.removeChild = (c) => { const i = n.children.indexOf(c); if (i >= 0) n.children.splice(i, 1); c.parentNode = null; return c }
+  n.remove = () => { if (n.parentNode) n.parentNode.removeChild(n) }
   n.setAttribute = (k, v) => { n.attrs[k] = v }
   n.querySelector = () => null
   n.listeners = {}
@@ -366,6 +368,724 @@ A.equal(host.children.length, 0, '卸载后必须清空宿主元素')
   A.deepEqual(seen, [false, undefined], '两种请求都应真的发出去')
   release()
   await Promise.all([p1, p2])
+}
+
+// ══ 协议 20:取色上报 / 整轮结束 / 实时画面里的光标与环(契约 §1.4、§1.6、§1.7、§3)══
+const fixture = JSON.parse(readFileSync(new URL('./harness/fixtures/liveview-reply.v20.json', import.meta.url), 'utf8'))
+const routes = JSON.parse(readFileSync(new URL('./harness/fixtures/routes.v1.json', import.meta.url), 'utf8'))
+
+// ── 文案成对:只加中文忘了英文不报错,英文界面里原样冒中文 ──
+{
+  const zh = Object.keys(T.MSG.zh).sort()
+  const en = Object.keys(T.MSG.en).sort()
+  A.deepEqual(en, zh, 'zh / en 键集必须一致')
+  const ph = (s) => (s.match(/\{\w+\}/g) || []).sort().join(',')
+  for (const k of en) {
+    A.ok(!/[㐀-鿿]/.test(T.MSG.en[k]), `英文文案里不许有汉字:${k}`)
+    A.equal(ph(T.MSG.en[k]), ph(T.MSG.zh[k]), `{占位符} zh / en 必须逐字一致:${k}`)
+  }
+  A.equal(T.fmt('en', 'ago.sec', { n: 3 }), '3s ago')
+  A.ok(T.fmt('en', 'err.unknown', { code: 'weird_code' }).includes('weird_code'), '英文里未知错误码也要原样带出')
+  A.equal(T.fmt('xx', 'st.looking'), '正在查看', '不认识的语言回落中文')
+}
+
+// ── 取色规则 + 描边亮度(纯函数)──
+{
+  const blue = T.hexToRgb('#2c5f9e')
+  const paleBlue = T.hexToRgb('#8fb4e3')
+  const orange = [255, 120, 24]
+  const cream = T.hexToRgb('#1c1c1c')
+  A.equal(T.toHex(blue), '#2c5f9e')
+  A.equal(T.hexToRgb('nope'), null)
+  A.equal(T.edgeFor(blue), '#ffffff', '柔蓝(深)配白边')
+  A.equal(T.edgeFor(paleBlue), '#1c1b1f', '暗色下的浅柔蓝配深边')
+  A.equal(T.edgeFor([255, 255, 255]), '#1c1b1f')
+  A.equal(T.edgeFor([0, 0, 0]), '#ffffff')
+  A.ok(Math.abs(T.relLuminance([255, 255, 255]) - 1) < 1e-9 && T.relLuminance([0, 0, 0]) === 0)
+  // 经典 / 墨色:主题色就是正文色(无彩)→ --signal(缺省柔蓝)
+  A.deepEqual(T.pickFill({ hasSignalSkin: true, accent: cream, signal: blue }), { source: 'signal', rgb: blue })
+  // 彩色配色 → accent 本色
+  A.deepEqual(T.pickFill({ hasSignalSkin: false, accent: orange, signal: blue }), { source: 'accent', rgb: orange })
+  // ⚠️彩色的**自定义**主题色:宿主照样写了 --signal-skin(= accent-ink,lovableData.ts customAccentVars)——
+  // 仍要用 accent 本色,不能被 --signal-skin 拐到加深的墨色或另选的强调色上
+  A.deepEqual(T.pickFill({ hasSignalSkin: true, accent: orange, signal: [150, 60, 10] }), { source: 'accent', rgb: orange })
+  // 近乎无彩的自定义色(RGB 极差 < 24)→ signal
+  A.deepEqual(T.pickFill({ hasSignalSkin: false, accent: cream, signal: blue }), { source: 'signal', rgb: blue })
+  A.equal(T.pickFill({ hasSignalSkin: false, accent: [100, 100, 123], signal: blue }).source, 'signal', '极差 23 算无彩')
+  A.equal(T.pickFill({ hasSignalSkin: false, accent: [100, 100, 124], signal: blue }).source, 'accent', '极差 24 算彩色')
+  // 读不出 → null = 不发(helper 用柔蓝,不回橙色)
+  A.equal(T.pickFill({ hasSignalSkin: false, accent: null, signal: null }), null)
+  A.equal(T.pickFill({ hasSignalSkin: true, accent: cream, signal: null }), null, '该用 signal 却读不出、accent 又无彩 → 不发')
+  A.deepEqual(T.pickFill({ hasSignalSkin: true, accent: null, signal: blue }), { source: 'signal', rgb: blue }, 'accent 读不出 → signal')
+  // 发出去的体与 routes.v1.json 逐字一致
+  A.deepEqual(T.styleBody({ source: 'signal', rgb: blue }, false), routes.overlayStyle.body, '/overlay-style 的体必须照 routes.v1.json')
+  A.equal(T.styleBody(null, true), null)
+  A.equal(T.styleBody({ source: 'accent', rgb: orange }, true).reducedMotion, true)
+  A.equal(T.ENGINE_ID, 'computer-use')
+  const engineManifest = JSON.parse(readFileSync(new URL('./tangu-plugins/computer-use/tangu-plugin.json', import.meta.url), 'utf8'))
+  A.equal(engineManifest.id, T.ENGINE_ID, 'ctx.tangu.request 的引擎 id 必须是捆绑的引擎插件 id')
+  // 主窗判定 / 减少动态(宿主口径)
+  A.equal(T.isMainWindow({ documentElement: { dataset: { window: 'mini' } } }), false, 'Mini 窗不上报')
+  A.equal(T.isMainWindow({ documentElement: { dataset: { window: 'main' } } }), true)
+  A.equal(T.isMainWindow({ documentElement: { dataset: {} } }), true, '旧宿主不写 data-window → 当主窗')
+  // 收尾不只主窗发:Mini / 独立窗各管自己那几轮(否则在 Mini 里发起的一轮只能等 helper 45 s 超时);悬浮小画面不发
+  A.equal(T.tracksTurns({ documentElement: { dataset: { window: 'mini' } } }), true, 'Mini 里发起的一轮由 Mini 收尾')
+  A.equal(T.tracksTurns({ documentElement: { dataset: { window: 'detached' } } }), true)
+  A.equal(T.tracksTurns({ documentElement: { dataset: {} } }), true)
+  A.equal(T.tracksTurns({ documentElement: { dataset: { window: 'pip' } } }), false, '悬浮小画面不收尾:状态是别的窗口转来的')
+  A.equal(T.reducedMotionIn({ documentElement: { dataset: { motionFade: 'on' } } }), true, '宿主的「只淡入淡出」算减少动态')
+}
+
+// ── 状态句 / 步数 / 补间 ──
+{
+  const click = (over) => ({ kind: 'click', seq: 1, label: '发送', ageMs: 100, ...over })
+  A.equal(T.statusText('zh', { ended: false, lastAction: null }), '正在查看')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click() }), '正在点击「发送」')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ ageMs: T.DOING_MS + 1 }) }), '已点击「发送」')
+  A.equal(T.statusText('zh', { ended: true, lastAction: click() }), '已结束')
+  A.equal(T.statusText('en', { ended: false, lastAction: null }), 'Looking')
+  A.equal(T.statusText('en', { ended: false, lastAction: click({ label: 'Send' }) }), 'Clicking “Send”')
+  A.equal(T.statusText('en', { ended: false, lastAction: click({ label: 'Send', ageMs: 2000 }) }), 'Clicked “Send”')
+  A.equal(T.statusText('en', { ended: true, lastAction: null }), 'Ended')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ label: undefined }) }), '正在点击', '没有控件名就不带引号')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ label: '   ' }) }), '正在点击', '全空白的名字当没有')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ kind: 'doubleClick' }) }), '正在点击「发送」', '双击按点击说')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ kind: 'setText', label: '消息' }) }), '正在向「消息」输入')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ kind: 'key' }) }), '正在按键', '纯按键没有控件名的说法')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ kind: 'teleport' }) }), '正在查看', '不认识的动作 → 正在查看')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ ageMs: T.LOOKING_AFTER_MS }) }), '正在查看', '上一个动作早过去了 → 又在看')
+  A.equal(T.statusText('en', { ended: false, lastAction: fixture.lastAction }), 'Clicking “Send”', '样例回包')
+  A.equal(T.stepCount(11, 17), 6)
+  A.equal(T.stepCount(null, 17), null, '基数不知道 → 不编步数')
+  A.equal(T.stepCount(20, 17), null)
+  A.equal(T.doneText('zh', 6), '已完成 · 6 步')
+  A.equal(T.doneText('en', 6), 'Done · 6 steps')
+  A.equal(T.doneText('en', 1), 'Done · 1 step')
+  A.equal(T.doneText('zh', null), '已完成')
+  A.equal(T.doneText('en', null), 'Done')
+  const a = { x: 0, y: 0 }
+  const b = { x: 1, y: 0.5 }
+  A.deepEqual(T.tweenPoint(a, b, 0), a)
+  A.deepEqual(T.tweenPoint(a, b, 1), b)
+  A.deepEqual(T.tweenPoint(a, b, 7), b, '超时也停在终点')
+  const mid = T.tweenPoint(a, b, 0.5)
+  A.ok(mid.x > 0.5 && mid.x < 1, `缓出:一半时间应已过半程,得到 ${mid.x}`)
+  A.deepEqual(T.fracPoint({ x: 1.5, y: -2 }), { x: 1, y: 0 }, '比例夹到 0..1')
+  A.equal(T.fracPoint({ x: 'a', y: 1 }), null)
+  A.equal(T.fracPoint(undefined), null)
+  A.deepEqual(T.fracPoint(fixture.cursor), fixture.cursor)
+  A.deepEqual(T.overlayPx({ x: 0.5, y: 0.5 }, 800, 600, 0.5, 10, 20), { x: 210, y: 170 }, '光标位置 = 比例 × 画面像素 × 倍率 + 平移')
+}
+
+// ── 挂载:新回包 → 光标、环、状态句、停止;宿主状态说结束 → overlay-turn 只发一次、「已完成 · N 步」──
+const findAll = (n, pred, out = []) => { if (pred(n)) out.push(n); (n.children || []).forEach((c) => findAll(c, pred, out)); return out }
+const byClass = (n, cls) => findAll(n, (x) => typeof x.className === 'string' && x.className.split(' ').includes(cls))
+const spyRings = () => {
+  const made = []
+  const orig = globalThis.document.createElement
+  globalThis.document.createElement = (tag) => { const n = orig(tag); made.push(n); return n }
+  return { rings: () => made.filter((n) => n.className === 'cu-live-ring'), restore: () => { globalThis.document.createElement = orig } }
+}
+{
+  const RUN = fixture.runId
+  const reqs = []
+  const stops = []
+  const subs = []
+  let running = true
+  let stoppingNow = false // 宿主的停止请求进行中:phaseOf 回 { phase: 'idle', runId: 原来那个 }
+  const st = (live, sessionId) => (live && stoppingNow
+    ? { phase: 'idle', runId: RUN, sessionId: 's1', since: 0, textChars: 0, reasoningChars: 0 }
+    : live
+    ? { phase: 'tool', tool: 'act_ui', toolStage: 'exec', runId: RUN, sessionId: 's1', since: 0, textChars: 0, reasoningChars: 0 }
+    : { phase: 'idle', runId: null, sessionId, since: 0, textChars: 0, reasoningChars: 0 })
+  const tangu = {
+    request: async (engine, path, opts) => { reqs.push({ engine, path, body: opts && opts.body }); return { ok: true } },
+    stop: async (arg) => { stops.push(arg); return true },
+    // 新宿主(契约 §2.3):认 { runId }
+    agentStatus: (arg) => {
+      if (arg && typeof arg === 'object') return st(running && arg.runId === RUN, null)
+      return st(running && (arg === undefined || arg === 's1'), arg === undefined ? 's1' : arg)
+    },
+    subscribeAgentStatus: (cb, arg) => { const s = { cb, arg }; subs.push(s); return () => { const i = subs.indexOf(s); if (i >= 0) subs.splice(i, 1) } },
+  }
+  const views2 = []
+  const ctx2 = { registerView: (v) => views2.push(v), getLocale: () => 'en', tangu }
+  const disposeTop = new Function('ctx', src)(ctx2)
+  A.equal(typeof disposeTop, 'function', 'setup 必须交回顶层的拆除函数(停用 / 重载时收观察器和订阅)')
+  A.ok(subs.some((s) => s.arg === undefined), '主窗里应订阅主区会话的状态(没视图开着也要收尾)')
+
+  let reply2 = { active: true, windowId: 4211, app: 'Chatter', ageMs: 50, jpegBase64: 'AAAA', width: 800, height: 524, frameSeq: 1,
+    runId: 'run_prev', turnActive: false, actionCount: 11, lastAction: { kind: 'click', seq: 11, ageMs: 9000 } }
+  globalThis.window = { tangu: { computerUseLiveView: async (o) => {
+    if (o && o.image === false) { const { jpegBase64, width, height, ...rest } = reply2; return rest }
+    return reply2
+  } } }
+  // 旧版插件在这扇窗里留下的同名样式表:升级 / 重载后必须换成新的,否则新节点全没样式
+  const oldStyle = globalThis.document.getElementById('cu-live-style')
+  A.ok(oldStyle, '前面的挂载应已插入样式表')
+  oldStyle.textContent = '.cu-live{color:red}'
+  const host2 = mkNode('div')
+  const disposeView = views2[0].mount(host2)
+  A.ok(globalThis.document.getElementById('cu-live-style').textContent.includes('.cu-live-cur'), '旧样式表必须被换成新版')
+  const root2 = () => host2.children[0]
+  root2().children[1].clientWidth = 400
+  root2().children[1].clientHeight = 300
+  await sleep(T.TICK_MS + 80)
+  const ringSpy = spyRings()
+  // 这一轮开始:样例回包,光标在 (0.2, 0.3),刚点了「Send」
+  reply2 = { ...fixture, jpegBase64: 'BBBB', frameSeq: 2, actionCount: 12, cursor: { x: 0.2, y: 0.3 }, lastAction: { ...fixture.lastAction, seq: 12, ageMs: 100 } }
+  await sleep(T.TICK_MS * 2 + 80)
+  const cur = byClass(root2(), 'cu-live-cur')[0]
+  A.ok(cur && cur.style.display === 'block', '新回包带 cursor → 画光标')
+  // 800x524 塞进 400x300 → 画布 400x262、倍率 0.5;光标尖端对准 (0.2·800·0.5, 0.3·524·0.5)
+  // 尖端(箭头朝左上)在 18px 盒子的 (1.45,1.45):落点减掉它,箭尖才正好压在落点上
+  A.equal(cur.style.transform, 'translate(78.55px, 77.15px)', '光标位置必须按取景换算(垫片里没有 rAF → 直接到位)')
+  A.ok(/rotate\(225\)/.test(cur.innerHTML) && /M10\.48 1\.44Q14 0/.test(cur.innerHTML), '画面里的光标和屏上叠层是同一支箭头(尖端朝左上)')
+  A.equal(byClass(root2(), 'cu-live-status')[0].textContent, 'Clicking “Send”', '头部状态句(英文界面)')
+  A.ok(ringSpy.rings().length >= 1, 'seq 变了且是点击 → 放一圈环')
+  const stopBtn = byClass(root2(), 'cu-live-stop')[0]
+  A.ok(stopBtn.className.includes('on'), '有 ctx.tangu.stop 且知道 runId → 露出停止')
+  A.ok(subs.some((s) => s.arg && s.arg.runId === RUN), '新宿主上应对这一轮单独订阅 { runId } 状态')
+  stopBtn.fire('click')
+  await sleep(10)
+  A.deepEqual(stops, [{ runId: RUN }], '停止必须带这一轮的 runId(绝不去停别的)')
+  A.equal(stopBtn.disabled, true, '停止发出去以后先禁用,别连发')
+  // 评审第 1 条:停止请求进行中,宿主回同一个 runId 的 idle —— 那是「停止中」,不是结束
+  {
+    const turnsNow = () => reqs.filter((r) => r.path === '/overlay-turn').length
+    stoppingNow = true
+    subs.filter((s) => s.arg && s.arg.runId === RUN).forEach((s) => s.cb(st(true, null)))
+    await sleep(T.TICK_MS * 2 + 80)
+    A.equal(turnsNow(), 0, '停止中(同一个 runId 的 idle)不许发 /overlay-turn')
+    A.ok(!byClass(root2(), 'cu-live-badge')[0].className.includes('on'), '停止中不许标「已完成」')
+    A.ok(stopBtn.className.includes('on') && stopBtn.disabled === true, '停止中:停止按钮留着、保持禁用')
+    // 停止没成:这一轮又回到在跑 → 恢复成进行中,按钮还给用户
+    stoppingNow = false
+    subs.filter((s) => s.arg && s.arg.runId === RUN).forEach((s) => s.cb(st(true, null)))
+    await sleep(T.TICK_MS * 2 + 80)
+    A.equal(turnsNow(), 0, '停止没成、又在跑:仍不收尾')
+    A.ok(stopBtn.className.includes('on') && stopBtn.disabled === false, '停止没成、又在跑:停止按钮重新可按')
+    A.equal(byClass(root2(), 'cu-live-status')[0].textContent, 'Clicking “Send”', '停止没成:状态句还是进行中')
+  }
+
+  // 静止帧(unchanged、不带协议 20 的字段)不许把光标和状态句闪没
+  {
+    const keep = reply2
+    reply2 = { active: true, windowId: 4211, app: 'Chatter', ageMs: 60, unchanged: true, frameSeq: 2 }
+    await sleep(T.TICK_MS + 80)
+    A.equal(byClass(root2(), 'cu-live-status')[0].textContent, 'Clicking “Send”', 'unchanged 回包没带字段时保留状态句')
+    A.equal(byClass(root2(), 'cu-live-cur')[0].style.display, 'block', 'unchanged 回包没带字段时保留光标')
+    reply2 = keep
+  }
+
+  // 双击 → 两圈
+  const before2 = ringSpy.rings().length
+  reply2 = { ...reply2, frameSeq: 3, actionCount: 17, lastAction: { kind: 'doubleClick', seq: 17, ageMs: 50, x: 0.5, y: 0.5 } }
+  await sleep(T.TICK_MS + 80 + 150 + 60)
+  A.equal(ringSpy.rings().length - before2, 2, '双击放两圈')
+  ringSpy.restore()
+
+  // 宿主状态说这一轮结束 → overlay-turn 发一次,带 runId
+  running = false
+  subs.filter((s) => s.arg && s.arg.runId === RUN).forEach((s) => s.cb(st(false, null)))
+  await sleep(T.TICK_MS + 80)
+  const turns = () => reqs.filter((r) => r.path === '/overlay-turn')
+  A.equal(turns().length, 1, '这一轮结束只发一次 /overlay-turn')
+  A.equal(turns()[0].engine, 'computer-use')
+  A.deepEqual(turns()[0].body, routes.overlayTurn.body, '/overlay-turn 的体必须照 routes.v1.json(phase:end + runId)')
+  A.equal(byClass(root2(), 'cu-live-status')[0].textContent, 'Ended')
+  A.equal(byClass(root2(), 'cu-live-badge')[0].textContent, 'Done · 6 steps', '步数 = 结束时计数 − 这一轮之前看到的计数(17 − 11)')
+  A.ok(byClass(root2(), 'cu-live-veil')[0].className.includes('on'), '结束后最后一帧盖一层底色')
+  A.ok(!stopBtn.className.includes('on'), '结束后收起停止')
+  subs.forEach((s) => s.cb(st(false, null)))
+  await sleep(T.TICK_MS * 2 + 80)
+  A.equal(turns().length, 1, '同一个 runId 绝不重发')
+
+  // 旧回包(没有协议 20 的字段)→ 叠层全收,头部照旧,不报错
+  reply2 = { active: true, windowId: 4211, app: 'Chatter', ageMs: 50, jpegBase64: 'CCCC', width: 800, height: 524, frameSeq: 4 }
+  await sleep(T.TICK_MS + 80)
+  A.equal(byClass(root2(), 'cu-live-status')[0].textContent, '', '旧回包:没有状态句')
+  A.equal(byClass(root2(), 'cu-live-cur')[0].style.display, 'none', '旧回包:不画光标')
+  A.ok(!byClass(root2(), 'cu-live-badge')[0].className.includes('on'), '旧回包:没有结束态')
+  disposeView()
+  disposeTop()
+  A.equal(subs.length, 0, '停用后顶层的状态订阅必须全部退掉')
+}
+
+// ── 旧宿主:agentStatus 不认 { runId },把它当会话 id、回一个 idle —— 绝不能据此判「结束」──
+{
+  const reqs = []
+  let mainRun = null // 主区会话正在跑哪一轮
+  const tangu = {
+    request: async (engine, path, opts) => { reqs.push({ path, body: opts && opts.body }); return { ok: true } },
+    agentStatus: (sid) => {
+      // 照旧宿主的 agentStatusOf:参数原样当 sessionId 回来
+      if (sid && typeof sid === 'object') return { phase: 'idle', runId: null, sessionId: sid, since: 0, textChars: 0, reasoningChars: 0 }
+      const id = sid === undefined ? 's9' : sid
+      return id === 's9' && mainRun
+        ? { phase: 'tool', tool: 'act_ui', runId: mainRun, sessionId: 's9', since: 0, textChars: 0, reasoningChars: 0 }
+        : { phase: 'idle', runId: null, sessionId: id, since: 0, textChars: 0, reasoningChars: 0 }
+    },
+    subscribeAgentStatus: () => () => {},
+  }
+  const views3 = []
+  const disposeTop = new Function('ctx', src)({ registerView: (v) => views3.push(v), tangu })
+  // 这一轮不在主区会话里(主区没在跑它):状态拿不到 → 只能交给 helper
+  let reply3 = { ...fixture, runId: 'run_side', actionCount: 5, turnActive: true }
+  globalThis.window = { tangu: { computerUseLiveView: async () => reply3 } }
+  const host3 = mkNode('div')
+  const disposeView = views3[0].mount(host3)
+  await sleep(T.TICK_MS * 3 + 80)
+  A.equal(reqs.filter((r) => r.path === '/overlay-turn').length, 0, '旧宿主回的 idle 不能当成「这一轮结束了」')
+  A.ok(!byClass(host3.children[0], 'cu-live-badge')[0].className.includes('on'), '旧宿主上 helper 还说在进行 → 不许标已完成')
+  reply3 = { ...reply3, turnActive: false }
+  await sleep(T.TICK_MS + 80)
+  A.ok(byClass(host3.children[0], 'cu-live-badge')[0].className.includes('on'), 'helper 说这一轮结束了(状态通道没表态)→ 标已完成')
+  A.equal(reqs.filter((r) => r.path === '/overlay-turn').length, 0, 'helper 自己结束的不用再发 end')
+  // 主区会话里跑的那一轮:按会话 id 盯着,不跑了就发 end(一次)
+  mainRun = 'run_main'
+  reply3 = { ...fixture, runId: 'run_main', actionCount: 9, turnActive: true }
+  await sleep(T.TICK_MS + 80)
+  A.equal(reqs.filter((r) => r.path === '/overlay-turn').length, 0, '还在跑')
+  mainRun = null
+  await sleep(T.TICK_MS * 2 + 80)
+  const ends = reqs.filter((r) => r.path === '/overlay-turn')
+  A.equal(ends.length, 1, '旧宿主:按会话 id 看到它不跑了 → 发一次 end')
+  A.deepEqual(ends[0].body, { phase: 'end', runId: 'run_main' })
+  disposeView()
+  disposeTop()
+}
+
+// ── 评审第 6 条:没有视图开着时,顶层记下一轮在跑就对它建定向订阅 —— 主区切去别的会话,那一轮结束也要及时发 end ──
+for (const legacy of [false, true]) {
+  const reqs = []
+  const subs = []
+  const sessions = { sA: null, sB: null, sC: null } // 会话 → 正在跑的 runId
+  const finished = {}                               // 会话 → 刚结束的 runId(按会话取时回 done)
+  let mainSid = 'sA'
+  let stopping = null                               // 正在停止的 runId
+  const sessionStatus = (sid) => {
+    const rid = sessions[sid]
+    if (rid && stopping === rid) return { phase: 'idle', runId: rid, sessionId: sid, since: 0, textChars: 0, reasoningChars: 0 }
+    if (rid) return { phase: 'tool', tool: 'act_ui', toolStage: 'exec', runId: rid, sessionId: sid, since: 0, textChars: 0, reasoningChars: 0 }
+    if (finished[sid]) return { phase: 'done', runId: finished[sid], sessionId: sid, since: 0, textChars: 0, reasoningChars: 0 }
+    return { phase: 'idle', runId: null, sessionId: sid, since: 0, textChars: 0, reasoningChars: 0 }
+  }
+  const statusFor = (arg) => {
+    if (arg && typeof arg === 'object') {
+      if (legacy) return { phase: 'idle', runId: null, sessionId: arg, since: 0, textChars: 0, reasoningChars: 0 } // 旧宿主:参数原样当会话 id
+      const sid = Object.keys(sessions).find((k) => sessions[k] === arg.runId)
+      return sid ? sessionStatus(sid) : { phase: 'idle', runId: null, sessionId: null, since: 0, textChars: 0, reasoningChars: 0 }
+    }
+    return sessionStatus(arg === undefined ? mainSid : arg)
+  }
+  const tangu = {
+    request: async (engine, path, opts) => { reqs.push({ path, body: opts && opts.body }); return { ok: true } },
+    agentStatus: statusFor,
+    subscribeAgentStatus: (cb, arg) => { const s = { cb, arg }; subs.push(s); return () => { const i = subs.indexOf(s); if (i >= 0) subs.splice(i, 1) } },
+  }
+  const dispose = new Function('ctx', src)({ registerView() {}, tangu })
+  const fire = (pred) => subs.filter(pred).forEach((s) => s.cb(statusFor(s.arg)))
+  const mainSubs = (s) => s.arg === undefined
+  const directed = (rid, sid) => (s) => (legacy ? s.arg === sid : s.arg && typeof s.arg === 'object' && s.arg.runId === rid)
+  const ends = () => reqs.filter((r) => r.path === '/overlay-turn').map((r) => r.body.runId)
+  const tag = legacy ? '旧宿主' : '新宿主'
+  // A 会话里跑 RA、B 会话里跑 RB:主区先后看到两轮,两轮都要各自定向订阅
+  sessions.sA = 'RA'
+  fire(mainSubs)
+  mainSid = 'sB'
+  sessions.sB = 'RB'
+  fire(mainSubs)
+  A.ok(subs.some(directed('RA', 'sA')), `${tag}:顶层看到 RA 在跑就对它定向订阅`)
+  A.ok(subs.some(directed('RB', 'sB')), `${tag}:同时在跑的第二轮也要盯住(不止一个)`)
+  // 主区切去空闲的 C;A 停止中 → 不收尾
+  mainSid = 'sC'
+  fire(mainSubs)
+  stopping = 'RA'
+  fire(directed('RA', 'sA'))
+  A.deepEqual(ends(), [], `${tag}:停止中(同一个 runId 的 idle)不收尾`)
+  // A 真结束:主区(在 C)不会变,只有定向订阅报上来 → 发 end,并退订
+  stopping = null
+  sessions.sA = null
+  finished.sA = 'RA'
+  fire(directed('RA', 'sA'))
+  A.deepEqual(ends(), ['RA'], `${tag}:主区在别的会话时,RA 结束也要及时发 end`)
+  A.ok(!subs.some(directed('RA', 'sA')), `${tag}:结束后退掉 RA 的定向订阅`)
+  A.ok(subs.some(directed('RB', 'sB')), `${tag}:RB 还在跑,它的订阅留着`)
+  sessions.sB = null
+  finished.sB = 'RB'
+  fire(directed('RB', 'sB'))
+  A.deepEqual(ends(), ['RA', 'RB'], `${tag}:RB 结束也各自发 end`)
+  // 卸载:还没收尾的那几轮的订阅一并退掉
+  sessions.sA = 'RA2'
+  finished.sA = undefined
+  mainSid = 'sA'
+  fire(mainSubs)
+  A.ok(subs.some(directed('RA2', 'sA')), `${tag}:新一轮照样订阅`)
+  // 停止中以后真结束,但宿主不回调(按会话订阅时两份状态的 statusKey 一样,不含 runId)→ 靠停止中的轮询收尾
+  stopping = 'RA2'
+  fire(directed('RA2', 'sA'))
+  sessions.sA = null
+  stopping = null
+  await sleep(T.STOP_POLL_MS + 300)
+  A.deepEqual(ends(), ['RA', 'RB', 'RA2'], `${tag}:停止中的一轮真结束了、宿主没回调,也要靠轮询发 end`)
+  sessions.sA = 'RA3'
+  fire(mainSubs)
+  dispose()
+  A.equal(subs.length, 0, `${tag}:停用后顶层订阅(含定向的)全部退掉`)
+}
+
+// ══ 过程行的句子(ctx.registerToolLabel,契约 §2.4 / §3 卡 8)══
+{
+  // ① 认领的名单 == 引擎半身真正注册的工具(src/tools.ts 的 SPECS);新加一个工具忘了认领,这里红
+  const toolsSrc = readFileSync(new URL('./src/tools.ts', import.meta.url), 'utf8')
+  const specs = toolsSrc.slice(toolsSrc.indexOf('const SPECS'), toolsSrc.indexOf('];', toolsSrc.indexOf('const SPECS')))
+  const specNames = [...specs.matchAll(/^\s+name: '([a-z_]+)'/gm)].map((m) => m[1]).sort()
+  A.ok(specNames.length >= 13, `SPECS 里应读出全部工具名(读到 ${specNames.length} 个)`)
+  A.deepEqual([...T.CU_TOOLS].sort(), specNames, 'registerToolLabel 认领的工具必须正好是 src/tools.ts 的 SPECS')
+
+  // ② 格式金丝雀:句子靠的是 vendor 的结果文字。vendor 升级改了这些模板,这里先红,而不是句子悄悄降级
+  const bridge = readFileSync(new URL('./src/vendor/bridge.ts', import.meta.url), 'utf8')
+  const outline = readFileSync(new URL('./src/vendor/outline.ts', import.meta.url), 'utf8')
+  const viewTs = readFileSync(new URL('./src/vendor/view.ts', import.meta.url), 'utf8')
+  const jevRun = readFileSync(new URL('./src/jevRun.ts', import.meta.url), 'utf8')
+  const fgNote = readFileSync(new URL('./src/foregroundNote.ts', import.meta.url), 'utf8')
+  const toolsTs = readFileSync(new URL('./src/tools.ts', import.meta.url), 'utf8')
+  const onboarding = readFileSync(new URL('./src/onboarding.ts', import.meta.url), 'utf8')
+  for (const [file, text, frag] of [
+    ['bridge.ts', bridge, '`Attempted ${executedActions.length} UI action${executedActions.length === 1 ? "" : "s"} in ${target.appName} — ${target.windowTitle}.`'],
+    ['bridge.ts', bridge, 'Returned state ${capture.capture.stateId}.'],
+    ['bridge.ts', bridge, '`Stopped UI action sequence${execution.stoppedAt !== undefined ? ` at action ${execution.stoppedAt + 1}` : ""}'],
+    ['bridge.ts', bridge, '`Observed ${mode} ${captureResult.target.windowRef ? `${captureResult.target.windowRef} ` : ""}${captureResult.target.appName} — ${captureResult.target.windowTitle}.'],
+    ['bridge.ts', bridge, 'Outline (${folded.nodeCount} nodes, stateId ${result.capture.stateId}'],
+    ['bridge.ts', bridge, 'Changes (${transition!.changedNodeCount}, ${base!.stateId} → ${result.capture.stateId}):'],
+    ['bridge.ts', bridge, '`- ${window.windowRef} ${window.kind} ${window.app} pid ${window.pid} — '],
+    ['bridge.ts', bridge, '"No roots matched the supplied filters."'],
+    ['bridge.ts', bridge, '`${match.ref} ${match.role || "Unknown"} ${JSON.stringify(match.label || "(unlabeled)")}'],
+    ['outline.ts', outline, '`${"  ".repeat(depth)}${node.ref} ${displayName(node)}'],
+    ['outline.ts', outline, '${label ? ` ${JSON.stringify(label)}` : ""}'],
+    ['view.ts', viewTs, '`+ ${change.ref}${change.parent ? ` under ${change.parent}` : ""} ${JSON.stringify(label(change.node))}`'],
+    ['bridge.ts', bridge, '`The UI action sequence stopped: ${deliveryFailure.code}: ${deliveryFailure.message}. Its source root ${target.appName} — ${target.windowTitle}'],
+    ['bridge.ts', bridge, '`The action was delivered, and its source root ${target.appName} — ${target.windowTitle}'],
+    ['bridge.ts', bridge, '`${tool} completed for ${root.ref} ${JSON.stringify(browser.title)}. State ${browser.snapshotId}.'],
+    ['bridge.ts', bridge, '`Timed out after ${timeoutMs}ms waiting for condition.`'],
+    ['bridge.ts', bridge, 'return `${node.ref} ${node.role}${node.subrole ? `/${node.subrole}` : ""}${identifier} ${JSON.stringify(label)}'],
+    ['bridge.ts', bridge, 'node.identifier ? ` id=${JSON.stringify(node.identifier)}` : ""'],
+    ['jevRun.ts', jevRun, 'requestedSteps: params.steps.length'],
+    // 评审第 2 / 3 / 4 条依赖的模板
+    ['foregroundNote.ts', fgNote, 'return `[execution] ${JSON.stringify(summary)}\\n'],
+    ['foregroundNote.ts', fgNote, 'earlierPressTookEffect: exec.earlierPressTookEffect || undefined,'],
+    ['foregroundNote.ts', fgNote, "error: s.error ? { code: s.error.code, message: s.error.message?.slice(0, 384) } : undefined,"],
+    ['bridge.ts', bridge, 'message: `The action was delivered but its postcondition was not satisfied within ${timeoutMs}ms.`'],
+    ['bridge.ts', bridge, 'Nothing was sent to ${target.appName} — ${target.windowTitle}: the page has changed since this element was last pressed. Returned state ${capture.capture.stateId}.'],
+    ['bridge.ts', bridge, 'Found ${ranked.totalMatches} outline match${ranked.totalMatches === 1 ? "" : "es"}; returned ${matches.length}.'],
+    ['bridge.ts', bridge, 'Found ${totalMatches} matching root${totalMatches === 1 ? "" : "s"}; returned ${windows.length}'],
+    ['bridge.ts', bridge, '"No roots are currently visible to tangu-computer-use."'],
+    ['bridge.ts', bridge, '(gone ? "Condition disappeared." : "Condition appeared.")'],
+    ['bridge.ts', bridge, 'text: `Evaluation value: ${JSON.stringify(result.value)}`'],
+    ['bridge.ts', bridge, 'text: `${formatOutlineNodeLabel(target)}\\npath: ${outlineNodePath(target)}'],
+    ['bridge.ts', bridge, 'Use stateId ${result.capture.stateId} for subsequent actions and queries.'],
+    ['view.ts', viewTs, 'return `~ ${change.ref} (${change.path.join(" > ")}) ${[fields, supplemental].filter(Boolean).join(", ") || "changed"}`'],
+    ['view.ts', viewTs, 'return node.title || node.description || node.value || node.identifier'],
+    ['tools.ts', toolsTs, "return 'Jev is disabled or unavailable on this platform.'"],
+    ['tools.ts', toolsTs, '`Computer Use is not ready: ${e?.message || e}`'],
+    ['tools.ts', toolsTs, "return [installNote, guidance ?? fallback].filter(Boolean).join('\\n');"],
+    ['tools.ts', toolsTs, 'const how = !front ? `Opened ${name} in the background; it did not take the foreground.`'],
+    ['tools.ts', toolsTs, "return 'ensure_app (background launch) is macOS-only."],
+    ['onboarding.ts', onboarding, 'return `Computer Use still needs macOS ${names} for'],
+    ['onboarding.ts', onboarding, "'Installed the Computer Use desktop helper automatically.'"],
+    ['onboarding.ts', onboarding, "'Updated the Computer Use desktop helper to match this plugin version.'"],
+    ['onboarding.ts', onboarding, 'return `Could not install the Computer Use helper automatically (${detail}). Run \\`tangu computer-use setup\\` in a terminal.`;'],
+    ['jevRun.ts', jevRun, "report(abort.aborted ? 'cancelled' : 'stopped'"],
+  ]) A.ok(text.includes(frag), `vendor 结果文字的模板变了(${file}):${frag.slice(0, 60)}… —— 同步改 main.js 的解析与 harness/fixtures/tool-calls.json`)
+
+  // ③ 表驱动:样例调用(结果照真实模板写)× 进行中 / 完成 / 出错 × zh / en
+  const { calls } = JSON.parse(readFileSync(new URL('./harness/fixtures/tool-calls.json', import.meta.url), 'utf8'))
+  const byId = Object.fromEntries(calls.map((c, i) => [c.id, i]))
+  const icons = new Map([['Chatter', 'com.example.chatter']])
+  const run = (id, phase, locale, iconOf = (a) => icons.get(a)) => {
+    const i = byId[id]
+    const c = calls[i]
+    const earlier = calls.slice(0, i).map(({ tool, args, result }) => ({ tool, args, result }))
+    return T.describeCall({ tool: c.tool, args: c.args, result: phase === 'error' ? c.errorResult : phase === 'running' ? undefined : c.result, phase, locale, earlier }, iconOf)
+  }
+  const R = 'running'
+  const D = 'done'
+  const E = 'error'
+  const table = [
+    // [样例, phase, zh, en]
+    ['find', R, '正在查找 Chatter 的窗口', 'Finding Chatter windows'],
+    ['find', D, '已找到 Chatter 的窗口', 'Found Chatter windows'],
+    ['find', E, '没能找到 Chatter 的窗口', "Couldn't find Chatter windows"],
+    ['findNone', D, '没有找到 Calculator 的窗口', 'Found no Calculator windows'],
+    ['observe', R, '正在查看 Chatter', 'Looking at Chatter'],
+    ['observe', D, '已查看 Chatter', 'Looked at Chatter'],
+    ['observe', E, '没能查看 Chatter', "Couldn't look at Chatter"],
+    ['observeFront', R, '正在查看屏幕', 'Looking at the screen'],
+    ['observeFront', D, '已查看微信', 'Looked at 微信'],
+    ['clickRow', R, '正在 Chatter 中点击「Zhang San」', 'Clicking “Zhang San” in Chatter'],
+    ['clickRow', D, '已在 Chatter 中点击「Zhang San」', 'Clicked “Zhang San” in Chatter'],
+    ['setText', R, '正在 Chatter 中输入「See you tomorrow」', 'Typing “See you tomorrow” in Chatter'],
+    ['setText', D, '已在 Chatter 中输入「See you tomorrow」', 'Typed “See you tomorrow” in Chatter'],
+    // 控件名在差量结果里没有:沿 s3 → s2 → s1 找回 observe 的大纲
+    ['pressSend', R, '正在 Chatter 中点击「Send」', 'Clicking “Send” in Chatter'],
+    ['pressSend', D, '已在 Chatter 中点击「Send」', 'Clicked “Send” in Chatter'],
+    ['pressSend', E, '没能在 Chatter 中点击「Send」', "Couldn't click “Send” in Chatter"],
+    // 批量:进行中说第一步;做完说最后一步并带步数(步数取结果里的 Attempted N)
+    ['batch', R, '正在 Chatter 中点击「Message」', 'Clicking “Message” in Chatter'],
+    ['batch', D, '已在 Chatter 中按下 Return(共 3 步)', 'Pressed Return in Chatter (3 steps)'],
+    ['batch', E, '没能在 Chatter 中完成这些操作', "Couldn't finish the actions in Chatter"],
+    // 中途停下:结果是正常返回(phase done),但不许说「已…」;卡住的那步没有名字(只有角色)→ 不带引号
+    ['stopped', R, '正在 Chatter 中点击「Send」', 'Clicking “Send” in Chatter'],
+    ['stopped', D, '没能在 Chatter 中点击(第 2 步,共 2 步)', "Couldn't click in Chatter (step 2 of 2)"],
+    // 动作发出去以后窗口没了:「The UI action sequence stopped」= 没成;「The action was delivered」= 成了。App 名从 source root 拿
+    ['lost', D, '没能在 Chatter 中点击「Send」', "Couldn't click “Send” in Chatter"],
+    ['delivered', D, '已在 Chatter 中按下 Cmd+W(共 2 步)', 'Pressed Cmd+W in Chatter (2 steps)'],
+    ['browserAct', D, '已点击「Sign in」', 'Clicked “Sign in”'],
+    ['waitTimeout', D, '没能在 Chatter 中等到「Read」', "Couldn't wait for “Read” in Chatter"],
+    ['jevPreview', D, '已在 Chatter 中定位「Send」', 'Located “Send” in Chatter'],
+    ['jevPreview', E, '没能在 Chatter 中定位「Send」', "Couldn't locate “Send” in Chatter"],
+    ['search', R, '正在 Chatter 中查找「Send」', 'Searching for “Send” in Chatter'],
+    ['inspect', D, '已在 Chatter 中查看「Send」', 'Looked at “Send” in Chatter'],
+    ['expand', R, '正在 Chatter 中查看界面元素', 'Looking at an element in Chatter'],
+    ['scroll', D, '已在 Chatter 中滚动「Conversation」', 'Scrolled “Conversation” in Chatter'],
+    ['keys', D, '已在 Chatter 中按下 Cmd+A', 'Pressed Cmd+A in Chatter'],
+    ['rightClickXY', R, '正在 Chatter 中右键点击', 'Right-clicking in Chatter'],
+    ['doubleClick', D, '已在 Chatter 中双击「Zhang San」', 'Double-clicked “Zhang San” in Chatter'],
+    ['drag', R, '正在 Chatter 中拖动', 'Dragging in Chatter'],
+    ['move', D, '已在 Chatter 中移动指针', 'Moved the pointer in Chatter'],
+    ['clear', D, '已在 Chatter 中清空「Message」', 'Cleared “Message” in Chatter'],
+    ['waitFor', R, '正在 Chatter 中等待「Delivered」', 'Waiting for “Delivered” in Chatter'],
+    ['waitFor', D, '已在 Chatter 中等到「Delivered」', 'Waited for “Delivered” in Chatter'],
+    ['waitGone', R, '正在 Chatter 中等待「See you tomorrow」消失', 'Waiting for “See you tomorrow” to disappear in Chatter'],
+    ['readText', D, '已在 Chatter 中读取「See you tomorrow」', 'Read “See you tomorrow” in Chatter'],
+    ['readMore', R, '正在读取后续输出', 'Reading more of the output'],
+    ['jev', R, '正在 Chatter 中点击「Zhang San」', 'Clicking “Zhang San” in Chatter'],
+    ['jev', D, '已在 Chatter 中点击「Send」(共 3 步)', 'Clicked “Send” in Chatter (3 steps)'],
+    ['jevStopped', D, '没能在 Chatter 中点击「Pinned files」(第 2 步,共 2 步)', "Couldn't click “Pinned files” in Chatter (step 2 of 2)"],
+    ['ensure', R, '正在打开 Notes', 'Opening Notes'],
+    ['ensure', D, '已打开 Notes', 'Opened Notes'],
+    ['ensure', E, '没能打开 Notes', "Couldn't open Notes"],
+    ['wechatSend', D, '已在微信中点击「发送」', 'Clicked “发送” in 微信'],
+    ['launch', R, '正在打开 example.com', 'Opening example.com'],
+    ['navigate', D, '已打开 forum.example.org', 'Opened forum.example.org'],
+    ['evaluate', R, '正在读取网页内容', 'Reading the page'],
+    // 评审第 2 条:有 [execution] 摘要先看它 —— 执行器报了错就是没成,哪怕后面照样写着「Attempted N」
+    ['postcondition', D, '没能在 Chatter 中点击「Send」', "Couldn't click “Send” in Chatter"],
+    ['stepError', D, '没能在 Chatter 中点击「Send」(第 2 步,共 2 步)', "Couldn't click “Send” in Chatter (step 2 of 2)"],
+    // 投递了、效果没确认(didnt / unknown):句子说的是「点了」不是「点成了」
+    ['didnt', D, '已在 Chatter 中点击「Send」', 'Clicked “Send” in Chatter'],
+    // 评审第 4 条:差量里改了名 → 用新名字,不沿链取回旧的「Send」
+    ['pressRenamed', R, '正在 Chatter 中点击「Pause」', 'Clicking “Pause” in Chatter'],
+    // 评审第 3 条:没就绪时工具正常返回指导文字 —— 不许说「已…」
+    ['notReadyObserve', D, '没能查看屏幕', "Couldn't look at the screen"],
+    ['notReadyAct', D, '没能在 Chatter 中点击「Send」', "Couldn't click “Send” in Chatter"],
+    ['notReadyRead', D, '没能在 Chatter 中读取「See you tomorrow」', "Couldn't read “See you tomorrow” in Chatter"],
+  ]
+  const covered = new Set()
+  for (const [id, phase, zh, en] of table) {
+    A.ok(id in byId, `样例里没有 ${id}`)
+    covered.add(calls[byId[id]].tool)
+    for (const [locale, want] of [['zh', zh], ['en', en]]) {
+      const got = run(id, phase, locale)
+      A.ok(got && typeof got.text === 'string', `${id} / ${phase} / ${locale} 应给出句子`)
+      A.equal(got.text, want, `${id} / ${phase} / ${locale}`)
+      if (locale === 'en') A.ok(!/[㐀-鿿]/.test(got.text.replace(/[“”][^“”]*[“”]|微信/g, '')), `英文句子的骨架里不许有汉字:${got.text}`)
+    }
+  }
+  A.deepEqual([...covered].sort(), [...T.CU_TOOLS].sort(), '表驱动断言必须覆盖每一种工具')
+  // 认不出结果(没有做成的证据)→ 空,不替它报「已…」
+  A.equal(run('unknownDone', D, 'zh'), null, '结果里认不出做成没做成 → 空(宿主照旧显示)')
+  A.equal(run('earlierPress', D, 'zh'), null, '这次什么都没发(earlierPressTookEffect)→ 空:既不是「已点击」也不是「没能」')
+  A.equal(run('ensureNoWindow', D, 'zh'), null, '打开了但还没有窗口 → 空,不说「已打开」')
+  // 评审第 3 条:每个工具「做完」都要有自己的成功证据;指导文字 / 认不出的结果 → 出错句 / 空
+  {
+    const guide = 'Computer Use still needs macOS Accessibility and Screen Recording for "tangu-computer-use". Open System Settings → Privacy & Security. Ask the user to turn the switch on for tangu-computer-use, then retry — this is a system security setting, only the user can grant it.'
+    const notReadyLine = 'Updated the Computer Use desktop helper to match this plugin version.\nComputer Use is not ready: helper_not_running'
+    const cases = [
+      ['find_roots', { app: 'Chatter' }], ['observe_ui', {}], ['search_ui', { stateId: 's5', text: 'Send' }], ['expand_ui', { stateId: 's1', ref: '@e15' }],
+      ['inspect_ui', { stateId: 's5', ref: '@e14' }], ['read_text', { stateId: 's4', ref: '@e20' }], ['wait_for', { stateId: 's4', text: 'Delivered' }],
+      ['ensure_app', { app: 'Notes' }], ['launch_browser', { url: 'https://example.com' }], ['navigate_browser', { stateId: 'b1', url: 'https://example.com/x' }],
+      ['evaluate_browser', { stateId: 'b1', expression: '1' }], ['jev_ui', { root: '@r1', steps: [{ action: 'click', target: 'Send' }] }],
+    ]
+    for (const [tool, args] of cases) for (const res of [guide, notReadyLine, 'Jev is disabled or unavailable on this platform.']) {
+      const r = T.describeCall({ tool, args, result: res, phase: 'done', locale: 'zh', earlier: [] }, () => undefined)
+      A.ok(r && /^没能/.test(r.text), `${tool}:正常返回的指导文字必须说「没能…」,得到 ${r && r.text}`)
+    }
+    // 认不出的正常结果(不是指导、也没有该工具的成功模板)→ 空;read_text 回的是原文,没有模板,不在此列
+    for (const [tool, args] of cases) {
+      if (tool === 'read_text' || tool === 'jev_ui') continue
+      A.equal(T.describeCall({ tool, args, result: 'Something else entirely.', phase: 'done', locale: 'zh', earlier: [] }, () => undefined), null, `${tool}:认不出的结果 → 空`)
+    }
+    // 只认整段就是指导:读到的原文里恰好有这句话,不算
+    A.equal(T.describeCall({ tool: 'read_text', args: { ref: '@e2' }, result: 'Notes:\nComputer Use is not ready: blah', phase: 'done', locale: 'zh', earlier: [] }, () => undefined).text, '已读取文字')
+  }
+  // 全量快照:每条样例 × running / done / error × zh / en,和 harness 里那张句子列表是同一份数据
+  const expected = JSON.parse(readFileSync(new URL('./harness/fixtures/tool-labels.expected.json', import.meta.url), 'utf8')).labels
+  A.deepEqual(Object.keys(expected).sort(), Object.keys(byId).sort(), '快照要覆盖每一条样例调用')
+  const full = new Map(T.CU_TOOLS.map((t) => [t, new Set()]))
+  for (const id of Object.keys(byId)) {
+    for (const phase of [R, D, E]) for (const locale of ['zh', 'en']) {
+      const got = run(id, phase, locale)
+      A.equal(got ? got.text : null, expected[id][`${phase}.${locale}`], `快照 ${id} / ${phase} / ${locale}`)
+      if (got) full.get(calls[byId[id]].tool).add(`${phase}.${locale}`)
+    }
+  }
+  for (const [tool, seen] of full) A.equal(seen.size, 6, `${tool}:running / done / error × zh / en 都要有句子(只有 ${[...seen]})`)
+  // 图标:只在学到过「App 名 → bundleId」时给;ensure_app 直接用参数里的 bundleId
+  A.deepEqual(run('pressSend', D, 'zh').icon, { appBundleId: 'com.example.chatter' })
+  A.equal(run('wechatSend', D, 'zh').icon, undefined, '没学到过的 App 不给图标')
+  A.deepEqual(run('ensure', D, 'en', () => undefined).icon, { appBundleId: 'com.apple.Notes' })
+  A.equal(run('pressSend', D, 'zh', () => 'not a bundle id!').icon, undefined, '不像 bundleId 的不给')
+
+  // ④ 降级顺序:有 App 没控件名 →「正在 Chatter 中点击」;两样都没有 →「正在点击」;认不出动作 → 空
+  const one = (tool, args, earlier = [], phase = R, locale = 'zh', result) => T.describeCall({ tool, args, result, phase, locale, earlier }, () => undefined)
+  const press14 = { stateId: 'x1', actions: [{ action: 'press', ref: '@e14' }] }
+  A.equal(one('act_ui', press14).text, '正在点击', '跨消息(更早的调用不在 earlier 里)→ 不带 App 也不带名字')
+  A.equal(one('act_ui', press14, [], R, 'en').text, 'Clicking')
+  A.equal(one('act_ui', press14, [], D, 'zh', 'Attempted 1 UI action in Chatter — Main. Returned state x2.').text, '已在 Chatter 中点击', '做完了能从自己的结果拿到 App 名')
+  A.equal(one('act_ui', press14, [], D, 'en', 'Attempted 1 UI action in Chatter — Main. Returned state x2.').text, 'Clicked in Chatter')
+  const searchOnly = [{ tool: 'search_ui', args: { stateId: 'x1', text: 'Send' }, result: '@e14 AXButton "Send" [exact]\n  path: AXWindow ▸ AXButton "Send"' }]
+  A.equal(one('act_ui', press14, searchOnly).text, '正在点击「Send」', '只有同一个 state 的搜索结果:有名字、没有 App')
+  A.equal(one('act_ui', press14, searchOnly, R, 'en').text, 'Clicking “Send”')
+  // ⚠️别的 state 里同号的 @e 不算:号会重发,错名比没名更糟
+  const otherState = [{ tool: 'observe_ui', args: {}, result: 'Observed fused Chatter — Main. Returned the latest outline state.\n\nOutline (2 nodes, stateId x9):\n@e1 AXWindow "Main"\n  @e14 AXButton "Delete" {press}' }]
+  A.equal(one('act_ui', press14, otherState).text, '正在点击', '控件名只认拥有这个 stateId 的结果')
+  A.equal(one('act_ui', { stateId: 'x9', actions: [{ action: 'press', ref: '@e14' }] }, otherState).text, '正在 Chatter 中点击「Delete」')
+  A.equal(one('act_ui', { stateId: 'x9', actions: [{ action: 'press', ref: '@e1' }] }, otherState).text, '正在 Chatter 中点击「Main」', '@e1 不能匹配到 @e14 那行')
+  A.equal(one('act_ui', { stateId: 'x1', actions: [{ action: 'teleport' }] }), null, '认不出的动作 → 空,让宿主照旧显示')
+  // 评审第 5 条:stateId 归属只认结构化的行首模板 —— 控件标签 / read_text 的原文里恰好有「stateId x1」不算
+  const spoofLabel = [{ tool: 'observe_ui', args: {}, result: 'Observed fused Evil — Main. Returned the latest outline state.\n\nOutline (2 nodes, stateId x9):\n@e1 AXWindow "Main"\n  @e14 AXButton "stateId x1" {press}' }]
+  A.equal(one('act_ui', press14, spoofLabel).text, '正在点击', '控件标签里的「stateId x1」不能把这个结果认成 x1 的生产者')
+  const spoofRead = [{ tool: 'read_text', args: { stateId: 'x0', ref: '@e2' }, result: 'Use stateId x1 for subsequent actions and queries.\n@e14 AXButton "Delete"' }]
+  A.equal(one('act_ui', press14, spoofRead).text, '正在点击', 'read_text 读到的原文不能当成产出 state 的结果')
+  // 评审第 4 条:差量里的「~」行 —— title 改了取新名;description 改了 / 读不出 → 停,宁可不带名字;只改 value 照常往回找
+  const base14 = { tool: 'observe_ui', args: {}, result: 'Observed fused Chatter — Main. Returned the latest outline state.\n\nOutline (2 nodes, stateId x1):\n@e1 AXWindow "Main"\n  @e14 AXButton "Play" {press}' }
+  const diffTo = (line) => ({ tool: 'act_ui', args: { stateId: 'x1', actions: [{ action: 'press', ref: '@e1' }] }, result: `Attempted 1 UI action in Chatter — Main. Returned state x2.\n\nChanges (1, x1 → x2):\n${line}\nUse stateId x2 for subsequent actions and queries.` })
+  const press14b = { stateId: 'x2', actions: [{ action: 'press', ref: '@e14' }] }
+  A.equal(one('act_ui', press14b, [base14, diffTo('~ @e14 (@e1 > @e14) title="Pause"')]).text, '正在 Chatter 中点击「Pause」', '改了名 → 新名字')
+  A.equal(one('act_ui', press14b, [base14, diffTo('~ @e14 (@e1 > @e14) enabled=false, title=""')]).text, '正在 Chatter 中点击', 'title 清空 → 不带名字,不取回旧的「Play」')
+  A.equal(one('act_ui', press14b, [base14, diffTo('~ @e14 (@e1 > @e14) description="Now playing"')]).text, '正在 Chatter 中点击', 'description 改了 → 名字可能变了,停')
+  A.equal(one('act_ui', press14b, [base14, diffTo('~ @e14 (@e1 > @e14) value="title=\\"X\\""')]).text, '正在 Chatter 中点击「Play」', '只改 value(哪怕值里有「title=」)→ 照常往回找')
+  A.equal(one('act_ui', press14b, [base14, diffTo('~ @e14 (@e1 > @e14) selected=true, actions=["press"]')]).text, '正在 Chatter 中点击「Play」', '和名字无关的字段 → 照常往回找')
+  A.equal(one('act_ui', { stateId: 'x1', actions: [] }), null)
+  A.equal(one('act_ui', '{not json'), null, '参数不是 JSON → 空')
+  A.equal(one('act_ui', JSON.stringify(press14)).text, '正在点击', '参数是 JSON 字符串时照样解析')
+  A.equal(one('navigate_browser', { stateId: 'b1' }), null, '没有网址 → 空')
+  A.equal(one('ensure_app', {}), null, '没有 App → 空')
+  A.equal(one('some_other_tool', { x: 1 }), null, '不是本插件的工具 → 空')
+  // 输入的文字截到 24 字加省略号(按码点,不拆 emoji)
+  const long = one('act_ui', { stateId: 'x1', actions: [{ action: 'typeText', text: '明天见,记得带上那份已经打印好的合同和两把伞,还有充电器' }] })
+  A.equal(long.text, '正在输入「明天见,记得带上那份已经打印好的合同和两把伞,还…」')
+  A.equal(Array.from('明天见,记得带上那份已经打印好的合同和两把伞,还').length, 24)
+  A.equal(Array.from(T.tlClip('😀'.repeat(30))).length, 25, '按码点截:24 个 + 省略号')
+  A.equal(T.tlClip('  a \n\t b  '), 'a b', '收空白')
+  A.equal(T.keysText(['cmd', 'shift', 'z']), 'Cmd+Shift+Z')
+  A.equal(T.keysText(['cmd+a', 'delete']), 'Cmd+A, Delete')
+  A.equal(T.keysText(['return']), 'Return')
+  A.equal(T.joinZh(['已在', 'QQ', '音乐', '中']), '已在 QQ 音乐中')
+  // 绝不抛错:坏输入一律当没有
+  const junk = [null, undefined, 3, 'x', {}, { tool: 'act_ui' }, { tool: 'act_ui', args: null, earlier: 'nope' },
+    { tool: 'act_ui', args: { stateId: 5, actions: [null, 7, { action: 'press', ref: 9 }] }, result: 42, phase: 'done', earlier: [null, 1, { tool: 'observe_ui', result: {} }] },
+    { tool: 'jev_ui', args: { root: {}, steps: 'x' }, phase: 'done' }, { tool: 'jev_ui', args: { steps: [{ action: 'click' }] }, result: '{"status":"stopped","steps":"?"}', phase: 'done' },
+    { tool: 'find_roots', args: { app: 7 }, phase: 'done', result: null }, { tool: 'wait_for', args: { ref: '@e1', stateId: '(' }, phase: 'running', earlier: [{ result: 'stateId (' }] }]
+  for (const c of junk) { let r; A.doesNotThrow(() => { r = T.describeCall(c, () => undefined) }, `坏输入不许抛:${JSON.stringify(c)}`); A.ok(r === null || (r && typeof r.text === 'string' && r.text)) }
+
+  // ⑤ 注册:新宿主上认领全部工具,describe 包着 try —— 宿主传来的东西再怪也只回 undefined
+  const contributions = []
+  const ctxL = { registerView() {}, registerToolLabel: (def) => contributions.push(def) }
+  const disposeL = new Function('ctx', src)(ctxL)
+  A.equal(contributions.length, 1, '应登记一份 registerToolLabel')
+  A.deepEqual([...contributions[0].tool].sort(), [...T.CU_TOOLS].sort())
+  const T2 = globalThis.__CU_LIVE_TEST__
+  // 宿主把句子缓存着(只在 call / 阶段 / 语言 / earlier 变了才再问);图标表是后来学到的 → 靠 revision 让它重算
+  A.equal(typeof contributions[0].revision, 'function', '登记时带 revision(图标表的版本)')
+  const rev0 = contributions[0].revision()
+  T2.learnBundle('Chatter', 'com.example.chatter')
+  const rev1 = contributions[0].revision()
+  A.notEqual(rev1, rev0, '学到一条新的 App → bundleId:revision 必须变')
+  T2.learnBundle('Chatter', 'com.example.chatter')
+  A.equal(contributions[0].revision(), rev1, '同一条再学一遍:revision 不动(别让宿主白白重算)')
+  T2.learnBundle('Chatter', 'not a bundle id')
+  A.equal(contributions[0].revision(), rev1, '不合法的 bundleId 不收,revision 不动')
+  const viaHost = contributions[0].describe({ tool: 'observe_ui', args: { root: '@r1' }, phase: 'running', locale: 'en', earlier: [{ tool: 'find_roots', args: {}, result: calls[0].result }] })
+  A.deepEqual(viaHost, { text: 'Looking at Chatter', icon: { appBundleId: 'com.example.chatter' } }, '经宿主调用:图标来自实时画面学到的对应')
+  const evil = { get tool() { throw new Error('boom') } }
+  A.equal(contributions[0].describe(evil), undefined, 'describe 里抛错 → undefined(宿主照旧显示)')
+  A.equal(contributions[0].describe({ tool: 'act_ui', args: { actions: [{ action: '??' }] }, phase: 'running', locale: 'zh', earlier: [] }), undefined)
+  // 旧宿主:registerToolLabel 抛错也不能把插件弄坏
+  A.doesNotThrow(() => new Function('ctx', src)({ registerView() {}, registerToolLabel() { throw new Error('old host') } }))
+  if (typeof disposeL === 'function') disposeL()
+}
+
+// ══ 悬浮小画面(契约 §2.5,卡 7 的 C)══
+{
+  A.equal(T.pipStageHeight(800, 524, 264), 173, '264 宽、800×524 的窗口 ≈ 173')
+  A.equal(T.pipStageHeight(1080, 1920, 264), 300, '竖长的窗口夹到 300,不把小窗撑到半屏')
+  A.equal(T.pipStageHeight(2560, 600, 264), 96, '极宽的夹到 96')
+  A.equal(T.pipStageHeight(0, 0, 264), T.PIP_STAGE_DEFAULT, '量不到尺寸 → 缺省 173')
+  const pipCalls = []
+  let pipIsOpen = false
+  const bridge = {
+    open: async () => { pipCalls.push('open'); pipIsOpen = true; return true },
+    close: async () => { pipCalls.push('close'); pipIsOpen = false },
+    isOpen: async () => pipIsOpen,
+  }
+  const frame = { active: true, windowId: 4211, app: 'Chatter', bundleId: 'com.example.chatter', ageMs: 50, jpegBase64: 'AAAA', width: 800, height: 524, frameSeq: 1 }
+  const viewsP = []
+  const ctxP = { registerView: (v) => viewsP.push(v), getLocale: () => 'zh' }
+  const disposeP = new Function('ctx', src)(ctxP)
+  const btnOf = (host, cls) => byClass(host, cls)[0]
+  // 主区 / Desk:有桥 → 头部有「移到悬浮窗」;点了调 open(),开着时同一个按钮变「放回去」
+  globalThis.window = { tangu: { computerUseLiveView: async () => frame, computerUsePip: bridge } }
+  const hostM = mkNode('div')
+  const disposeM = viewsP[0].mount(hostM, { surface: 'main' })
+  await sleep(20)
+  const pipBtn = btnOf(hostM, 'cu-live-pip')
+  A.ok(pipBtn, '有 computerUsePip 桥 → 头部有「移到悬浮窗」')
+  A.ok(pipBtn.textContent.includes('移到悬浮窗') && pipBtn.attrs['aria-label'] === '移到悬浮窗')
+  A.equal(btnOf(hostM, 'cu-live-back'), undefined, '不在悬浮窗里就没有「放回去」那颗')
+  pipBtn.fire('click')
+  await sleep(20)
+  A.deepEqual(pipCalls, ['open'], '点「移到悬浮窗」→ open()')
+  A.ok(pipBtn.textContent.includes('放回去'), '悬浮窗开着 → 同一个按钮变「放回去」')
+  pipBtn.fire('click')
+  await sleep(20)
+  A.deepEqual(pipCalls, ['open', 'close'], '再点一下 → close()')
+  A.ok(pipBtn.textContent.includes('移到悬浮窗'))
+  disposeM()
+  // 网页 / 手机:没有这个桥 → 不画入口
+  globalThis.window = { tangu: { computerUseLiveView: async () => frame } }
+  const hostW = mkNode('div')
+  const disposeW = viewsP[0].mount(hostW)
+  await sleep(20)
+  A.equal(btnOf(hostW, 'cu-live-pip'), undefined, '没有 computerUsePip → 不画「移到悬浮窗」')
+  disposeW()
+  // 悬浮窗里:紧凑卡 —— 画面在上、一行说明在下,没有「移到悬浮窗」也没有自己的「放回去」(宿主画在窗顶),舞台高度按比例写死
+  globalThis.window = { tangu: { computerUseLiveView: async () => frame, computerUsePip: bridge } }
+  pipCalls.length = 0
+  const hostP = mkNode('div')
+  const disposePip = viewsP[0].mount(hostP, { surface: 'pip' })
+  const rootP = hostP.children[0]
+  A.ok(rootP.className.split(' ').includes('is-pip'), 'surface pip → 紧凑卡')
+  A.equal(rootP.children[0].className, 'cu-live-stage', '悬浮窗里画面在上')
+  A.ok(rootP.children[1].className.startsWith('cu-live-head'), '说明一行在下')
+  A.equal(rootP.children[0].style.height, '173px', '还没有画面时舞台先占 173')
+  rootP.children[0].clientWidth = 264
+  await sleep(T.TICK_MS + 40)
+  A.equal(rootP.children[0].style.height, '173px', '264 宽 × 800×524 → 173')
+  A.equal(btnOf(hostP, 'cu-live-pip'), undefined, '悬浮窗里不再给「移到悬浮窗」')
+  A.equal(btnOf(hostP, 'cu-live-back'), undefined, '悬浮窗里不画自己的「放回去」:宿主的拖动条上有')
+  const allText = (n) => (typeof n.textContent === 'string' ? n.textContent : '') + (Array.isArray(n.children) ? n.children.map(allText).join('') : '')
+  A.ok(!/放回去/.test(allText(rootP)), '紧凑卡里不出现「放回去」字样')
+  A.deepEqual(pipCalls, [], '挂载紧凑卡不碰悬浮窗的桥')
+  // 悬浮窗里不缩放:滚轮不被吃掉
+  let prevented = false
+  const vp = byClass(hostP, 'cu-live-viewport')[0]
+  vp.fire('wheel', { deltaY: -100, preventDefault() { prevented = true } })
+  A.equal(prevented, false, '悬浮窗里滚轮不缩放、不拦')
+  disposePip()
+  if (typeof disposeP === 'function') disposeP()
 }
 
 console.log('✅ computer-use 插件自检通过')
