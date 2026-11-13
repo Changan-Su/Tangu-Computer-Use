@@ -656,6 +656,12 @@ const spyRings = () => {
     ['outline.ts', outline, '`${"  ".repeat(depth)}${node.ref} ${displayName(node)}'],
     ['outline.ts', outline, '${label ? ` ${JSON.stringify(label)}` : ""}'],
     ['view.ts', viewTs, '`+ ${change.ref}${change.parent ? ` under ${change.parent}` : ""} ${JSON.stringify(label(change.node))}`'],
+    ['bridge.ts', bridge, '`The UI action sequence stopped: ${deliveryFailure.code}: ${deliveryFailure.message}. Its source root ${target.appName} — ${target.windowTitle}'],
+    ['bridge.ts', bridge, '`The action was delivered, and its source root ${target.appName} — ${target.windowTitle}'],
+    ['bridge.ts', bridge, '`${tool} completed for ${root.ref} ${JSON.stringify(browser.title)}. State ${browser.snapshotId}.'],
+    ['bridge.ts', bridge, '`Timed out after ${timeoutMs}ms waiting for condition.`'],
+    ['bridge.ts', bridge, 'return `${node.ref} ${node.role}${node.subrole ? `/${node.subrole}` : ""}${identifier} ${JSON.stringify(label)}'],
+    ['bridge.ts', bridge, 'node.identifier ? ` id=${JSON.stringify(node.identifier)}` : ""'],
     ['jevRun.ts', jevRun, 'requestedSteps: params.steps.length'],
     ['jevRun.ts', jevRun, "report(abort.aborted ? 'cancelled' : 'stopped'"],
   ]) A.ok(text.includes(frag), `vendor 结果文字的模板变了(${file}):${frag.slice(0, 60)}… —— 同步改 main.js 的解析与 harness/fixtures/tool-calls.json`)
@@ -699,6 +705,13 @@ const spyRings = () => {
     // 中途停下:结果是正常返回(phase done),但不许说「已…」;卡住的那步没有名字(只有角色)→ 不带引号
     ['stopped', R, '正在 Chatter 中点击「Send」', 'Clicking “Send” in Chatter'],
     ['stopped', D, '没能在 Chatter 中点击(第 2 步,共 2 步)', "Couldn't click in Chatter (step 2 of 2)"],
+    // 动作发出去以后窗口没了:「The UI action sequence stopped」= 没成;「The action was delivered」= 成了。App 名从 source root 拿
+    ['lost', D, '没能在 Chatter 中点击「Send」', "Couldn't click “Send” in Chatter"],
+    ['delivered', D, '已在 Chatter 中按下 Cmd+W(共 2 步)', 'Pressed Cmd+W in Chatter (2 steps)'],
+    ['browserAct', D, '已点击「Sign in」', 'Clicked “Sign in”'],
+    ['waitTimeout', D, '没能在 Chatter 中等到「Read」', "Couldn't wait for “Read” in Chatter"],
+    ['jevPreview', D, '已在 Chatter 中定位「Send」', 'Located “Send” in Chatter'],
+    ['jevPreview', E, '没能在 Chatter 中定位「Send」', "Couldn't locate “Send” in Chatter"],
     ['search', R, '正在 Chatter 中查找「Send」', 'Searching for “Send” in Chatter'],
     ['inspect', D, '已在 Chatter 中查看「Send」', 'Looked at “Send” in Chatter'],
     ['expand', R, '正在 Chatter 中查看界面元素', 'Looking at an element in Chatter'],
@@ -737,6 +750,20 @@ const spyRings = () => {
     }
   }
   A.deepEqual([...covered].sort(), [...T.CU_TOOLS].sort(), '表驱动断言必须覆盖每一种工具')
+  // 认不出结果(没有做成的证据)→ 空,不替它报「已…」
+  A.equal(run('unknownDone', D, 'zh'), null, '结果里认不出做成没做成 → 空(宿主照旧显示)')
+  // 全量快照:每条样例 × running / done / error × zh / en,和 harness 里那张句子列表是同一份数据
+  const expected = JSON.parse(readFileSync(new URL('./harness/fixtures/tool-labels.expected.json', import.meta.url), 'utf8')).labels
+  A.deepEqual(Object.keys(expected).sort(), Object.keys(byId).sort(), '快照要覆盖每一条样例调用')
+  const full = new Map(T.CU_TOOLS.map((t) => [t, new Set()]))
+  for (const id of Object.keys(byId)) {
+    for (const phase of [R, D, E]) for (const locale of ['zh', 'en']) {
+      const got = run(id, phase, locale)
+      A.equal(got ? got.text : null, expected[id][`${phase}.${locale}`], `快照 ${id} / ${phase} / ${locale}`)
+      if (got) full.get(calls[byId[id]].tool).add(`${phase}.${locale}`)
+    }
+  }
+  for (const [tool, seen] of full) A.equal(seen.size, 6, `${tool}:running / done / error × zh / en 都要有句子(只有 ${[...seen]})`)
   // 图标:只在学到过「App 名 → bundleId」时给;ensure_app 直接用参数里的 bundleId
   A.deepEqual(run('pressSend', D, 'zh').icon, { appBundleId: 'com.example.chatter' })
   A.equal(run('wechatSend', D, 'zh').icon, undefined, '没学到过的 App 不给图标')

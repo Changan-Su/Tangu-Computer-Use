@@ -528,7 +528,8 @@ function appInResult(text) {
 }
 /** 这段结果是不是**产出**了这个 stateId(observe 的 Outline 头、act 的 Returned state、差量的 Use stateId)。 */
 function producesState(text, id) {
-  return new RegExp(`(?:stateId|Returned state) ${reEsc(id)}(?![A-Za-z0-9_-])`).test(text)
+  // 网页那条路的结果是「<tool> completed for @rN "<title>". State <id>.」
+  return new RegExp(`(?:(?:stateId|Returned state) ${reEsc(id)}(?![A-Za-z0-9_-])|^\\S+ completed for .*\\. State ${reEsc(id)}\\.)`, 'm').test(text)
 }
 /** 产出 stateId 的那一条(从近到远)。 */
 function entryForState(id, list) {
@@ -557,7 +558,8 @@ function appForRoot(ref, list) {
 }
 /** 一段文字里 @eN 的可读名(JSON 串着的那段);只有角色没有名字 → ''。 */
 function labelInText(text, ref) {
-  const re = new RegExp(`^[ \\t]*(?:\\+ )?${reEsc(ref)}(?: under @e\\d+)? (?:[^\\s"]+ )?("(?:[^"\\\\]|\\\\.)*")`, 'm')
+  // 大纲行「@e12 AXButton "Send"」、搜索行同形、inspect / expand 的首行「@e12 AXButton id="send" "Send" [press]」、变化行「+ @e12 under @e3 "Send"」
+  const re = new RegExp(`^[ \\t]*(?:\\+ )?${reEsc(ref)}(?: under @e\\d+)? (?:[^\\s"]+ )?(?:id="(?:[^"\\\\]|\\\\.)*" )?("(?:[^"\\\\]|\\\\.)*")`, 'm')
   const m = re.exec(text)
   if (!m) return ''
   try { const s = JSON.parse(m[1]); return s === '(unlabeled)' ? '' : tlClip(s) } catch { return '' }
@@ -687,40 +689,54 @@ function describeCall(call, iconOf) {
       if (!Array.isArray(raw) || !raw.length) return null
       const steps = raw.map((s) => (jev ? jevStep(s, args.preview === true) : actStep(s)))
       const stateId = typeof args.stateId === 'string' ? args.stateId : ''
-      const app = (result && appInResult(result)) || (jev ? appForRoot(args.root, earlier) : appForState(stateId, earlier))
+      const lost = /^The (?:UI action sequence stopped|action was delivered)\b.*?source root (.+?) — /m.exec(result)
+      const app = (result && appInResult(result)) || (lost ? tlClip(lost[1], TL_APP_MAX) : '')
+        || (jev ? appForRoot(args.root, earlier) : appForState(stateId, earlier))
       const n = steps.length
       const say = (ph, i, suffix) => {
         const st = steps[i]
         return st ? tlSentence(L, ph, st.verb, app, stepObj(st, stateId), suffix) : ''
       }
+      const preview = jev && args.preview === true
       if (phase === 'running') return out(say('running', 0), app)
-      // 做完:中途停下的按出错说(act 的「Stopped UI action sequence at action K」、jev 的 status stopped / cancelled)
+      // 做完:只在结果里**有做成的证据**时才说「已…」;中途停下的按出错说;认不出结果 → 空(宿主照旧显示),不替它报喜。
+      //   act:「Attempted N UI actions in …」/「The action was delivered…」/ 网页那条「act_ui completed for …」= 做了;
+      //        「Stopped UI action sequence at action K」= 第 K 步卡住;「The UI action sequence stopped: …」= 停了(不知道第几步)
+      //   jev:首行报告的 status:completed / preview = 做了;stopped / cancelled = 停在最后一条轨迹那一步
       let failedAt = null
+      let failedSomewhere = phase === 'error'
       let did = null
-      if (jev) {
-        let rep = null
-        try { const first = result.split('\n', 1)[0].trim(); if (first.startsWith('{')) rep = JSON.parse(first) } catch { rep = null }
-        if (rep && typeof rep === 'object') {
+      if (phase === 'done') {
+        if (jev) {
+          let rep = null
+          try { const first = result.split('\n', 1)[0].trim(); if (first.startsWith('{')) rep = JSON.parse(first) } catch { rep = null }
+          if (!rep || typeof rep !== 'object') return null
           if (rep.status === 'stopped' || rep.status === 'cancelled') {
             const lastTrace = Array.isArray(rep.steps) ? rep.steps[rep.steps.length - 1] : null
             failedAt = lastTrace && Number.isInteger(lastTrace.step) && lastTrace.step >= 1 ? lastTrace.step - 1 : 0
-          } else if (Number.isInteger(rep.requestedSteps) && rep.requestedSteps >= 1) did = rep.requestedSteps
+          } else if (rep.status === 'completed' || rep.status === 'preview') {
+            did = preview ? 1 : Number.isInteger(rep.requestedSteps) && rep.requestedSteps >= 1 ? rep.requestedSteps : n
+          } else return null
+        } else {
+          const stop = /^Stopped UI action sequence(?: at action (\d+))?/m.exec(result)
+          const att = /^Attempted (\d+) UI actions? in /m.exec(result)
+          if (stop) failedAt = stop[1] ? Number(stop[1]) - 1 : 0
+          else if (/^The UI action sequence stopped: /m.test(result)) failedSomewhere = true
+          else if (att) did = Number(att[1])
+          else if (/^The action was delivered\b/m.test(result) || /^act_ui completed for /m.test(result)) did = n
+          else return null
         }
-      } else {
-        const stop = /^Stopped UI action sequence(?: at action (\d+))?/m.exec(result)
-        if (stop) failedAt = stop[1] ? Number(stop[1]) - 1 : 0
-        const att = /^Attempted (\d+) UI actions? in /m.exec(result)
-        if (att) did = Number(att[1])
       }
-      if (failedAt !== null || phase === 'error') {
+      if (failedAt !== null || failedSomewhere) {
         if (failedAt === null) {
-          // 宿主说出错 / 被截断,结果里看不出卡在哪一步:一步的照那一步说,多步的只说「没能完成这些操作」
-          return out(n === 1 ? say('error', 0) : tlSentence(L, 'error', 'act', app, ''), app)
+          // 宿主说出错 / 被截断,结果里看不出卡在哪一步:一步的(和只定位第一步的预览)照那一步说,多步的只说「没能完成这些操作」
+          return out(n === 1 || preview ? say('error', 0) : tlSentence(L, 'error', 'act', app, ''), app)
         }
         const i = Math.min(Math.max(0, failedAt), n - 1)
         return out(say('error', i, n > 1 ? tlFmt(L, 'tl.stepOf', { i: i + 1, n }) : ''), app)
       }
-      const count = did !== null ? Math.min(Math.max(1, did), n) : n
+      if (preview) return out(say('done', 0), app) // 预览只定位第一步,不报步数
+      const count = Math.min(Math.max(1, did), n)
       return out(say('done', count - 1, count > 1 ? tlFmt(L, 'tl.steps', { n: count }) : ''), app)
     }
     case 'observe_ui': {
@@ -764,7 +780,9 @@ function describeCall(call, iconOf) {
       const app = appForState(args.stateId, earlier)
       const target = tlClip(args.text) || labelForRef(args.ref, args.stateId, earlier)
       const obj = !target ? o('change') : args.until === 'absent' ? o('gone', { q: q(target) }) : q(target)
-      return out(tlSentence(L, phase, 'wait', app, obj), app)
+      // 等超时是正常返回(「Timed out after Nms waiting for condition.」),不能说「已等到」
+      const timedOut = phase === 'done' && /^Timed out after \d+ms waiting for condition\./m.test(result)
+      return out(tlSentence(L, timedOut ? 'error' : phase, 'wait', app, obj), app)
     }
     case 'launch_browser':
       return out(tlSentence(L, phase, 'open', '', hostOf(args.url) || o('browser')))
@@ -992,16 +1010,16 @@ const CSS = `
 .cu-live-badge{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:var(--bg-card,var(--bg,#fff));border:1px solid var(--border,rgba(128,128,128,.25));color:var(--text,inherit);font-weight:500;white-space:nowrap;box-shadow:0 2px 10px rgba(0,0,0,.12)}
 .cu-live-badge.on{display:inline-flex}
 .cu-live-badge i{width:8px;height:8px;border-radius:999px;background:var(--cu-fill,#2c5f9e);flex:0 0 auto}
-/* 「移到悬浮窗 / 放回去」:窄的时候只留图标(标题和状态句先让位) */
-.cu-live{container-type:inline-size}
+/* 「移到悬浮窗 / 放回去」:窄的时候(.narrow,JS 按视图宽度量)只留图标,标题和状态句先让位。
+   ⚠️不用 container-type:它会让 .cu-live 的宽不再由内容撑,宿主哪天把挂载点做成随内容宽,视图就塌成 0 宽。 */
 .cu-live-pip{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;font:inherit;line-height:1;padding:3px 7px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--text-muted,var(--text-light,inherit));cursor:pointer;white-space:nowrap}
 .cu-live-pip-ic{display:flex;flex:0 0 auto}
 .cu-live-pip svg{display:block}
 .cu-live-pip:hover{background:var(--accent-light,var(--overlay-light,rgba(128,128,128,.14)));color:var(--accent-hover,var(--accent,inherit))}
-@container (max-width: 560px){.cu-live-pip-label{display:none}}
+.cu-live.narrow .cu-live-pip-label{display:none}
 /* 悬浮小画面(surface 'pip',264 宽,高度随内容):上面画面、下面一行状态句 + 停止 + 放回去。
    ⚠️舞台高度由 JS 按宽 × 窗口比例写死(pipStageHeight),根不能 height:100% —— 宿主量的就是它的内容高。 */
-.cu-live.is-pip{height:auto;font-size:12px;container-type:normal}
+.cu-live.is-pip{height:auto;font-size:12px}
 .cu-live.is-pip .cu-live-stage{flex:0 0 auto}
 .cu-live.is-pip .cu-live-head{border-bottom:0;border-top:1px solid var(--border,rgba(128,128,128,.25));height:35px;box-sizing:border-box;padding:0 6px 0 10px;gap:6px}
 .cu-live.is-pip .cu-live-age,.cu-live.is-pip .cu-live-zoom,.cu-live.is-pip .cu-live-zoom.on{display:none}
@@ -1647,7 +1665,15 @@ ctx.registerView({
 
     // 面板被拖宽/收窄 → 画布要重新变形。⚠️观察的是**舞台**不是画布:画布的尺寸是我们自己写进去的,
     // 观察它就会被自己的写入再次唤醒 → 死循环。
-    const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(() => reflow()) : null
+    const NARROW_BELOW = 560
+    const rootClass = inPip ? 'cu-live is-pip' : 'cu-live'
+    const updateNarrow = () => {
+      const w = root.clientWidth || 0
+      const next = w > 0 && w < NARROW_BELOW ? `${rootClass} narrow` : rootClass
+      if (root.className !== next) root.className = next
+    }
+    updateNarrow()
+    const resizeObserver = typeof ResizeObserver === 'function' ? new ResizeObserver(() => { updateNarrow(); reflow() }) : null
     if (resizeObserver) resizeObserver.observe(stage)
 
     let timer = null
