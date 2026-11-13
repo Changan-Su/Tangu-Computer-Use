@@ -83,9 +83,13 @@ final class AgentCursor {
         // 报上来就是"辅助鼠标还是没有出现"。渲染器吃的是画布局部坐标,所以点也要跟着换算。
         let bounds = Self.overlayBounds()
         if window.frame != bounds.union { window.setFrame(bounds.union, display: false) }
-        anchorId = windowId
+        // 抢前台的点击(只画环)且这时没有光标在显示:这一刻叠层在最上层 —— 目标刚被激活,钉在它上面一层的叠层
+        // 会被它压住,环在前 0.25 s(下一次重钉之前)可能看不见。这扇窗口环一放完就收,不会留在用户的窗口上面。
+        // 光标还在显示时照旧钉着(不让一支后台留下的光标浮到用户的窗口上面,10-17 定的)。
+        let floatRingOnTop = !cue.drawsCursor && renderer.scene.presence.to == 0
+        anchorId = floatRingOnTop ? 0 : windowId
         targetId = target != 0 ? target : windowId
-        if windowId != 0 {
+        if windowId != 0 && !floatRingOnTop {
             pinOverlay(window, above: windowId, layer: layer)
             startRepinning()
         } else {

@@ -1,6 +1,7 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import SwiftUI
 
 /// 示意光标的生命周期(`npm run check:cursor` 跑它;以前这份测试没接进任何脚本)。
 /// 画法和整轮状态机是纯函数,在 agent_overlay_render_tests 里测;这里只管窗口和计时器:
@@ -10,8 +11,35 @@ import Foundation
 struct AgentCursorTests {
     @MainActor
     static func main() {
+        testCanvasOrientation()
         testRendererLifecycle()
         testOverlayLifecycle()
+    }
+
+    /// 屏上的 Canvas 经 `withCGContext` 把 CGContext 交给画法;画法按「左上原点、y 向下」写(离屏测试也是这么翻的)。
+    /// 这里钉住这个前提:在 (0,0) 画一块方块,它必须出现在左上角。前提不成立的话,离屏 PNG 全对、屏上全是镜像。
+    @MainActor
+    private static func testCanvasOrientation() {
+        let view = Canvas { graphics, _ in
+            graphics.withCGContext { ctx in
+                ctx.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+                ctx.fill(CGRect(x: 0, y: 0, width: 10, height: 10))
+            }
+        }
+        .frame(width: 40, height: 40)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 1
+        guard let image = renderer.cgImage else { fail("ImageRenderer produced no image for the orientation probe") }
+        let width = image.width, height = image.height
+        guard let ctx = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { fail("could not read the orientation probe back") }
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let bytes = ctx.data!.assumingMemoryBound(to: UInt8.self)
+        // 位图内存第 0 行是图的最上面一行。
+        func red(_ x: Int, _ y: Int) -> Bool { bytes[y * ctx.bytesPerRow + x * 4] > 200 && bytes[y * ctx.bytesPerRow + x * 4 + 1] < 60 }
+        expect(red(2, 2), "withCGContext must be top-left / y-down: the square drawn at (0,0) is missing from the top-left corner")
+        expect(!red(2, height - 3), "withCGContext must be top-left / y-down: the square drawn at (0,0) landed bottom-left (mirrored)")
     }
 
     @MainActor
