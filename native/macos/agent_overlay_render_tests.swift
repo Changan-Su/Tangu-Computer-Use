@@ -370,6 +370,58 @@ struct AgentOverlayRenderTests {
         busy.requestEnd(runId: "D", at: 2)
         expect(busy.actStarted(runId: "E", at: 2.5), "新 runId 开新的一轮")
         expect(busy.runId == "E" && busy.phase(at: 2.6) == .acting, "结束中的旧一轮被新一轮接替")
+
+        // 显式结束过的 runId:迟到的动作(批量里 end 之后的那几步)不复活整轮,按旧调用方处理。
+        var late = OverlayTurnModel()
+        late.actStarted(runId: "A", at: 0)
+        expect(late.requestEnd(runId: "A", at: 0.5), "批量第一步还在跑时收到 end(A)")
+        late.actEnded(at: 0.6)
+        expect(late.actStarted(runId: "A", at: 0.7) == false, "收尾中迟到的 A:不复活整轮")
+        late.actEnded(at: 0.8)
+        expect(isEnding(late.phase(at: 1.0), 1.5), "收尾中迟到的 A:结束时刻不被清掉")
+        expect(late.phase(at: 1.91) == .idle, "照原计划淡出完")
+        late.settle(at: 1.91)
+        expect(late.actStarted(runId: "A", at: 5) == false, "放完以后迟到的 A:也不开新的一轮")
+        late.actEnded(at: 5.1)
+        expect(!late.active && late.phase(at: 5.2) == .idle && late.nextDeadline(after: 5.2) == nil, "迟到的 A 之后没有整轮、不留计时器")
+        expect(late.actStarted(runId: "F", at: 6), "别的 runId 照常开新的一轮")
+        // end(A) 在 B 进行中到达:不动 B;之后迟到的 A 也不能把 B 抢走。
+        var steal = OverlayTurnModel()
+        steal.actStarted(runId: "A", at: 0); steal.actEnded(at: 0.1)
+        steal.actStarted(runId: "B", at: 1); steal.actEnded(at: 1.1)
+        expect(steal.requestEnd(runId: "A", at: 2) == false && steal.phase(at: 2) == .thinking, "end(A) 不熄 B")
+        steal.actStarted(runId: "A", at: 3)
+        expect(steal.runId == "B" && steal.phase(at: 3.1) == .acting, "迟到的 A 不抢走 B,算 B 这一轮里的一个动作(旧调用方的规矩)")
+        steal.actEnded(at: 3.2)
+        // 45 s 空闲超时结束的那一轮:同一个 runId 再动手照样恢复(模型想了很久再动手是正常的)。
+        var idle = OverlayTurnModel()
+        idle.actStarted(runId: "G", at: 0); idle.actEnded(at: 0.1)
+        expect(isEnding(idle.phase(at: 45.5), 46.1), "45 s 没动静:自己结束")
+        expect(idle.actStarted(runId: "G", at: 45.6), "超时收尾中同一个 runId 再动手:恢复")
+        idle.actEnded(at: 45.7)
+        expect(idle.phase(at: 45.9) == .acting && near(idle.effectiveEnd ?? 0, 90.7, 1e-9), "恢复后照常算空闲")
+        var idle2 = OverlayTurnModel()
+        idle2.actStarted(runId: "H", at: 0); idle2.actEnded(at: 0.1)
+        idle2.advance(to: 50); idle2.settle(at: 50)
+        expect(!idle2.active && idle2.actStarted(runId: "H", at: 60), "超时放完以后同一个 runId 再动手:恢复")
+        // 超时结束之后又收到显式 end(视图那边整轮真的结束了):这时再来的同一 runId 就不复活了。
+        var both = OverlayTurnModel()
+        both.actStarted(runId: "J", at: 0); both.actEnded(at: 0.1)
+        both.advance(to: 46)
+        both.requestEnd(runId: "J", at: 46)
+        expect(both.actStarted(runId: "J", at: 46.2) == false, "超时后又被显式结束:不复活")
+        both.actEnded(at: 46.3)
+        // 最近表有上限,挤出去的最老那个不再拦。
+        var many = OverlayTurnModel()
+        for i in 0..<(OverlayTurnModel.endedMemory + 1) { many.requestEnd(runId: "r\(i)", at: Double(i)) }
+        expect(many.actStarted(runId: "r\(OverlayTurnModel.endedMemory)", at: 100) == false, "最近结束的仍在表里")
+        many.actEnded(at: 100.1)
+        expect(many.actStarted(runId: "r0", at: 101), "表满挤出去的最老那个不再拦")
+        // 关掉再打开「操作可视化」(主线程那份重置):显式结束的记录不丢。
+        var reset = OverlayTurnModel()
+        reset.requestEnd(runId: "K", at: 0)
+        reset.reset()
+        expect(reset.actStarted(runId: "K", at: 1) == false, "重置后显式结束的记录仍在")
     }
 
     static func isEnding(_ phase: OverlayTurnModel.Phase, _ fadeAt: Double) -> Bool {

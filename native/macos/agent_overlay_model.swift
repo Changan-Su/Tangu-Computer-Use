@@ -671,11 +671,15 @@ enum LiveViewExtras {
 /// - 最后一个动作结束 0.3 s 后 → 在想。
 /// - overlayTurn end(runId 对得上),或 45 s 没有任何 act → 结束:再等 1.0 s,光标和边缘光一起淡出 0.4 s,然后归零。
 /// - 没有 runId 的 act(旧调用方)不开新的一轮;正好有一轮在进行时算作这一轮的活动。
+/// - 显式结束(overlayTurn end)过的 runId 记进一张小的最近表:之后再带着它来的动作(批量里 end 之后还没停下的那几步)
+///   一律按没有 runId 的旧调用方处理,不复活、也不抢走别的一轮。45 s 空闲超时那种结束不进表:同一个 runId 再动手照样恢复。
 struct OverlayTurnModel: Equatable {
     static let thinkingDelay = 0.3
     static let idleTimeout = 45.0
     static let endHold = 1.0
     static let fadeDuration = 0.4
+    /// 显式结束过的 runId 最多记这么多个(runId 每轮都是新的,够挡住迟到的动作就行)。
+    static let endedMemory = 16
 
     enum Phase: Equatable {
         case idle
@@ -690,11 +694,15 @@ struct OverlayTurnModel: Equatable {
     private(set) var depth = 0
     private(set) var lastActivity = 0.0
     private(set) var endAt: Double?
+    /// 显式结束过的 runId(最老的在前)。
+    private(set) var explicitlyEnded: [String] = []
 
     /// 返回这一下是否属于一轮(带 runId 的整轮模式,且这一轮还没结束)。
     @discardableResult
-    mutating func actStarted(runId: String?, at t: Double) -> Bool {
+    mutating func actStarted(runId requested: String?, at t: Double) -> Bool {
         advance(to: t)
+        // 显式结束过的 runId 带来的迟到动作:当成旧调用方(没有 runId)。
+        let runId = requested.flatMap { explicitlyEnded.contains($0) ? nil : $0 }
         if let runId, !active || endAt != nil || runId != self.runId {
             self.runId = runId
             active = true
@@ -715,6 +723,11 @@ struct OverlayTurnModel: Equatable {
     @discardableResult
     mutating func requestEnd(runId: String?, at t: Double) -> Bool {
         advance(to: t)
+        // 不管对不对得上当前这一轮、这一轮是不是已经超时收尾:带 runId 的 end 说明那一轮真的结束了,先记下。
+        if let runId, !explicitlyEnded.contains(runId) {
+            explicitlyEnded.append(runId)
+            if explicitlyEnded.count > Self.endedMemory { explicitlyEnded.removeFirst(explicitlyEnded.count - Self.endedMemory) }
+        }
         guard active, endAt == nil else { return false }
         guard let runId, runId == self.runId else { return false }
         endAt = t
@@ -753,6 +766,13 @@ struct OverlayTurnModel: Equatable {
     mutating func advance(to t: Double) {
         guard active, endAt == nil, depth == 0, t >= lastActivity + Self.idleTimeout else { return }
         endAt = lastActivity + Self.idleTimeout
+    }
+
+    /// 整个清零(「操作可视化」关掉时),只留显式结束过的 runId:开关再打开后迟到的动作照样不复活。
+    mutating func reset() {
+        let ended = explicitlyEnded
+        self = OverlayTurnModel()
+        explicitlyEnded = ended
     }
 
     /// 一轮彻底放完后归零(phase 已是 idle 时调)。

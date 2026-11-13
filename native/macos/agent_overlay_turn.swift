@@ -66,7 +66,7 @@ final class AgentOverlayTurn {
 
     private func disableAll() {
         cancelDeadline()
-        model = OverlayTurnModel()
+        model.reset()
         applied = .none
         AgentCursor.shared.holdForTurn = false
         AgentHighlight.shared.hide()
