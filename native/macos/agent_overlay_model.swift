@@ -518,9 +518,12 @@ enum ArrivalWait {
     /// 这一条 act 会不会画光标、要不要等。照着 act() 里各条路的分支和 cue() 的守卫写,两边改一边要同步改。
     /// - viaElement:按 ref 找到了元素(否则是 x/y 坐标)。
     /// - elementPressable:元素支持 AXPress。elementNeedsPointer:元素在网页里或是文本框(AXPress 打不动,要真实指针)。
+    ///   两个都是闭包,只在真要分类时才调(每次是一到几十次同步 AX 往返):不是指针动作、叠层关着、clickAfterArrival
+    ///   = false、减少动态、不是按 ref 的按压这几种,一次都不调;elementPressable 只在 elementNeedsPointer 没把路定死时才调。
+    ///   bridge 那边两个闭包背后是同一份按需缓存,act 后面真去按的那条分支读同一份结果,不查第二遍。
     /// - leftSingleClick:左键单击(坐标点击只有这种会先试后台 AXPress)。
     static func plan(
-        action: String, viaElement: Bool, elementPressable: Bool, elementNeedsPointer: Bool,
+        action: String, viaElement: Bool, elementPressable: () -> Bool, elementNeedsPointer: () -> Bool,
         delivery: String, policy: String, leftSingleClick: Bool,
         cursorEnabled: Bool, clickAfterArrival: Bool, reduceMotion: Bool
     ) -> Plan {
@@ -530,11 +533,11 @@ enum ArrivalWait {
         guard !reduceMotion else { return .skip(.reduceMotion) }
         let isPress = action == "press" || action == "click"
         if viaElement && isPress {
-            if elementNeedsPointer && policy != "ax_only" {
+            if policy != "ax_only" && elementNeedsPointer() {
                 // 前台策略走坐标物理点击;别的策略直接抛 foreground_required。
                 return policy == "foreground" ? coordinates(isPress: true, viaElement: true, delivery: delivery, policy: policy, leftSingleClick: leftSingleClick) : .skip(.noCursor)
             }
-            if elementPressable { return .approach(viaAx: true) }
+            if elementPressable() { return .approach(viaAx: true) }
         }
         // 按 ref 的滚动先试 AX 滚动(不发物理事件)。
         if viaElement && action == "scroll" { return .approach(viaAx: true) }

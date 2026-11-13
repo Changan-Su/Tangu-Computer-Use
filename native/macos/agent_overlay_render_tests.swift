@@ -274,10 +274,39 @@ struct AgentOverlayRenderTests {
         func plan(_ action: String, element: Bool = false, pressable: Bool = false, needsPointer: Bool = false,
                   delivery: String = "pid", policy: String = "default", leftSingle: Bool = true,
                   enabled: Bool = true, after: Bool = true, reduce: Bool = false) -> ArrivalWait.Plan {
-            ArrivalWait.plan(action: action, viaElement: element, elementPressable: pressable, elementNeedsPointer: needsPointer,
+            ArrivalWait.plan(action: action, viaElement: element, elementPressable: { pressable }, elementNeedsPointer: { needsPointer },
                              delivery: delivery, policy: policy, leftSingleClick: leftSingle,
                              cursorEnabled: enabled, clickAfterArrival: after, reduceMotion: reduce)
         }
+        // 分类闭包背后是同步 AX 往返:用纯请求字段就能排除的情况一次都不许调。
+        func asks(_ action: String, element: Bool = true, needsPointer: Bool = false, pressable: Bool = true,
+                  delivery: String = "pid", policy: String = "default",
+                  enabled: Bool = true, after: Bool = true, reduce: Bool = false) -> (plan: ArrivalWait.Plan, needs: Int, press: Int) {
+            var needs = 0, press = 0
+            let result = ArrivalWait.plan(action: action, viaElement: element,
+                                          elementPressable: { press += 1; return pressable },
+                                          elementNeedsPointer: { needs += 1; return needsPointer },
+                                          delivery: delivery, policy: policy, leftSingleClick: true,
+                                          cursorEnabled: enabled, clickAfterArrival: after, reduceMotion: reduce)
+            return (result, needs, press)
+        }
+        for (name, r) in [
+            ("叠层关着", asks("press", enabled: false)),
+            ("clickAfterArrival = false", asks("click", after: false)),
+            ("减少动态", asks("press", reduce: true)),
+            ("打字", asks("typeText")), ("setText", asks("setText")), ("按键", asks("keypress")),
+            ("按 ref 的滚动", asks("scroll")), ("按 ref 的拖动", asks("drag")),
+            ("坐标点击", asks("click", element: false)),
+            ("抢前台的坐标点击", asks("click", element: false, delivery: "hid", policy: "foreground")),
+        ] {
+            expect(r.needs == 0 && r.press == 0, "\(name):分类闭包不该被调(实际 needsPointer \(r.needs) 次、pressable \(r.press) 次)")
+        }
+        let axOnly = asks("press", policy: "ax_only")
+        expect(axOnly.plan == .approach(viaAx: true) && axOnly.needs == 0 && axOnly.press == 1, "ax_only 不问要不要真实指针,只问能不能 AXPress(\(axOnly.needs)/\(axOnly.press))")
+        let web = asks("press", needsPointer: true)
+        expect(web.plan == .skip(.noCursor) && web.needs == 1 && web.press == 0, "网页元素:问一次要不要指针就定了,不再问 AXPress(\(web.needs)/\(web.press))")
+        let button = asks("press")
+        expect(button.plan == .approach(viaAx: true) && button.needs == 1 && button.press == 1, "普通按钮:两样各问一次(\(button.needs)/\(button.press))")
         expect(plan("click") == .approach(viaAx: false), "后台坐标点击:等")
         expect(plan("moveMouse") == .approach(viaAx: false) && plan("drag") == .approach(viaAx: false) && plan("scroll") == .approach(viaAx: false), "后台移动 / 拖动 / 滚动:等")
         expect(plan("press", element: true, pressable: true) == .approach(viaAx: true), "按 ref 的 AXPress:等")

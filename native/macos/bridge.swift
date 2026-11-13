@@ -2453,33 +2453,60 @@ final class Bridge {
 
 		// 先到再点(协议 20):落点一算出来就让光标起飞,和下面的按前准备(装 AX 观察器)并行;取证之前只等还没飞完的那段。
 		// 会不会画光标、要不要等,见 ArrivalWait.plan(和下面各条路的分支、cue 的守卫一一对应)。
+		// 按 ref 找到的元素要不要真实指针(网页里 / 文本框)、支不支持 AXPress:每问一次是一到几十次同步 AX 往返。
+		// 按需算、算一次:「先到再点」的判定和下面真去按的那条分支读同一份,判定用不上就一次都不问。
+		// (refreshElement() 换了元素以后那次 supportsAction 问的是新元素,不走这份缓存。)
+		let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXTextView", "AXSearchField", "AXComboBox", "AXEditableText", "AXSecureTextField"]
+		var cachedNeedsPointer: Bool?
+		var cachedPressable: Bool?
+		var cachedRole: String?
+		func elementRole(_ element: AXUIElement) -> String {
+			if let cachedRole { return cachedRole }
+			let role = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
+			cachedRole = role
+			return role
+		}
+		func elementNeedsPointer(_ element: AXUIElement) -> Bool {
+			if let cachedNeedsPointer { return cachedNeedsPointer }
+			let needs = hasAncestorRole(element, role: "AXWebArea") || textRoles.contains(elementRole(element))
+			cachedNeedsPointer = needs
+			return needs
+		}
+		func elementPressable(_ element: AXUIElement) -> Bool {
+			if let cachedPressable { return cachedPressable }
+			let pressable = supportsAction(element, action: kAXPressAction as CFString)
+			cachedPressable = pressable
+			return pressable
+		}
+
 		var approach: ArrivalReply?
 		do {
 			let isPress = action == "press" || action == "click"
 			let leftSingleClick = (params["button"] as? String ?? "left") == "left" && ((params["clickCount"] as? NSNumber)?.intValue ?? 1) <= 1
-			let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXTextView", "AXSearchField", "AXComboBox", "AXEditableText", "AXSecureTextField"]
 			let pressElement = isPress ? element : nil
 			let plan = ArrivalWait.plan(
 				action: action, viaElement: element != nil,
-				elementPressable: pressElement.map { supportsAction($0, action: kAXPressAction as CFString) } ?? false,
-				elementNeedsPointer: pressElement.map { hasAncestorRole($0, role: "AXWebArea") || textRoles.contains(stringAttribute($0, attribute: kAXRoleAttribute as CFString) ?? "") } ?? false,
+				elementPressable: { pressElement.map(elementPressable) ?? false },
+				elementNeedsPointer: { pressElement.map(elementNeedsPointer) ?? false },
 				delivery: delivery, policy: policy, leftSingleClick: leftSingleClick,
 				cursorEnabled: supportsAgentCursor && overlay.enabled, clickAfterArrival: overlay.clickAfterArrival, reduceMotion: overlay.reduceMotion
 			)
-			// 拖动先飞到起点;其余飞到元素中点 / 坐标点(和后面 cue 的落点同一个,到了那边 d = 0、不再飞)。
-			var point: CGPoint?
-			if action == "drag", let first = (params["path"] as? [[String: Any]])?.first,
-				let x = (first["x"] as? NSNumber)?.doubleValue, let y = (first["y"] as? NSNumber)?.doubleValue {
-				point = lookPoint(record: record, x: x, y: y)
-			} else if let element, let frame = frameForElement(element) {
-				point = CGPoint(x: frame.midX, y: frame.midY)
-			} else {
-				point = rawPoint
-			}
-			// 主线程上绝不等(常驻 helper 的 act 都在各连接自己的线程上跑,这里只是兜底)。
-			if case .approach(let viaAx) = plan, !Thread.isMainThread, let point {
-				let reply = ArrivalReply()
-				if cue(.move, at: point, viaAx: viaAx, reply: reply) { approach = reply }
+			// 主线程上绝不等(常驻 helper 的 act 都在各连接自己的线程上跑,这里只是兜底)。落点只在真要起飞时才算(元素的
+			// frame 也是一次 AX 往返):拖动先飞到起点;其余飞到元素中点 / 坐标点(和后面 cue 的落点同一个,到了那边 d = 0、不再飞)。
+			if case .approach(let viaAx) = plan, !Thread.isMainThread {
+				var point: CGPoint?
+				if action == "drag", let first = (params["path"] as? [[String: Any]])?.first,
+					let x = (first["x"] as? NSNumber)?.doubleValue, let y = (first["y"] as? NSNumber)?.doubleValue {
+					point = lookPoint(record: record, x: x, y: y)
+				} else if let element, let frame = frameForElement(element) {
+					point = CGPoint(x: frame.midX, y: frame.midY)
+				} else {
+					point = rawPoint
+				}
+				if let point {
+					let reply = ArrivalReply()
+					if cue(.move, at: point, viaAx: viaAx, reply: reply) { approach = reply }
+				}
 			}
 		}
 		let eventsLive = !deferRootDelta && ensureRootObserver(pid: pid)
@@ -2671,16 +2698,14 @@ final class Bridge {
 		}
 
 		if let element, action == "press" || action == "click" {
-			let elementRole = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
-			let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXTextView", "AXSearchField", "AXComboBox", "AXEditableText", "AXSecureTextField"]
-			let requiresPointerFocus = hasAncestorRole(element, role: "AXWebArea") || textRoles.contains(elementRole)
-			if requiresPointerFocus && policy != "ax_only" {
+			// 和上面「先到再点」的判定共用一份分类结果(那边问过就不再问)。
+			if policy != "ax_only" && elementNeedsPointer(element) {
 				if policy == "foreground" {
 					try executeCoordinates(coordinatePoint())
 				} else {
 					throw BridgeFailure(message: "Web content requires pointer input", code: "foreground_required")
 				}
-			} else if supportsAction(element, action: kAXPressAction as CFString) {
+			} else if elementPressable(element) {
 				let cursorPoint = try? coordinatePoint()
 				var status = AXUIElementPerformAction(element, kAXPressAction as CFString)
 				if status != .success, let refreshed = refreshElement(), supportsAction(refreshed, action: kAXPressAction as CFString) {
