@@ -33,6 +33,8 @@ const mkNode = (tag) => {
   n.appendChild = (c) => { n.children.push(c); c.parentNode = n; return c }
   n.append = (...cs) => cs.forEach((c) => n.appendChild(c))
   n.replaceChildren = (...cs) => { n.children.forEach((c) => { c.parentNode = null }); n.children.length = 0; own = ''; cs.forEach((c) => n.appendChild(c)) }
+  n.removeChild = (c) => { const i = n.children.indexOf(c); if (i >= 0) n.children.splice(i, 1); c.parentNode = null; return c }
+  n.remove = () => { if (n.parentNode) n.parentNode.removeChild(n) }
   n.setAttribute = (k, v) => { n.attrs[k] = v }
   n.querySelector = () => null
   n.listeners = {}
@@ -366,6 +368,247 @@ A.equal(host.children.length, 0, '卸载后必须清空宿主元素')
   A.deepEqual(seen, [false, undefined], '两种请求都应真的发出去')
   release()
   await Promise.all([p1, p2])
+}
+
+// ══ 协议 20:取色上报 / 整轮结束 / 实时画面里的光标与环(契约 §1.4、§1.6、§1.7、§3)══
+const fixture = JSON.parse(readFileSync(new URL('./harness/fixtures/liveview-reply.v20.json', import.meta.url), 'utf8'))
+const routes = JSON.parse(readFileSync(new URL('./harness/fixtures/routes.v1.json', import.meta.url), 'utf8'))
+
+// ── 文案成对:只加中文忘了英文不报错,英文界面里原样冒中文 ──
+{
+  const zh = Object.keys(T.MSG.zh).sort()
+  const en = Object.keys(T.MSG.en).sort()
+  A.deepEqual(en, zh, 'zh / en 键集必须一致')
+  const ph = (s) => (s.match(/\{\w+\}/g) || []).sort().join(',')
+  for (const k of en) {
+    A.ok(!/[㐀-鿿]/.test(T.MSG.en[k]), `英文文案里不许有汉字:${k}`)
+    A.equal(ph(T.MSG.en[k]), ph(T.MSG.zh[k]), `{占位符} zh / en 必须逐字一致:${k}`)
+  }
+  A.equal(T.fmt('en', 'ago.sec', { n: 3 }), '3s ago')
+  A.ok(T.fmt('en', 'err.unknown', { code: 'weird_code' }).includes('weird_code'), '英文里未知错误码也要原样带出')
+  A.equal(T.fmt('xx', 'st.looking'), '正在查看', '不认识的语言回落中文')
+}
+
+// ── 取色规则 + 描边亮度(纯函数)──
+{
+  const blue = T.hexToRgb('#2c5f9e')
+  const paleBlue = T.hexToRgb('#8fb4e3')
+  const orange = [255, 120, 24]
+  const cream = T.hexToRgb('#1c1c1c')
+  A.equal(T.toHex(blue), '#2c5f9e')
+  A.equal(T.hexToRgb('nope'), null)
+  A.equal(T.edgeFor(blue), '#ffffff', '柔蓝(深)配白边')
+  A.equal(T.edgeFor(paleBlue), '#1c1b1f', '暗色下的浅柔蓝配深边')
+  A.equal(T.edgeFor([255, 255, 255]), '#1c1b1f')
+  A.equal(T.edgeFor([0, 0, 0]), '#ffffff')
+  A.ok(Math.abs(T.relLuminance([255, 255, 255]) - 1) < 1e-9 && T.relLuminance([0, 0, 0]) === 0)
+  // 有 --signal-skin(经典 / 墨色)→ 一律用 --signal,哪怕 accent 读出来是彩色
+  A.deepEqual(T.pickFill({ hasSignalSkin: true, accent: orange, signal: blue }), { source: 'signal', rgb: blue })
+  // 彩色配色 → accent 本色
+  A.deepEqual(T.pickFill({ hasSignalSkin: false, accent: orange, signal: blue }), { source: 'accent', rgb: orange })
+  // 兜底:accent 近乎无彩(RGB 极差 < 24)→ signal
+  A.deepEqual(T.pickFill({ hasSignalSkin: false, accent: cream, signal: blue }), { source: 'signal', rgb: blue })
+  A.equal(T.pickFill({ hasSignalSkin: false, accent: [100, 100, 123], signal: blue }).source, 'signal', '极差 23 算无彩')
+  A.equal(T.pickFill({ hasSignalSkin: false, accent: [100, 100, 124], signal: blue }).source, 'accent', '极差 24 算彩色')
+  // 读不出 → null = 不发(helper 用柔蓝,不回橙色)
+  A.equal(T.pickFill({ hasSignalSkin: false, accent: null, signal: null }), null)
+  A.equal(T.pickFill({ hasSignalSkin: true, accent: cream, signal: null }), null, '该用 signal 却读不出、accent 又无彩 → 不发')
+  A.deepEqual(T.pickFill({ hasSignalSkin: true, accent: orange, signal: null }), { source: 'accent', rgb: orange }, 'signal 读不出时彩色 accent 仍可用')
+  // 发出去的体与 routes.v1.json 逐字一致
+  A.deepEqual(T.styleBody({ source: 'signal', rgb: blue }, false), routes.overlayStyle.body, '/overlay-style 的体必须照 routes.v1.json')
+  A.equal(T.styleBody(null, true), null)
+  A.equal(T.styleBody({ source: 'accent', rgb: orange }, true).reducedMotion, true)
+  A.equal(T.ENGINE_ID, 'computer-use')
+  const engineManifest = JSON.parse(readFileSync(new URL('./tangu-plugins/computer-use/tangu-plugin.json', import.meta.url), 'utf8'))
+  A.equal(engineManifest.id, T.ENGINE_ID, 'ctx.tangu.request 的引擎 id 必须是捆绑的引擎插件 id')
+  // 主窗判定 / 减少动态(宿主口径)
+  A.equal(T.isMainWindow({ documentElement: { dataset: { window: 'mini' } } }), false, 'Mini 窗不上报')
+  A.equal(T.isMainWindow({ documentElement: { dataset: { window: 'main' } } }), true)
+  A.equal(T.isMainWindow({ documentElement: { dataset: {} } }), true, '旧宿主不写 data-window → 当主窗')
+  A.equal(T.reducedMotionIn({ documentElement: { dataset: { motionFade: 'on' } } }), true, '宿主的「只淡入淡出」算减少动态')
+}
+
+// ── 状态句 / 步数 / 补间 ──
+{
+  const click = (over) => ({ kind: 'click', seq: 1, label: '发送', ageMs: 100, ...over })
+  A.equal(T.statusText('zh', { ended: false, lastAction: null }), '正在查看')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click() }), '正在点击「发送」')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ ageMs: T.DOING_MS + 1 }) }), '已点击「发送」')
+  A.equal(T.statusText('zh', { ended: true, lastAction: click() }), '已结束')
+  A.equal(T.statusText('en', { ended: false, lastAction: null }), 'Looking')
+  A.equal(T.statusText('en', { ended: false, lastAction: click({ label: 'Send' }) }), 'Clicking “Send”')
+  A.equal(T.statusText('en', { ended: false, lastAction: click({ label: 'Send', ageMs: 2000 }) }), 'Clicked “Send”')
+  A.equal(T.statusText('en', { ended: true, lastAction: null }), 'Ended')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ label: undefined }) }), '正在点击', '没有控件名就不带引号')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ label: '   ' }) }), '正在点击', '全空白的名字当没有')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ kind: 'doubleClick' }) }), '正在点击「发送」', '双击按点击说')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ kind: 'setText', label: '消息' }) }), '正在向「消息」输入')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ kind: 'key' }) }), '正在按键', '纯按键没有控件名的说法')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ kind: 'teleport' }) }), '正在查看', '不认识的动作 → 正在查看')
+  A.equal(T.statusText('zh', { ended: false, lastAction: click({ ageMs: T.LOOKING_AFTER_MS }) }), '正在查看', '上一个动作早过去了 → 又在看')
+  A.equal(T.statusText('en', { ended: false, lastAction: fixture.lastAction }), 'Clicking “Send”', '样例回包')
+  A.equal(T.stepCount(11, 17), 6)
+  A.equal(T.stepCount(null, 17), null, '基数不知道 → 不编步数')
+  A.equal(T.stepCount(20, 17), null)
+  A.equal(T.doneText('zh', 6), '已完成 · 6 步')
+  A.equal(T.doneText('en', 6), 'Done · 6 steps')
+  A.equal(T.doneText('en', 1), 'Done · 1 step')
+  A.equal(T.doneText('zh', null), '已完成')
+  A.equal(T.doneText('en', null), 'Done')
+  const a = { x: 0, y: 0 }
+  const b = { x: 1, y: 0.5 }
+  A.deepEqual(T.tweenPoint(a, b, 0), a)
+  A.deepEqual(T.tweenPoint(a, b, 1), b)
+  A.deepEqual(T.tweenPoint(a, b, 7), b, '超时也停在终点')
+  const mid = T.tweenPoint(a, b, 0.5)
+  A.ok(mid.x > 0.5 && mid.x < 1, `缓出:一半时间应已过半程,得到 ${mid.x}`)
+  A.deepEqual(T.fracPoint({ x: 1.5, y: -2 }), { x: 1, y: 0 }, '比例夹到 0..1')
+  A.equal(T.fracPoint({ x: 'a', y: 1 }), null)
+  A.equal(T.fracPoint(undefined), null)
+  A.deepEqual(T.fracPoint(fixture.cursor), fixture.cursor)
+  A.deepEqual(T.overlayPx({ x: 0.5, y: 0.5 }, 800, 600, 0.5, 10, 20), { x: 210, y: 170 }, '光标位置 = 比例 × 画面像素 × 倍率 + 平移')
+}
+
+// ── 挂载:新回包 → 光标、环、状态句、停止;宿主状态说结束 → overlay-turn 只发一次、「已完成 · N 步」──
+const findAll = (n, pred, out = []) => { if (pred(n)) out.push(n); (n.children || []).forEach((c) => findAll(c, pred, out)); return out }
+const byClass = (n, cls) => findAll(n, (x) => typeof x.className === 'string' && x.className.split(' ').includes(cls))
+const spyRings = () => {
+  const made = []
+  const orig = globalThis.document.createElement
+  globalThis.document.createElement = (tag) => { const n = orig(tag); made.push(n); return n }
+  return { rings: () => made.filter((n) => n.className === 'cu-live-ring'), restore: () => { globalThis.document.createElement = orig } }
+}
+{
+  const RUN = fixture.runId
+  const reqs = []
+  const stops = []
+  const subs = []
+  let running = true
+  const st = (live, sessionId) => (live
+    ? { phase: 'tool', tool: 'act_ui', toolStage: 'exec', runId: RUN, sessionId: 's1', since: 0, textChars: 0, reasoningChars: 0 }
+    : { phase: 'idle', runId: null, sessionId, since: 0, textChars: 0, reasoningChars: 0 })
+  const tangu = {
+    request: async (engine, path, opts) => { reqs.push({ engine, path, body: opts && opts.body }); return { ok: true } },
+    stop: async (arg) => { stops.push(arg); return true },
+    // 新宿主(契约 §2.3):认 { runId }
+    agentStatus: (arg) => {
+      if (arg && typeof arg === 'object') return st(running && arg.runId === RUN, null)
+      return st(running && (arg === undefined || arg === 's1'), arg === undefined ? 's1' : arg)
+    },
+    subscribeAgentStatus: (cb, arg) => { const s = { cb, arg }; subs.push(s); return () => { const i = subs.indexOf(s); if (i >= 0) subs.splice(i, 1) } },
+  }
+  const views2 = []
+  const ctx2 = { registerView: (v) => views2.push(v), getLocale: () => 'en', tangu }
+  const disposeTop = new Function('ctx', src)(ctx2)
+  A.equal(typeof disposeTop, 'function', 'setup 必须交回顶层的拆除函数(停用 / 重载时收观察器和订阅)')
+  A.ok(subs.some((s) => s.arg === undefined), '主窗里应订阅主区会话的状态(没视图开着也要收尾)')
+
+  let reply2 = { active: true, windowId: 4211, app: 'Chatter', ageMs: 50, jpegBase64: 'AAAA', width: 800, height: 524, frameSeq: 1,
+    runId: 'run_prev', turnActive: false, actionCount: 11, lastAction: { kind: 'click', seq: 11, ageMs: 9000 } }
+  globalThis.window = { tangu: { computerUseLiveView: async (o) => {
+    if (o && o.image === false) { const { jpegBase64, width, height, ...rest } = reply2; return rest }
+    return reply2
+  } } }
+  const host2 = mkNode('div')
+  const disposeView = views2[0].mount(host2)
+  const root2 = () => host2.children[0]
+  root2().children[1].clientWidth = 400
+  root2().children[1].clientHeight = 300
+  await sleep(T.TICK_MS + 80)
+  const ringSpy = spyRings()
+  // 这一轮开始:样例回包,光标在 (0.2, 0.3),刚点了「Send」
+  reply2 = { ...fixture, jpegBase64: 'BBBB', frameSeq: 2, actionCount: 12, cursor: { x: 0.2, y: 0.3 }, lastAction: { ...fixture.lastAction, seq: 12, ageMs: 100 } }
+  await sleep(T.TICK_MS * 2 + 80)
+  const cur = byClass(root2(), 'cu-live-cur')[0]
+  A.ok(cur && cur.style.display === 'block', '新回包带 cursor → 画光标')
+  // 800x524 塞进 400x300 → 画布 400x262、倍率 0.5;光标尖端对准 (0.2·800·0.5, 0.3·524·0.5)
+  A.equal(cur.style.transform, `translate(${80 - 2}px, ${0.3 * 524 * 0.5 - 1}px)`, '光标位置必须按取景换算(垫片里没有 rAF → 直接到位)')
+  A.equal(byClass(root2(), 'cu-live-status')[0].textContent, 'Clicking “Send”', '头部状态句(英文界面)')
+  A.ok(ringSpy.rings().length >= 1, 'seq 变了且是点击 → 放一圈环')
+  const stopBtn = byClass(root2(), 'cu-live-stop')[0]
+  A.ok(stopBtn.className.includes('on'), '有 ctx.tangu.stop 且知道 runId → 露出停止')
+  A.ok(subs.some((s) => s.arg && s.arg.runId === RUN), '新宿主上应对这一轮单独订阅 { runId } 状态')
+  stopBtn.fire('click')
+  await sleep(10)
+  A.deepEqual(stops, [{ runId: RUN }], '停止必须带这一轮的 runId(绝不去停别的)')
+  A.equal(stopBtn.disabled, true, '停止发出去以后先禁用,别连发')
+
+  // 双击 → 两圈
+  const before2 = ringSpy.rings().length
+  reply2 = { ...reply2, frameSeq: 3, actionCount: 17, lastAction: { kind: 'doubleClick', seq: 17, ageMs: 50, x: 0.5, y: 0.5 } }
+  await sleep(T.TICK_MS + 80 + 150 + 60)
+  A.equal(ringSpy.rings().length - before2, 2, '双击放两圈')
+  ringSpy.restore()
+
+  // 宿主状态说这一轮结束 → overlay-turn 发一次,带 runId
+  running = false
+  subs.filter((s) => s.arg && s.arg.runId === RUN).forEach((s) => s.cb(st(false, null)))
+  await sleep(T.TICK_MS + 80)
+  const turns = () => reqs.filter((r) => r.path === '/overlay-turn')
+  A.equal(turns().length, 1, '这一轮结束只发一次 /overlay-turn')
+  A.equal(turns()[0].engine, 'computer-use')
+  A.deepEqual(turns()[0].body, routes.overlayTurn.body, '/overlay-turn 的体必须照 routes.v1.json(phase:end + runId)')
+  A.equal(byClass(root2(), 'cu-live-status')[0].textContent, 'Ended')
+  A.equal(byClass(root2(), 'cu-live-badge')[0].textContent, 'Done · 6 steps', '步数 = 结束时计数 − 这一轮之前看到的计数(17 − 11)')
+  A.ok(byClass(root2(), 'cu-live-veil')[0].className.includes('on'), '结束后最后一帧盖一层底色')
+  A.ok(!stopBtn.className.includes('on'), '结束后收起停止')
+  subs.forEach((s) => s.cb(st(false, null)))
+  await sleep(T.TICK_MS * 2 + 80)
+  A.equal(turns().length, 1, '同一个 runId 绝不重发')
+
+  // 旧回包(没有协议 20 的字段)→ 叠层全收,头部照旧,不报错
+  reply2 = { active: true, windowId: 4211, app: 'Chatter', ageMs: 50, jpegBase64: 'CCCC', width: 800, height: 524, frameSeq: 4 }
+  await sleep(T.TICK_MS + 80)
+  A.equal(byClass(root2(), 'cu-live-status')[0].textContent, '', '旧回包:没有状态句')
+  A.equal(byClass(root2(), 'cu-live-cur')[0].style.display, 'none', '旧回包:不画光标')
+  A.ok(!byClass(root2(), 'cu-live-badge')[0].className.includes('on'), '旧回包:没有结束态')
+  disposeView()
+  disposeTop()
+  A.equal(subs.length, 0, '停用后顶层的状态订阅必须全部退掉')
+}
+
+// ── 旧宿主:agentStatus 不认 { runId },把它当会话 id、回一个 idle —— 绝不能据此判「结束」──
+{
+  const reqs = []
+  let mainRun = null // 主区会话正在跑哪一轮
+  const tangu = {
+    request: async (engine, path, opts) => { reqs.push({ path, body: opts && opts.body }); return { ok: true } },
+    agentStatus: (sid) => {
+      // 照旧宿主的 agentStatusOf:参数原样当 sessionId 回来
+      if (sid && typeof sid === 'object') return { phase: 'idle', runId: null, sessionId: sid, since: 0, textChars: 0, reasoningChars: 0 }
+      const id = sid === undefined ? 's9' : sid
+      return id === 's9' && mainRun
+        ? { phase: 'tool', tool: 'act_ui', runId: mainRun, sessionId: 's9', since: 0, textChars: 0, reasoningChars: 0 }
+        : { phase: 'idle', runId: null, sessionId: id, since: 0, textChars: 0, reasoningChars: 0 }
+    },
+    subscribeAgentStatus: () => () => {},
+  }
+  const views3 = []
+  const disposeTop = new Function('ctx', src)({ registerView: (v) => views3.push(v), tangu })
+  // 这一轮不在主区会话里(主区没在跑它):状态拿不到 → 只能交给 helper
+  let reply3 = { ...fixture, runId: 'run_side', actionCount: 5, turnActive: true }
+  globalThis.window = { tangu: { computerUseLiveView: async () => reply3 } }
+  const host3 = mkNode('div')
+  const disposeView = views3[0].mount(host3)
+  await sleep(T.TICK_MS * 3 + 80)
+  A.equal(reqs.filter((r) => r.path === '/overlay-turn').length, 0, '旧宿主回的 idle 不能当成「这一轮结束了」')
+  A.ok(!byClass(host3.children[0], 'cu-live-badge')[0].className.includes('on'), '旧宿主上 helper 还说在进行 → 不许标已完成')
+  reply3 = { ...reply3, turnActive: false }
+  await sleep(T.TICK_MS + 80)
+  A.ok(byClass(host3.children[0], 'cu-live-badge')[0].className.includes('on'), 'helper 说这一轮结束了(状态通道没表态)→ 标已完成')
+  A.equal(reqs.filter((r) => r.path === '/overlay-turn').length, 0, 'helper 自己结束的不用再发 end')
+  // 主区会话里跑的那一轮:按会话 id 盯着,不跑了就发 end(一次)
+  mainRun = 'run_main'
+  reply3 = { ...fixture, runId: 'run_main', actionCount: 9, turnActive: true }
+  await sleep(T.TICK_MS + 80)
+  A.equal(reqs.filter((r) => r.path === '/overlay-turn').length, 0, '还在跑')
+  mainRun = null
+  await sleep(T.TICK_MS * 2 + 80)
+  const ends = reqs.filter((r) => r.path === '/overlay-turn')
+  A.equal(ends.length, 1, '旧宿主:按会话 id 看到它不跑了 → 发一次 end')
+  A.deepEqual(ends[0].body, { phase: 'end', runId: 'run_main' })
+  disposeView()
+  disposeTop()
 }
 
 console.log('✅ computer-use 插件自检通过')

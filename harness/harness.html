@@ -1,19 +1,38 @@
-<!doctype html><meta charset="utf-8"><title>CU live view harness</title>
+<!doctype html><html data-window="main"><meta charset="utf-8"><title>CU live view harness</title>
+<!--
+  实时画面的浏览器台架(check.mjs 的垫片不做布局、不读像素,这两样只有真浏览器能证)。要经 http 打开(会 fetch ../main.js 与 ./fixtures/):
+    在仓根起一个静态服务,打开 /harness/harness.html?…
+  参数:
+    proto=20(缺省)| 19       20 = 假回包照 fixtures/liveview-reply.v20.json(带光标 / 最近动作 / 计数 / runId / turnActive);19 = 旧回包
+    theme=light(缺省)| dark   明暗
+    skin=warm(缺省)| classic  warm = 彩色主题色(用 color-mix 写,验「读像素不解析字符串」);classic = 单色配色,有 --signal-skin → 柔蓝
+    state=live(缺省)| done    live = 一直在操作(动作循环);done = 做完 6 步就结束(假宿主状态转 idle,helper 报 turnActive:false)
+    hold=3                     停在第 3 步不动(截图用,画面稳定)
+    lang=zh(缺省)| en
+-->
 <style>
-  :root{--bg:#1b1b1f;--bg-card:#222226;--text:#e8e8ea;--text-muted:#9a9aa2;--text-light:#9a9aa2;
-        --border:#3f3f43;--accent:#ff9a7d;--accent-hover:#ffb59d;--accent-light:#3a2b26;--overlay-subtle:#2a2a2e;--overlay-light:#303036}
+  :root{--bg:#f6f5f3;--bg-card:#ffffff;--text:#1f1f22;--text-muted:#6b6b73;--text-light:#6b6b73;--border:#e3e1dd;
+        --accent:color-mix(in oklch, #d4561f 92%, white);--accent-ink:#b6491a;--accent-hover:#b6491a;--accent-light:#f7e4da;
+        --overlay-subtle:#efede9;--overlay-light:#ebe8e3;
+        --signal:var(--signal-pick, var(--signal-skin, var(--accent-ink)))}
+  :root.dark{--bg:#1b1b1f;--bg-card:#222226;--text:#e8e8ea;--text-muted:#9a9aa2;--text-light:#9a9aa2;--border:#3f3f43;
+        --accent:color-mix(in oklch, #ff9a7d 94%, white);--accent-ink:#ffb59d;--accent-hover:#ffb59d;--accent-light:#3a2b26;
+        --overlay-subtle:#2a2a2e;--overlay-light:#303036}
+  /* 经典(cream):主题色就是正文色,另设 --signal-skin(同宿主 skins.css) */
+  :root[data-skin="classic"]{--accent:#1c1c1c;--accent-ink:#1c1c1c;--signal-skin:#2c5f9e}
+  :root.dark[data-skin="classic"]{--accent:#f8f7f6;--accent-ink:#f8f7f6;--signal-skin:#8fb4e3}
   body{margin:0;background:var(--bg);color:var(--text);font:13px/1.5 -apple-system,system-ui,sans-serif}
   #bar{padding:8px 12px;border-bottom:1px solid var(--border);display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  #bar button{font:inherit;padding:4px 9px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);color:inherit;cursor:pointer}
+  #bar button,#bar select{font:inherit;padding:4px 9px;border-radius:8px;border:1px solid var(--border);background:var(--bg-card);color:inherit;cursor:pointer}
   /* 宿主给视图的容器:Agent Desk 那种「高度由 flex 决定」的格子 */
-  #frame{height:420px;width:640px;margin:16px;border:1px dashed var(--border);display:flex;flex-direction:column}
+  #frame{height:420px;width:640px;margin:16px;border:1px solid var(--border);border-radius:10px;overflow:hidden;display:flex;flex-direction:column}
   #frame > *{flex:1 1 auto;min-height:0}
   #log{padding:8px 12px;color:var(--text-muted);white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:12px}
 </style>
 <div id="bar">
   <button id="mount">挂载</button><button id="unmount">卸载</button>
   <label><input type="checkbox" id="live" checked> 持续换帧(模拟实时)</label>
-  <label>窗口形状 <select id="shape">
+  <label>窗口形状(proto=19) <select id="shape">
     <option value="1440x900">1440×900 宽屏</option>
     <option value="1080x1920">1080×1920 竖屏(手机比例)</option>
     <option value="800x800">800×800 正方</option>
@@ -21,13 +40,30 @@
     <option value="230x408">230×408 计算器</option>
   </select></label>
   <button id="measure">量一量(留白/比例)</button>
+  <button id="dark">明 / 暗</button>
+  <button id="skin">彩色 / 经典</button>
+  <button id="end">结束这一轮</button>
   <span id="stat"></span>
 </div>
 <div id="frame"></div>
 <div id="log"></div>
 <script type="module">
+const qs = new URLSearchParams(location.search)
+const PROTO = qs.get('proto') === '19' ? 19 : 20
+const STATE = qs.get('state') === 'done' ? 'done' : 'live'
+const HOLD = Number(qs.get('hold')) || 0
+const LANG = qs.get('lang') === 'en' ? 'en' : 'zh'
+const html = document.documentElement
+if (qs.get('theme') === 'dark') html.classList.add('dark')
+if (qs.get('skin') === 'classic') html.dataset.skin = 'classic'
+document.getElementById('dark').onclick = () => html.classList.toggle('dark')
+document.getElementById('skin').onclick = () => { if (html.dataset.skin) delete html.dataset.skin; else html.dataset.skin = 'classic' }
+
 const log = (...a) => { document.getElementById('log').textContent += a.join(' ') + '\n' }
-// 造一张能一眼看出「有没有在变」的图:带秒数与网格
+const fixture = await (await fetch('./fixtures/liveview-reply.v20.json')).json()
+const routes = await (await fetch('./fixtures/routes.v1.json')).json()
+
+// ── 旧回包用的帧:带秒数与网格,一眼看出「有没有在变」──
 function makeFrame(n, w = 1280, h = 720) {
   const c = document.createElement('canvas'); c.width = w; c.height = h
   const g = c.getContext('2d')
@@ -39,29 +75,150 @@ function makeFrame(n, w = 1280, h = 720) {
   g.fillStyle = '#fff'; g.font = '20px monospace'; g.fillText(`${w}x${h}  frame ${n}`, w / 2, h - 40)
   return { data: c.toDataURL('image/jpeg', 0.7).split(',')[1], w, h }
 }
+
+// ── 协议 20 用的帧:一扇假的聊天窗口(尺寸 = 样例回包的 800x524),「Send」按钮正好在样例的光标点上 ──
+function chatterFrame(typed, sent) {
+  const w = fixture.width, h = fixture.height
+  const c = document.createElement('canvas'); c.width = w; c.height = h
+  const g = c.getContext('2d')
+  g.fillStyle = '#f3f4f6'; g.fillRect(0, 0, w, h)
+  g.fillStyle = '#e5e7eb'; g.fillRect(0, 0, w, 44)
+  g.fillStyle = '#374151'; g.font = '600 17px system-ui'; g.textBaseline = 'middle'; g.fillText('Zhang San', 64, 22)
+  g.fillStyle = '#9ca3af'; g.beginPath(); g.arc(36, 22, 14, 0, 7); g.fill()
+  const bubble = (x, y, bw, text, mine) => {
+    g.fillStyle = mine ? '#3b82f6' : '#ffffff'; g.beginPath(); g.roundRect(x, y, bw, 38, 12); g.fill()
+    g.fillStyle = mine ? '#fff' : '#111827'; g.font = '15px system-ui'; g.fillText(text, x + 14, y + 19)
+  }
+  bubble(24, 70, 250, 'Are we still on for tomorrow?', false)
+  bubble(24, 120, 150, 'Let me know', false)
+  if (sent) bubble(w - 24 - 160, 176, 160, 'See you tomorrow', true)
+  // 输入框 + 发送按钮
+  g.fillStyle = '#ffffff'; g.fillRect(0, h - 96, w, 96)
+  g.strokeStyle = '#d1d5db'; g.lineWidth = 1.5; g.beginPath(); g.roundRect(24, h - 82, 440, 44, 10); g.stroke()
+  g.fillStyle = typed ? '#111827' : '#9ca3af'; g.font = '15px system-ui'; g.fillText(typed || 'Message', 40, h - 60)
+  const sx = fixture.cursor.x * w, sy = fixture.cursor.y * h
+  g.fillStyle = '#2563eb'; g.beginPath(); g.roundRect(sx - 44, sy - 20, 88, 40, 10); g.fill()
+  g.fillStyle = '#fff'; g.font = '600 15px system-ui'; g.textAlign = 'center'; g.fillText('Send', sx, sy); g.textAlign = 'start'
+  return c.toDataURL('image/jpeg', 0.8).split(',')[1]
+}
+
+// ── 假的「这一轮」:6 个动作,每步 1.2 s。live 循环;done 做完一遍就结束 ──
+const RUN = fixture.runId
+const STEPS = [
+  { kind: 'click', label: 'Message', x: 0.34, y: 0.88 },
+  { kind: 'type', label: 'Message', x: 0.34, y: 0.88, typed: 'See you tomorrow' },
+  { kind: 'click', label: 'Send', x: fixture.cursor.x, y: fixture.cursor.y, typed: 'See you tomorrow' },
+  { kind: 'scroll', label: 'Conversation', x: 0.5, y: 0.42, sent: true },
+  { kind: 'doubleClick', label: 'Zhang San', x: 0.16, y: 0.085, sent: true },
+  { kind: 'click', label: 'Send', x: fixture.cursor.x, y: fixture.cursor.y, sent: true },
+]
+const STEP_MS = 1200
+const PREV_MS = 400       // 开头先报一帧「上一轮」,给视图一个基数(11),好算出「6 步」
+const BASE_COUNT = 11
+const t0 = performance.now()
+let forcedEnd = false
+const subs = new Set()
+function timeline() {
+  const t = performance.now() - t0
+  if (t < PREV_MS) return { prev: true }
+  let i = Math.floor((t - PREV_MS) / STEP_MS)
+  const into = (t - PREV_MS) % STEP_MS
+  if (HOLD) return { i: HOLD - 1, into: Math.min(into, 150), ended: STATE === 'done' && false }
+  if (STATE === 'done' && i >= STEPS.length) return { i: STEPS.length - 1, into: STEP_MS + (t - PREV_MS - STEPS.length * STEP_MS), ended: true }
+  if (forcedEnd) return { i: Math.min(i, STEPS.length - 1), into, ended: true }
+  return { i, into, ended: false }
+}
+const runEnded = () => { const tl = timeline(); return !tl.prev && tl.ended }
+let announced = false
+function maybeAnnounceEnd() {
+  if (announced || !runEnded()) return
+  announced = true
+  const idle = { phase: 'idle', runId: null, sessionId: null, since: Date.now(), textChars: 0, reasoningChars: 0 }
+  subs.forEach((s) => s.cb(idle))
+  log('假宿主:这一轮结束(状态转 idle)')
+}
+setInterval(maybeAnnounceEnd, 100)
+document.getElementById('end').onclick = () => { forcedEnd = true }
+
 let n = 0
+let lastImgKey = ''
 window.tangu = {
   computerUseLiveView: async (o) => {
-    const [sw, sh] = document.getElementById('shape').value.split('x').map(Number)
-    // 放大取景时主进程会给更高分辨率的同一个窗口 —— 比例必须不变,只是像素更多
-    const k = o.maxDimension >= 1600 ? 2 : 1
-    // ⚠️照实现主进程的语义:image:false 就是**不给图**(连宽高都没有)。
-    // 无视这个参数的话,"我们没要图时保留现有画面"那条分支在 harness 里永远走不到。
-    if (o.image === false) {
-      document.getElementById('stat').textContent = `第 ${n} 帧 · 只问状态(image:false)`
-      return { active: true, windowId: 9, app: '测试窗口', title: '(只问状态)', ageMs: 200 }
+    if (PROTO === 19) {
+      const [sw, sh] = document.getElementById('shape').value.split('x').map(Number)
+      // 放大取景时主进程会给更高分辨率的同一个窗口 —— 比例必须不变,只是像素更多
+      const k = o.maxDimension >= 1600 ? 2 : 1
+      // ⚠️照实现主进程的语义:image:false 就是**不给图**(连宽高都没有)。
+      if (o.image === false) {
+        document.getElementById('stat').textContent = `第 ${n} 帧 · 只问状态(image:false)`
+        return { active: true, windowId: 9, app: '测试窗口', title: '(只问状态)', ageMs: 200 }
+      }
+      const f = makeFrame(++n, sw * k, sh * k)
+      document.getElementById('stat').textContent = `第 ${n} 帧 · 请求 maxDimension=${o.maxDimension}`
+      if (!document.getElementById('live').checked && n > 1) return { active: true, windowId: 9, app: '测试窗口', title: '静止', ageMs: 9000, width: f.w, height: f.h, jpegBase64: f.data }
+      return { active: true, windowId: 9, app: '测试窗口', title: `第 ${n} 帧`, ageMs: 120, width: f.w, height: f.h, jpegBase64: f.data }
     }
-    const f = makeFrame(++n, sw * k, sh * k)
-    document.getElementById('stat').textContent = `第 ${n} 帧 · 请求 maxDimension=${o.maxDimension}`
-    if (!document.getElementById('live').checked && n > 1) return { active: true, windowId: 9, app: '测试窗口', title: '静止', ageMs: 9000, width: f.w, height: f.h, jpegBase64: f.data }
-    return { active: true, windowId: 9, app: '测试窗口', title: `第 ${n} 帧`, ageMs: 120, width: f.w, height: f.h, jpegBase64: f.data }
+    // 协议 20:样例回包,在它上面让光标走、seq 递增
+    const tl = timeline()
+    const meta = { active: true, windowId: fixture.windowId, pid: fixture.pid, app: fixture.app, bundleId: fixture.bundleId, title: fixture.title, ageMs: 40 }
+    let extra
+    let picture
+    if (tl.prev) {
+      extra = { runId: 'run_prev', turnActive: false, actionCount: BASE_COUNT, lastAction: { kind: 'click', seq: BASE_COUNT, ageMs: 30000 } }
+      picture = ['', false]
+    } else {
+      const loop = Math.floor(tl.i / STEPS.length)
+      const s = STEPS[tl.i % STEPS.length]
+      const seq = BASE_COUNT + 1 + tl.i
+      extra = {
+        runId: loop === 0 ? RUN : `${RUN}_${loop}`,
+        turnActive: !tl.ended,
+        actionCount: seq,
+        cursor: { x: s.x, y: s.y },
+        lastAction: { kind: s.kind, seq, ageMs: Math.round(tl.into), x: s.x, y: s.y, label: s.label },
+      }
+      picture = [s.typed || '', Boolean(s.sent)]
+    }
+    if (o.image === false) return { ...meta, ...extra }
+    const key = picture.join('|')
+    const frameSeq = key === lastImgKey ? fixture.frameSeq + n : fixture.frameSeq + (++n)
+    if (key === lastImgKey && o.sinceFrame && String(o.sinceFrame) === String(frameSeq)) return { ...meta, ...extra, unchanged: true, frameSeq }
+    lastImgKey = key
+    document.getElementById('stat').textContent = `seq ${extra.actionCount} · ${extra.lastAction.kind} · turnActive=${extra.turnActive}`
+    return { ...meta, ...extra, width: fixture.width, height: fixture.height, jpegBase64: chatterFrame(...picture), frameSeq, unchanged: false }
   },
 }
+
+// ── 假宿主:ctx.tangu.request / stop / agentStatus / subscribeAgentStatus(契约 §1.6、§2.2、§2.3)──
+const status = (live, sessionId) => (live
+  ? { phase: 'tool', tool: 'act_ui', toolStage: 'exec', runId: RUN, sessionId: 'harness', since: Date.now(), textChars: 0, reasoningChars: 0 }
+  : { phase: 'idle', runId: null, sessionId, since: Date.now(), textChars: 0, reasoningChars: 0 })
+const running = () => { const tl = timeline(); return !tl.prev && !tl.ended }
+window.__requests = []
 const views = []
-const ctx = { registerView: (v) => views.push(v), registerSetting(){}, registerCommand(){} }
+const ctx = {
+  registerView: (v) => views.push(v), registerSetting() {}, registerCommand() {},
+  getLocale: () => LANG,
+  tangu: {
+    request: async (engine, path, opts) => {
+      const body = opts && opts.body
+      window.__requests.push({ engine, path, body })
+      log(`request ${engine}${path} ${JSON.stringify(body)}`)
+      const want = path === routes.overlayStyle.path ? routes.overlayStyle : path === routes.overlayTurn.path ? routes.overlayTurn : null
+      return want ? want.reply : { ok: false }
+    },
+    stop: async (target) => { log(`stop ${JSON.stringify(target)}`); if (target && target.runId && running()) { forcedEnd = true; return true } return false },
+    agentStatus: (arg) => {
+      if (arg && typeof arg === 'object') return status(running() && String(arg.runId).startsWith(RUN), null)
+      return status(running(), arg ?? 'harness')
+    },
+    subscribeAgentStatus: (cb, arg) => { const s = { cb, arg }; subs.add(s); return () => subs.delete(s) },
+  },
+}
 const src = await (await fetch('../main.js?t=' + Date.now())).text()
-new Function('ctx', src)(ctx)
-log('注册视图:', views.map(v => v.id).join(','))
+const disposePlugin = new Function('ctx', src)(ctx)
+window.__disposePlugin = disposePlugin
+log('注册视图:', views.map(v => v.id).join(','), `· proto ${PROTO} · state ${STATE}`)
 let dispose = null
 document.getElementById('mount').onclick = () => {
   if (dispose) return
@@ -76,9 +233,11 @@ document.getElementById('unmount').onclick = () => { if (dispose) { dispose(); d
  *   ② 画面渲染尺寸 == 画布尺寸(画布内部零留白 —— 而不是靠裁掉内容换来的)
  *   ③ 画布至少一边贴满舞台(没有白留的空间)
  *   ④ 画布不溢出舞台(padding / flex-shrink 都能让它悄悄溢出,踩过)
+ * ⚠️只在 proto=19 下有意义(协议 20 的假窗口尺寸固定为样例的 800x524)。
  * ⚠️后台标签页里 document.hidden=true,视图按设计进 6s 慢速道且不要图 —— 自检里临时伪装成可见。
  */
 document.getElementById('measure').onclick = async () => {
+  if (PROTO !== 19) { log('量一量:请用 ?proto=19 打开(协议 20 的假窗口尺寸固定)'); return }
   const btn = document.getElementById('measure')
   btn.disabled = true
   const desc = Object.getOwnPropertyDescriptor(Document.prototype, 'hidden')
@@ -126,3 +285,4 @@ document.getElementById('measure').onclick = async () => {
 }
 document.getElementById('mount').click()
 </script>
+</html>
