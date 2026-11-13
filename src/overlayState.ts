@@ -68,6 +68,16 @@ export function overlayActExtras(env: NodeJS.ProcessEnv = process.env): Record<s
   };
 }
 
+/** 把 extras 并进一条动作(act 顶层或 actBatch 的一步):只补调用方没给的键(值是 undefined 也算没给),
+ *  调用方显式给的 clickAfterArrival / runId / overlayStyle / reduceMotion 原样保留。 */
+export function withOverlayActExtras<T extends Record<string, unknown>>(action: T, extras: Record<string, unknown> = overlayActExtras()): T {
+  const out: Record<string, unknown> = { ...action };
+  for (const [key, value] of Object.entries(extras)) {
+    if (out[key] === undefined) out[key] = value;
+  }
+  return out as T;
+}
+
 /** 把一条 overlayTurn 发给 helper。只连已经在跑的 helper(daemonCommand 不会拉起它);连不上就是失败。 */
 export type OverlayTurnTransport = (args: Record<string, unknown>) => Promise<unknown>;
 const helperTransport: OverlayTurnTransport = (args) => macosHelper.daemonCommand('overlayTurn', args, 1_500);

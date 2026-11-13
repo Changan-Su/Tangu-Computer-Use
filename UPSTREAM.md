@@ -230,8 +230,9 @@ through key events, which do not land in the background (measured). `AXValue` wr
 
 ### Overlay fields on every act (vendor TS patch, protocol 20)
 
-`src/vendor/platform/macos/backend.ts` spreads `overlayActExtras()` (from `src/overlayState.ts`, outside vendor) into every
-`act` and every `actBatch` step, next to `cursorOverlay`: `overlayStyle` / `reduceMotion` (cached from the engine route
+`src/vendor/platform/macos/backend.ts` passes every `act` and every `actBatch` step through `withOverlayActExtras()` (from
+`src/overlayState.ts`, outside vendor), next to `cursorOverlay`. It only fills keys the caller left undefined, so a caller's own
+`clickAfterArrival` / `runId` / `overlayStyle` / `reduceMotion` are kept. The filled fields are `overlayStyle` / `reduceMotion` (cached from the engine route
 `POST /overlay-style`), `runId` (AsyncLocalStorage set around each tool `execute` in `src/tools.ts`, so concurrent runs and Jev
 carry their own) and `clickAfterArrival` (`PI_COMPUTER_USE_CLICK_AFTER_ARRIVAL=0` → false, the negative control of "click after
 the cursor arrives"). **A re-sync wipes it; replay it.** `npm run check:overlay-routes` fails without it.

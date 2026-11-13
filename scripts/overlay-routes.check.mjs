@@ -44,7 +44,7 @@ try {
 
 const {
   clickAfterArrival, macosBackend, macosHelper, handleOverlayStyle, handleOverlayTurn, mountOverlayRoutes, registerOverlayRoutes,
-  sendOverlayTurnEnd, resetOverlayStyle, withOverlayRun, overlayActExtras, watchRunAbort, watchedRunCount,
+  sendOverlayTurnEnd, resetOverlayStyle, setOverlayStyle, withOverlayRun, overlayActExtras, watchRunAbort, watchedRunCount,
 } = mod;
 const fixture = JSON.parse(readFileSync(path.join(root, 'scripts/fixtures/routes.v1.json'), 'utf8'));
 
@@ -159,6 +159,25 @@ assert.equal(byRun('run_a'), 2, 'run_a 的 act 和 actBatch 都带 run_a');
 assert.equal(byRun('run_b'), 2, 'run_b 的 act 和 actBatch 都带 run_b');
 await macosBackend.act(request);
 assert.equal('runId' in sent.at(-1).args, false, '不在 run 里不带 runId');
+
+// 调用方显式给的字段(act 顶层、actBatch 每一步)原样保留,extras 只补没给的;给成 undefined 算没给。
+sent.length = 0;
+setOverlayStyle({ fill: '#abcdef' }, true);
+const explicit = { ...request, clickAfterArrival: false, runId: 'run_mine', overlayStyle: { fill: '#123456' }, reduceMotion: false };
+await withOverlayRun('run_ctx', async () => {
+  await macosBackend.act(explicit);
+  await macosBackend.actBatch([explicit, { ...request, runId: 'run_step', clickAfterArrival: undefined }, request]);
+});
+const [explicitAct, explicitBatch] = sent;
+assert.equal(explicitAct.args.clickAfterArrival, false, 'act:调用方给的 clickAfterArrival:false 不被改回 true');
+assert.equal(explicitAct.args.runId, 'run_mine', 'act:调用方给的 runId 不被上下文覆盖');
+assert.deepEqual(explicitAct.args.overlayStyle, { fill: '#123456' }, 'act:调用方给的 overlayStyle 不被缓存覆盖');
+assert.equal(explicitAct.args.reduceMotion, false, 'act:调用方给的 reduceMotion 不被缓存覆盖');
+const [s0, s1, s2] = explicitBatch.args.actions;
+assert.deepEqual([s0.clickAfterArrival, s0.runId, s0.overlayStyle, s0.reduceMotion], [false, 'run_mine', { fill: '#123456' }, false], 'actBatch 第一步:显式字段原样');
+assert.deepEqual([s1.runId, s1.clickAfterArrival, s1.overlayStyle, s1.reduceMotion], ['run_step', true, { fill: '#abcdef' }, true], 'actBatch 第二步:给了 runId 留着,给成 undefined 的照补');
+assert.deepEqual([s2.runId, s2.clickAfterArrival, s2.overlayStyle, s2.reduceMotion], ['run_ctx', true, { fill: '#abcdef' }, true], 'actBatch 第三步:什么都没给就全补');
+resetOverlayStyle();
 
 // 中止:发一次带 runId 的 end;同一个 run 只挂一个监听;挂得再多也只留 16 个。
 const ended = [];
