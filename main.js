@@ -1230,8 +1230,8 @@ function applyRunStatus(runId, st) {
   if (st.runId === runId) {
     if (st.phase === 'done' || st.phase === 'error') { if (rec.sawRunning) finishRun(runId, rec); return }
     rec.sawRunning = true
-    if (st.phase === 'idle') { rec.stopping = true; return }
-    if (rec.stopping) { rec.stopping = false; rec.resumed++ }
+    if (st.phase === 'idle') { rec.stopping = true; syncStopPoll(); return }
+    if (rec.stopping) { rec.stopping = false; rec.resumed++; syncStopPoll() }
     return
   }
   if (rec.sawRunning) finishRun(runId, rec)
@@ -1241,6 +1241,24 @@ function finishRun(runId, rec) {
   rec.stopping = false
   endTurn(runId)
   unwatchRun(runId)
+  syncStopPoll()
+}
+/**
+ * 停止中的那几轮要再轮询着问:宿主的订阅只在 statusKey(phase / tool / toolStage / waitingFor / sessionId / agentSlug)变了才回调,
+ * **不含 runId** —— 按会话订阅时「停止中」(idle,runId 还在)和停完(idle,runId 没了)键一模一样,真结束时一声不响。
+ * 只在有停止中的轮次时开着,都收尾了就关。
+ */
+const STOP_POLL_MS = 1000
+let stopPoll = null
+function syncStopPoll() {
+  let any = false
+  for (const r of runs.values()) if (r.stopping && !r.statusEnded) { any = true; break }
+  if (any && !stopPoll) {
+    stopPoll = setInterval(() => {
+      for (const [id, r] of [...runs]) if (r.stopping && !r.statusEnded) pollRunStatus(id)
+      syncStopPoll()
+    }, STOP_POLL_MS)
+  } else if (!any && stopPoll) { clearInterval(stopPoll); stopPoll = null }
 }
 const pollRunStatus = (runId) => applyRunStatus(runId, readRunStatus(runId))
 
@@ -2002,7 +2020,7 @@ const teardown = []
     teardown.push(() => { if (typeof off === 'function') { try { off() } catch { /* 宿主会统一收 */ } } })
   }
 }
-teardown.push(() => unwatchRun())
+teardown.push(() => { unwatchRun(); if (stopPoll) { clearInterval(stopPoll); stopPoll = null } })
 
 // 纯函数暴露给 check.mjs(宿主装载时 ctx 存在,check 里只取这个挂点)。
 globalThis.__CU_LIVE_TEST__ = {
@@ -2012,7 +2030,7 @@ globalThis.__CU_LIVE_TEST__ = {
   fracPoint, easeOut, tweenPoint, overlayPx, isMainWindow, tracksTurns, reducedMotionIn, ENGINE_ID, FALLBACK_FILL,
   DOING_MS, LOOKING_AFTER_MS, TWEEN_MS,
   CU_TOOLS, describeCall, tlClip, joinZh, keysText, labelForRef, appForState, appForRoot, appInResult, appBundles, learnBundle,
-  pipStageHeight, PIP_STAGE_DEFAULT,
+  pipStageHeight, PIP_STAGE_DEFAULT, STOP_POLL_MS,
 }
 
 // 停用 / 重载插件:拆掉顶层的观察器、订阅、定时器(视图实例各自的清理在 mount 返回的函数里)。

@@ -722,6 +722,15 @@ for (const legacy of [false, true]) {
   mainSid = 'sA'
   fire(mainSubs)
   A.ok(subs.some(directed('RA2', 'sA')), `${tag}:新一轮照样订阅`)
+  // 停止中以后真结束,但宿主不回调(按会话订阅时两份状态的 statusKey 一样,不含 runId)→ 靠停止中的轮询收尾
+  stopping = 'RA2'
+  fire(directed('RA2', 'sA'))
+  sessions.sA = null
+  stopping = null
+  await sleep(T.STOP_POLL_MS + 300)
+  A.deepEqual(ends(), ['RA', 'RB', 'RA2'], `${tag}:停止中的一轮真结束了、宿主没回调,也要靠轮询发 end`)
+  sessions.sA = 'RA3'
+  fire(mainSubs)
   dispose()
   A.equal(subs.length, 0, `${tag}:停用后顶层订阅(含定向的)全部退掉`)
 }
