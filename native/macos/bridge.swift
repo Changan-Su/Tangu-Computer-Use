@@ -1678,6 +1678,9 @@ final class Bridge {
 			imagePayload = nil
 			transform = rectTransform(windowFrame: rootFrame, imageWidth: imageWidth, imageHeight: imageHeight)
 		}
+		let webFlush: [String: Any]? = (boolArg(request, "flushWeb") ?? false)
+			? flushPendingWebUpdates(pid: pid, window: window, waitMs: optionalIntArg(request, "flushWaitMs") ?? 0)
+			: nil
 		let describeStart = Date()
 		let outline = buildLookOutline(root: rootElement, transform: transform)
 		let describeMs = elapsedMs(describeStart)
@@ -1726,6 +1729,7 @@ final class Bridge {
 			"readText": ["requested": readText, "executed": readTextExecuted],
 		]
 		if let imagePayload { response["image"] = imagePayload }
+		if let webFlush { response["webFlush"] = webFlush }
 		return response
 	}
 
@@ -2764,9 +2768,12 @@ final class Bridge {
 			return true
 		}
 
+		let flushWeb = boolArg(request, "flushWeb") ?? false
 		var lastCount = 0
 		repeat {
 			let changeGeneration = rootChangeGeneration(pid: pid)
+			// 页面不可见时变化攒着不发,也就没有通知来叫醒这个循环:每一轮读之前都问。
+			if flushWeb { _ = flushPendingWebUpdates(pid: pid, window: window) }
 			let collected = collectDescendantsWithContext(startingAt: rootElement, maxDepth: 12, maxNodes: 2000)
 			let descendants = scopeExact ? Array(collected.prefix(1)) : collected
 			lastCount = descendants.count
@@ -2922,6 +2929,80 @@ final class Bridge {
 		if isBrowser(pid: pid) && (enhancedStatus == .success || manualStatus == .success) {
 			Thread.sleep(forTimeInterval: 0.35)
 		}
+	}
+
+	/// Forsion patch, see UPSTREAM.md. 窗口下第一个 AXWebArea,有界地按层找(工具栏节点多,按层比按深度先到页面)。
+	private func firstWebArea(under window: AXUIElement, visits: inout Int, maxDepth: Int = 14, maxVisits: Int = 400) -> AXUIElement? {
+		var queue: [(AXUIElement, Int)] = axElementArray(window, attribute: kAXChildrenAttribute as CFString).map { ($0, 1) }
+		var index = 0
+		while index < queue.count && visits < maxVisits {
+			let (element, depth) = queue[index]
+			index += 1
+			visits += 1
+			let role = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
+			if role == "AXWebArea" { return element }
+			if role == "AXMenuBar" || depth >= maxDepth { continue }
+			for child in axElementArray(element, attribute: kAXChildrenAttribute as CFString) where queue.count < maxVisits * 4 {
+				queue.append((child, depth + 1))
+			}
+		}
+		return nil
+	}
+
+	/// Forsion patch, see UPSTREAM.md. 读网页窗口之前先问页面一次。
+	///
+	/// 窗口被完全盖住时页面进 hidden,Chromium 不再把页面的无障碍变化送到浏览器进程:后台 AXPress 照样落地,
+	/// 但这扇窗的树一直停在按之前,直到页面被问到别的什么。位置查询会转给页面,页面先把积压的变化送出来再答,
+	/// 查询本身不改页面。必须按 App 限定:窗口被盖住时全系统范围的查询答的是盖在上面的那个 App。
+	/// 做法来自 cua-driver 5debb0dc5(MIT)。
+	///
+	/// 返回这次问的证据,调用方据此决定信不信随后读到的树:没问成时 `asked` 为 false 并带 `reason`;
+	/// `hitInWindow` 为 false = 同一个 App 的另一扇窗挡在这个点上,问到的不是这扇窗的页面。
+	/// `waitMs` > 0 时问完等页面的变化通知,最多等这么久;`changedAfterMs` 是等到的那一刻,没等到就没有这个字段。
+	private func flushPendingWebUpdates(pid: Int32, window: AXUIElement, waitMs: Int = 0) -> [String: Any] {
+		let start = Date()
+		var visits = 0
+		guard let webArea = firstWebArea(under: window, visits: &visits) else {
+			return ["asked": false, "reason": "no_web_area", "visits": visits, "ms": elapsedMs(start)]
+		}
+		guard let area = frameForElement(webArea) else {
+			return ["asked": false, "reason": "no_frame", "visits": visits, "ms": elapsedMs(start)]
+		}
+		let overlap = area.intersection(frameForWindow(window))
+		let target = !overlap.isNull && overlap.width >= 1 && overlap.height >= 1 ? overlap : area
+		let point = CGPoint(x: target.midX, y: target.midY)
+		let searchMs = elapsedMs(start)
+		if waitMs > 0 { _ = ensureRootObserver(pid: pid) }
+		let generation = rootChangeGeneration(pid: pid)
+		let app = AXUIElementCreateApplication(pid)
+		AXUIElementSetMessagingTimeout(app, 1.0)
+		let hitStart = Date()
+		var hitRef: AXUIElement?
+		let status = AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &hitRef)
+		let hitMs = elapsedMs(hitStart)
+		var evidence: [String: Any] = ["visits": visits, "searchMs": searchMs, "hitMs": hitMs, "point": ["x": point.x, "y": point.y]]
+		guard status == .success, let hit = hitRef else {
+			evidence["asked"] = false
+			evidence["reason"] = "hit_test_failed"
+			evidence["status"] = Int(status.rawValue)
+			evidence["ms"] = elapsedMs(start)
+			return evidence
+		}
+		let hitRole = stringAttribute(hit, attribute: kAXRoleAttribute as CFString) ?? ""
+		let hitWindow = copyAttribute(hit, attribute: kAXWindowAttribute as CFString).flatMap(asAXElement)
+		evidence["asked"] = true
+		evidence["hitRole"] = hitRole
+		evidence["hitInWindow"] = hitWindow.map { sameElement($0, window) } ?? (sameElement(hit, window) || isElement(hit, descendantOf: window))
+		evidence["hitInWebArea"] = hitRole == "AXWebArea" || hasAncestorRole(hit, role: "AXWebArea")
+		if waitMs > 0 {
+			let deadline = Date().addingTimeInterval(Double(min(waitMs, 5_000)) / 1000.0)
+			while rootChangeGeneration(pid: pid) == generation && Date() < deadline {
+				waitForRootChange(pid: pid, since: generation, until: deadline)
+			}
+			if rootChangeGeneration(pid: pid) != generation { evidence["changedAfterMs"] = elapsedMs(hitStart) }
+		}
+		evidence["ms"] = elapsedMs(start)
+		return evidence
 	}
 
 	private func isBrowser(pid: Int32) -> Bool {
