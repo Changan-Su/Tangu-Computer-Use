@@ -94,26 +94,50 @@ export async function sendOverlayTurnEnd(runId: string | undefined, transport: O
 }
 
 /** 这一轮被中止时尽力发一次 overlayTurn end(带这一轮的 runId)。每个 run 只挂一个监听;最多记 16 个 run,
- *  挤出去的那个顺手摘掉监听 —— 不会越挂越多。 */
+ *  挤出去的那个顺手摘掉监听 —— 不会越挂越多。返回 unwatch:工具返回时调,摘掉这次挂的监听(只摘自己那只)。
+ *
+ *  引擎给每次工具调用的是一只独立的 signal(按 defaultTimeoutMs 超时;registry.ts 的 withTimeoutSignal),工具返回后
+ *  它和整轮的 abort 就断开了,所以这只监听只在工具执行期间有用;返回后摘掉,不留引用。
+ *  同一只 signal 在工具自己超时的时候也会 abort,但这一轮并没有结束:显式 end 在 helper 那边是终局(之后带这个 runId
+ *  的动作都按迟到处理),所以 abort 发生在 timeoutMs 附近(差不到 250 ms)时按超时处理、不发。 */
 const watchedRuns = new Map<string, { signal: AbortSignal; onAbort: () => void }>();
 const MAX_WATCHED_RUNS = 16;
+const TIMEOUT_SLACK_MS = 250;
 
-export function watchRunAbort(runId: string | undefined, signal: AbortSignal | undefined, send: (runId: string) => unknown = (id) => sendOverlayTurnEnd(id), platform: NodeJS.Platform = process.platform): void {
-  if (platform !== 'darwin' || !runId || !signal || signal.aborted) return;
+export function watchRunAbort(
+  runId: string | undefined,
+  signal: AbortSignal | undefined,
+  send: (runId: string) => unknown = (id) => sendOverlayTurnEnd(id),
+  platform: NodeJS.Platform = process.platform,
+  options: { timeoutMs?: number; now?: () => number } = {},
+): () => void {
+  if (platform !== 'darwin' || !runId || !signal || signal.aborted) return () => undefined;
+  const unwatch = () => {
+    const entry = watchedRuns.get(runId);
+    if (entry?.signal !== signal) return;
+    signal.removeEventListener('abort', entry.onAbort);
+    watchedRuns.delete(runId);
+  };
   const seen = watchedRuns.get(runId);
-  if (seen?.signal === signal) return;
+  if (seen?.signal === signal) return unwatch;
   if (seen) seen.signal.removeEventListener('abort', seen.onAbort);
+  const now = options.now ?? Date.now;
+  const started = now();
+  const timeoutMs = options.timeoutMs;
   const onAbort = () => {
     if (watchedRuns.get(runId)?.signal === signal) watchedRuns.delete(runId);
+    if (typeof timeoutMs === 'number' && timeoutMs > 0 && now() - started >= timeoutMs - TIMEOUT_SLACK_MS) return;
     void Promise.resolve().then(() => send(runId)).catch(() => undefined);
   };
   signal.addEventListener('abort', onAbort, { once: true });
+  watchedRuns.delete(runId);
   watchedRuns.set(runId, { signal, onAbort });
   while (watchedRuns.size > MAX_WATCHED_RUNS) {
     const [oldest, entry] = watchedRuns.entries().next().value!;
     entry.signal.removeEventListener('abort', entry.onAbort);
     watchedRuns.delete(oldest);
   }
+  return unwatch;
 }
 
 /** 测试用:现在挂着几个 run 的中止监听。 */

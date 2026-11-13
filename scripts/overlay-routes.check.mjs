@@ -199,4 +199,42 @@ controllers[23].abort();
 await new Promise((r) => setTimeout(r, 0));
 assert.equal(ended.at(-1), 'run_23');
 
+// 工具返回时摘掉监听(不泄漏):摘掉以后再 abort 不发;只摘自己那只,同一 run 后来换上的不动。
+for (const c of controllers) c.abort();
+await new Promise((r) => setTimeout(r, 0));
+assert.equal(watchedRunCount(), 0, '全 abort 完一个不剩');
+const ret = new AbortController();
+const unwatchRet = watchRunAbort('run_ret', ret.signal, (id) => ended.push(`ret:${id}`), 'darwin');
+assert.equal(watchedRunCount(), 1);
+unwatchRet();
+assert.equal(watchedRunCount(), 0, '工具返回后监听被摘掉');
+ret.abort();
+await new Promise((r) => setTimeout(r, 0));
+assert.equal(ended.includes('ret:run_ret'), false, '摘掉以后 abort 不发 end');
+const first = new AbortController(), second = new AbortController();
+const unwatchFirst = watchRunAbort('run_two', first.signal, (id) => ended.push(`two:${id}`), 'darwin');
+watchRunAbort('run_two', second.signal, (id) => ended.push(`two:${id}`), 'darwin');
+unwatchFirst();
+assert.equal(watchedRunCount(), 1, '旧调用的 unwatch 不摘新调用的监听');
+second.abort();
+await new Promise((r) => setTimeout(r, 0));
+assert.equal(ended.at(-1), 'two:run_two');
+assert.equal(typeof watchRunAbort('run_win2', new AbortController().signal, () => undefined, 'win32'), 'function', '不挂的时候也回一个能调的 unwatch');
+
+// 工具自己的超时也会 abort 这只 signal(引擎按 defaultTimeoutMs 给每次调用一个独立 signal),但这一轮并没结束:
+// 显式 end 会让 helper 把这一轮之后的动作都当迟到的,所以超时那下不发。
+let clock = 1_000;
+const timed = new AbortController();
+watchRunAbort('run_timeout', timed.signal, (id) => ended.push(`t:${id}`), 'darwin', { timeoutMs: 30_000, now: () => clock });
+clock += 30_000;
+timed.abort();
+await new Promise((r) => setTimeout(r, 0));
+assert.equal(ended.includes('t:run_timeout'), false, '工具超时触发的 abort 不发 end');
+const early = new AbortController();
+watchRunAbort('run_early', early.signal, (id) => ended.push(`t:${id}`), 'darwin', { timeoutMs: 30_000, now: () => clock });
+clock += 5_000;
+early.abort();
+await new Promise((r) => setTimeout(r, 0));
+assert.equal(ended.at(-1), 't:run_early', '超时之前的 abort(用户中止)照发');
+
 console.log('overlay routes check passed');
