@@ -1,0 +1,23 @@
+{
+  "overlayStyle": {
+    "method": "POST",
+    "path": "/overlay-style",
+    "body": { "fill": "#2c5f9e", "edge": "#ffffff", "reducedMotion": false },
+    "reply": { "ok": true }
+  },
+  "overlayTurn": {
+    "method": "POST",
+    "path": "/overlay-turn",
+    "body": { "phase": "end", "runId": "run_01HZX8Q2W3" },
+    "reply": { "ok": true }
+  },
+  "helperActExtras": {
+    "overlayStyle": { "fill": "#2c5f9e", "edge": "#ffffff" },
+    "reduceMotion": false,
+    "runId": "run_01HZX8Q2W3",
+    "clickAfterArrival": true
+  },
+  "helperOverlayTurn": { "cmd": "overlayTurn", "phase": "end", "runId": "run_01HZX8Q2W3" },
+  "pipSurface": "pip",
+  "liveViewId": "plugin:tangu-computer-use:live"
+}

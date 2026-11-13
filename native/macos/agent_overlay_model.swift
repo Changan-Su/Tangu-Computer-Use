@@ -1,0 +1,592 @@
+import CoreGraphics
+import Foundation
+
+// 屏上叠层(示意光标、点击环、边缘光)的纯数据模型(Tangu,协议 20,非上游)。
+//
+// 这里只有值类型和纯函数:配色、渐变量(ramp)、光标场景、整轮状态机。窗口、计时器、重绘都在
+// agent_cursor.swift / agent_highlight.swift / agent_overlay_turn.swift;画法在 agent_overlay_paint.swift。
+// 拆成纯函数是为了能离线测:`npm run check:cursor` 不连 helper、不要任何授权,就在固定时刻把画面画成 PNG。
+
+/// 叠层用的单调时钟(秒)。不用 TimelineView 的 context.date:墙钟会被校时拨动,飞行的到达时刻要算得准。
+enum OverlayClock {
+    static func now() -> Double { ProcessInfo.processInfo.systemUptime }
+}
+
+// MARK: - 配色
+
+struct OverlayRGB: Equatable {
+    var r: Double
+    var g: Double
+    var b: Double
+
+    init(r: Double, g: Double, b: Double) {
+        self.r = r
+        self.g = g
+        self.b = b
+    }
+
+    /// 只认 `#rrggbb`(大小写都行)。别的写法(`#rgb`、`rgb()`、带透明度)一律当读不出。
+    init?(hex raw: String) {
+        let text = raw.trimmingCharacters(in: .whitespaces)
+        guard text.count == 7, text.first == "#", let value = UInt32(text.dropFirst(), radix: 16) else { return nil }
+        r = Double((value >> 16) & 0xFF) / 255
+        g = Double((value >> 8) & 0xFF) / 255
+        b = Double(value & 0xFF) / 255
+    }
+
+    var hex: String {
+        let c = [r, g, b].map { Int(($0 * 255).rounded()) }
+        return String(format: "#%02x%02x%02x", c[0], c[1], c[2])
+    }
+
+    /// 按比例混向另一种颜色(amount 0 = 自己,1 = other)。
+    func mixed(with other: OverlayRGB, _ amount: Double) -> OverlayRGB {
+        let k = max(0, min(1, amount))
+        return OverlayRGB(r: r + (other.r - r) * k, g: g + (other.g - g) * k, b: b + (other.b - b) * k)
+    }
+
+    /// WCAG 2 相对亮度(sRGB 先线性化)。⚠️别换成三个通道直接加权平均:陶土 #b36c46 那样算出来 ~0.47,
+    /// 会被判成浅色配上深边;线性化之后是 ~0.21,配白边才对。视图那半边算 edge 用的也是这一条。
+    var relativeLuminance: Double {
+        func linear(_ c: Double) -> Double { c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4) }
+        return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b)
+    }
+
+    static let white = OverlayRGB(r: 1, g: 1, b: 1)
+    static let black = OverlayRGB(r: 0, g: 0, b: 0)
+    /// 浅色填色配的深边。
+    static let ink = OverlayRGB(hex: "#1c1b1f")!
+    /// 缺省填色:柔蓝(经典 / 墨色主题的强调色;读不到主题色时也用它,不再回到橙色)。
+    static let softBlue = OverlayRGB(hex: "#2c5f9e")!
+}
+
+struct OverlayPalette: Equatable {
+    var fill: OverlayRGB
+    var edge: OverlayRGB
+
+    /// 相对亮度低于它的填色配白边,否则配深边。
+    static let edgeLuminanceThreshold = 0.28
+
+    static func autoEdge(for fill: OverlayRGB) -> OverlayRGB {
+        fill.relativeLuminance < edgeLuminanceThreshold ? .white : .ink
+    }
+
+    init(fill: OverlayRGB, edge: OverlayRGB? = nil) {
+        self.fill = fill
+        self.edge = edge ?? Self.autoEdge(for: fill)
+    }
+
+    static let standard = OverlayPalette(fill: .softBlue)
+
+    /// act 请求里的 `overlayStyle`:`{ fill: "#rrggbb", edge?: "#rrggbb" }`。fill 读不出 → nil(调用方用缺省);
+    /// edge 读不出 → 按 fill 的亮度自己取。
+    static func parse(_ raw: Any?) -> OverlayPalette? {
+        guard let object = raw as? [String: Any], let fillText = object["fill"] as? String, let fill = OverlayRGB(hex: fillText) else {
+            return nil
+        }
+        let edge = (object["edge"] as? String).flatMap { OverlayRGB(hex: $0) }
+        return OverlayPalette(fill: fill, edge: edge)
+    }
+}
+
+/// act / actBatch 请求里和叠层有关的可选字段(协议 20)。actBatch 先读每一步自己的,没有再用整批顶层的。
+struct OverlayActOptions: Equatable {
+    var enabled: Bool
+    var palette: OverlayPalette
+    /// 宿主说的「减少动态」。helper 另外自己读系统设置,两者任一为真就按减少动态处理(见 AgentCursor)。
+    var reduceMotion: Bool
+    var runId: String?
+    /// 缺省 true。这一段只读进来,「先到再点」在下一段用它。
+    var clickAfterArrival: Bool
+
+    static let keys = ["cursorOverlay", "overlayStyle", "reduceMotion", "runId", "clickAfterArrival"]
+
+    static func parse(_ request: [String: Any], fallback: [String: Any] = [:]) -> OverlayActOptions {
+        func value(_ key: String) -> Any? { request[key] ?? fallback[key] }
+        let runId = (value("runId") as? String).map { String($0.prefix(128)) }.flatMap { $0.isEmpty ? nil : $0 }
+        return OverlayActOptions(
+            enabled: value("cursorOverlay") as? Bool ?? true,
+            palette: OverlayPalette.parse(value("overlayStyle")) ?? .standard,
+            reduceMotion: value("reduceMotion") as? Bool ?? false,
+            runId: runId,
+            clickAfterArrival: value("clickAfterArrival") as? Bool ?? true
+        )
+    }
+}
+
+/// `{ cmd: "overlayTurn", phase: "end", runId?: string }`。只收 end;别的 phase 返回 nil(调用方回 invalid_args)。
+struct OverlayTurnCommand: Equatable {
+    var runId: String?
+
+    static func parse(_ request: [String: Any]) -> OverlayTurnCommand? {
+        guard (request["phase"] as? String) == "end" else { return nil }
+        if let raw = request["runId"], !(raw is String) { return nil }
+        let runId = (request["runId"] as? String).flatMap { $0.isEmpty ? nil : String($0.prefix(128)) }
+        return OverlayTurnCommand(runId: runId)
+    }
+}
+
+// MARK: - 渐变量
+
+/// 一个随时间线性过渡(带 smoothstep)的量:from → to,在 [start, start+duration] 里走完。纯值,按时刻取值。
+struct OverlayRamp: Equatable {
+    var from: Double
+    var to: Double
+    var start: Double
+    var duration: Double
+
+    init(value: Double) {
+        from = value
+        to = value
+        start = 0
+        duration = 0
+    }
+
+    init(from: Double, to: Double, start: Double, duration: Double) {
+        self.from = from
+        self.to = to
+        self.start = start
+        self.duration = duration
+    }
+
+    var end: Double { start + max(0, duration) }
+
+    func value(at t: Double) -> Double {
+        if t >= end { return to }
+        if t <= start { return from }
+        return from + (to - from) * smooth((t - start) / duration)
+    }
+
+    /// 从 t 时刻的当前值出发,过渡到 target。已经在往同一个目标走(或早已到了)就不动 —— 重复调用不会把过渡拉长。
+    mutating func set(_ target: Double, at t: Double, duration d: Double) {
+        if target == to { return }
+        from = value(at: t)
+        to = target
+        start = t
+        duration = max(0, d)
+    }
+}
+
+// MARK: - 光标场景
+
+/// 落点散开的一圈环(单击一圈;双击两圈,隔 0.15 s;右键同一种)。
+struct RingEffect: Equatable {
+    var center: CGPoint
+    var start: Double
+    var reduceMotion: Bool
+    static let duration = 0.5
+    var end: Double { start + Self.duration }
+}
+
+/// 拖动:身后一条线,走到哪画到哪;松手后 0.4 s 淡掉。points 是箭尖经过的点(画布坐标)。
+struct TrailEffect: Equatable {
+    var points: [CGPoint]
+    var start: Double
+    var travel: Double
+    var release: Double { start + travel }
+    static let fade = 0.4
+    var end: Double { release + Self.fade }
+}
+
+/// 滚动:光标旁两个小箭头顺方向滑 10 pt,各 0.5 s,错开 0.1 s。
+struct ArrowEffect: Equatable {
+    var origin: CGPoint
+    /// 单位向量(画布坐标,y 向下 = 往下滚)。
+    var direction: CGVector
+    var start: Double
+    var reduceMotion: Bool
+    static let each = 0.5
+    static let stagger = 0.1
+    var end: Double { start + Self.stagger + Self.each }
+}
+
+/// 打字 / setText:输入框描边,停 0.9 s 后 0.4 s 淡掉。
+struct FieldEffect: Equatable {
+    var rect: CGRect
+    var start: Double
+    static let hold = 0.9
+    static let fade = 0.4
+    var end: Double { start + Self.hold + Self.fade }
+}
+
+/// 一段「按住」(拖动时光标缩到 0.88)。
+struct HoldEffect: Equatable {
+    var start: Double
+    var end: Double
+}
+
+/// 光标在某一时刻要画成什么样(画法只吃这个)。
+struct CursorFrame: Equatable {
+    var visible: Bool
+    var pose: CursorPose
+    var scale: Double
+    var opacity: Double
+    /// 出现时的一点模糊(pt)。
+    var blur: Double
+    /// 在想时绕箭尖的摆角(弧度)。
+    var wobble: Double
+}
+
+/// 示意光标那块全屏画布上的一切:光标本身 + 点击环 / 拖动线 / 滚动箭头 / 输入框描边。纯值。
+struct CursorScene: Equatable {
+    static let appearDuration = 0.2
+    static let disappearDuration = 0.4
+    static let thinkingDuration = 0.4
+    static let pressDuration = 0.2
+    static let doubleClickGap = 0.15
+    static let wobbleAmplitude = 7.0 * Double.pi / 180
+    static let wobblePeriod = 1.6
+
+    /// 光标有没有位置(第一次出现之前没有)。
+    var placed = false
+    var rest = CursorPose(point: .zero, heading: CursorPose.restHeading)
+    var segments: [CursorMotionSegment] = []
+    var presence = OverlayRamp(value: 0)
+    var thinking = OverlayRamp(value: 0)
+    var presses: [Double] = []
+    var holds: [HoldEffect] = []
+    var rings: [RingEffect] = []
+    var trails: [TrailEffect] = []
+    var arrows: [ArrowEffect] = []
+    var fields: [FieldEffect] = []
+    var reduceMotion = false
+
+    func pose(at t: Double) -> CursorPose {
+        guard let current = segments.last(where: { $0.start <= t }) else { return segments.first?.pose(at: t) ?? rest }
+        return current.pose(at: t)
+    }
+
+    /// 光标(还)没出现时放到一个起点上:第一下从落点左上 140pt 飞进来(和以前一样),减少动态时直接放在落点。
+    mutating func place(_ pose: CursorPose) {
+        placed = true
+        rest = pose
+        segments = []
+    }
+
+    /// 出现(0.2 s 淡入)。已经在显示 / 正在出现就不动。
+    mutating func show(at t: Double) {
+        presence.set(1, at: t, duration: Self.appearDuration)
+    }
+
+    /// 消失(0.4 s 淡出)。
+    mutating func hide(at t: Double) {
+        presence.set(0, at: t, duration: Self.disappearDuration)
+    }
+
+    var isAppearing: Bool { presence.to >= presence.from }
+
+    /// 飞到 tip(箭尖对准的点)。返回到达时刻。减少动态:不飞,直接在目的地淡入。
+    @discardableResult
+    mutating func fly(toTip tip: CGPoint, at t: Double) -> Double {
+        let target = CursorPose.resting(atTip: tip)
+        if reduceMotion {
+            let moved = hypot(target.point.x - pose(at: t).point.x, target.point.y - pose(at: t).point.y) >= 6
+            rest = target
+            segments = []
+            if moved, presence.value(at: t) > 0 {
+                presence = OverlayRamp(from: 0, to: 1, start: t, duration: Self.appearDuration)
+            }
+            return t
+        }
+        let flight = CursorFlight(from: pose(at: t), to: target, start: t)
+        rest = target
+        segments = [.flight(flight)]
+        return flight.arrival
+    }
+
+    /// 拖动:飞到起点 → 按住 → 沿路径走 → 松手一圈环。返回松手时刻。
+    @discardableResult
+    mutating func drag(tips: [CGPoint], at t: Double) -> Double {
+        guard let first = tips.first else { return t }
+        let arrival = fly(toTip: first, at: t)
+        guard tips.count > 1 else { return arrival }
+        let positions = tips.map { CursorPose.resting(atTip: $0).point }
+        let travel = reduceMotion ? 0 : CursorPolyline.duration(points: positions)
+        let release = arrival + travel
+        if reduceMotion {
+            rest = CursorPose.resting(atTip: tips[tips.count - 1])
+            segments = []
+        } else {
+            segments.append(.polyline(CursorPolyline(points: positions, start: arrival, duration: travel)))
+            rest = CursorPose(point: positions[positions.count - 1], heading: CursorPose.restHeading)
+            holds.append(HoldEffect(start: arrival, end: release))
+        }
+        trails.append(TrailEffect(points: tips, start: arrival, travel: travel))
+        rings.append(RingEffect(center: tips[tips.count - 1], start: release, reduceMotion: reduceMotion))
+        return release
+    }
+
+    /// 点下去:光标缩到 0.86 再弹回(0.2 s)+ 落点散开环(count 圈,隔 0.15 s)。
+    mutating func click(at tip: CGPoint, count: Int, time t: Double, withCursor: Bool) {
+        for index in 0..<max(1, min(3, count)) {
+            let start = t + Double(index) * Self.doubleClickGap
+            if withCursor { presses.append(start) }
+            rings.append(RingEffect(center: tip, start: start, reduceMotion: reduceMotion))
+        }
+    }
+
+    mutating func scroll(at tip: CGPoint, dx: Int, dy: Int, time t: Double) {
+        let vx = Double(dx.signum()), vy = Double(dy.signum())
+        guard vx != 0 || vy != 0 else { return }
+        let length = hypot(vx, vy)
+        let direction = CGVector(dx: vx / length, dy: vy / length)
+        // 摆在光标右侧(竖着滚)或下方(横着滚),不压在箭头上。
+        let origin = vy != 0 ? CGPoint(x: tip.x + 30, y: tip.y + 4) : CGPoint(x: tip.x + 6, y: tip.y + 32)
+        arrows.append(ArrowEffect(origin: origin, direction: direction, start: t, reduceMotion: reduceMotion))
+    }
+
+    mutating func field(_ rect: CGRect, at t: Double) {
+        fields.append(FieldEffect(rect: rect, start: t))
+    }
+
+    mutating func setThinking(_ on: Bool, at t: Double) {
+        thinking.set(on ? 1 : 0, at: t, duration: Self.thinkingDuration)
+    }
+
+    /// 丢掉已经放完的效果(每次改动时调,数组不会越积越长)。
+    mutating func prune(at t: Double) {
+        presses.removeAll { $0 + Self.pressDuration < t }
+        holds.removeAll { $0.end < t }
+        rings.removeAll { $0.end < t }
+        trails.removeAll { $0.end < t }
+        arrows.removeAll { $0.end < t }
+        fields.removeAll { $0.end < t }
+        if let last = segments.last, last.end < t {
+            rest = last.pose(at: last.end)
+            segments = []
+        }
+    }
+
+    /// 所有「会结束的」过渡在什么时刻全部放完(不含在想时的轻摆,那个只要还在想就一直摆)。
+    func transientEnd() -> Double {
+        var end = max(presence.end, thinking.end)
+        if let last = segments.last { end = max(end, last.end) }
+        end = presses.reduce(end) { max($0, $1 + Self.pressDuration) }
+        end = holds.reduce(end) { max($0, $1.end) }
+        end = rings.reduce(end) { max($0, $1.end) }
+        end = trails.reduce(end) { max($0, $1.end) }
+        end = arrows.reduce(end) { max($0, $1.end) }
+        end = fields.reduce(end) { max($0, $1.end) }
+        return end
+    }
+
+    /// 在想、光标在显示、没开减少动态 → 轻摆(要持续重绘,帧率压到 30)。
+    var wobbles: Bool { placed && thinking.to > 0 && presence.to > 0 && !reduceMotion }
+
+    /// 光标本体之外还有没放完的效果(决定窗口能不能收)。
+    func hasEffects(at t: Double) -> Bool {
+        rings.contains { $0.end > t } || trails.contains { $0.end > t } || arrows.contains { $0.end > t } || fields.contains { $0.end > t }
+    }
+
+    /// 什么都看不见了:光标淡完(或从没出现)且效果放完。
+    func isBlank(at t: Double) -> Bool {
+        presence.to == 0 && presence.value(at: t) <= 0.001 && !hasEffects(at: t)
+    }
+
+    func cursorFrame(at t: Double) -> CursorFrame {
+        let pose = pose(at: t)
+        let p = presence.value(at: t)
+        guard placed, p > 0.001 else {
+            return CursorFrame(visible: false, pose: pose, scale: 1, opacity: 0, blur: 0, wobble: 0)
+        }
+        var scale: Double
+        var blur = 0.0
+        if reduceMotion {
+            scale = 1
+        } else if isAppearing {
+            scale = 0.7 + 0.3 * p
+            blur = (1 - p) * 3
+        } else {
+            scale = 0.82 + 0.18 * p
+        }
+        let th = thinking.value(at: t)
+        var opacity = p * (1 - 0.4 * th)
+        var wobble = 0.0
+        if !reduceMotion {
+            scale *= 1 - 0.15 * th
+            for press in presses where t >= press && t < press + Self.pressDuration {
+                scale *= 1 - 0.14 * sin(.pi * (t - press) / Self.pressDuration)
+            }
+            for hold in holds where t >= hold.start - 0.08 && t <= hold.end + 0.08 {
+                let into = smooth((t - (hold.start - 0.08)) / 0.08)
+                let out = smooth(((hold.end + 0.08) - t) / 0.08)
+                scale *= 1 - 0.12 * min(into, out)
+            }
+            wobble = th * Self.wobbleAmplitude * sin(2 * .pi * t / Self.wobblePeriod)
+        }
+        opacity = max(0, min(1, opacity))
+        return CursorFrame(visible: true, pose: pose, scale: scale, opacity: opacity, blur: blur, wobble: wobble)
+    }
+}
+
+// MARK: - 效果在某一时刻的样子(画法和测试共用)
+
+struct RingFrame: Equatable {
+    var center: CGPoint
+    var diameter: Double
+    var opacity: Double
+}
+
+extension RingEffect {
+    /// 直径 12 → 60(0.5 s),不透明度 0.95 → 0.7(36% 处)→ 0。减少动态:固定直径 48,只淡出。
+    func frame(at t: Double) -> RingFrame? {
+        guard t >= start, t < end else { return nil }
+        let u = (t - start) / Self.duration
+        if reduceMotion {
+            return RingFrame(center: center, diameter: 48, opacity: 0.95 * (1 - u))
+        }
+        let opacity = u < 0.36 ? 0.95 + (0.7 - 0.95) * (u / 0.36) : 0.7 * (1 - (u - 0.36) / 0.64)
+        return RingFrame(center: center, diameter: 12 + 48 * easeOut(u), opacity: max(0, opacity))
+    }
+}
+
+extension TrailEffect {
+    /// (画到哪,不透明度)。
+    func frame(at t: Double) -> (points: [CGPoint], opacity: Double)? {
+        guard t >= start, t < end, points.count > 1 else { return nil }
+        let fraction = travel > 0 ? (t - start) / travel : 1
+        let opacity = t <= release ? 0.4 : 0.4 * (1 - (t - release) / Self.fade)
+        return (polylinePrefix(points, fraction: fraction), max(0, opacity))
+    }
+}
+
+extension ArrowEffect {
+    /// 两个箭头各自的(中心,不透明度)。
+    func frames(at t: Double) -> [(center: CGPoint, opacity: Double)] {
+        (0..<2).compactMap { index in
+            let begin = start + Double(index) * Self.stagger
+            guard t >= begin, t < begin + Self.each else { return nil }
+            let u = (t - begin) / Self.each
+            let slide = reduceMotion ? 0 : 10 * easeOut(u)
+            let base = CGPoint(x: origin.x - direction.dx * 5, y: origin.y - direction.dy * 5)
+            let center = CGPoint(x: base.x + direction.dx * CGFloat(slide), y: base.y + direction.dy * CGFloat(slide))
+            return (center, 0.95 * sin(.pi * u))
+        }
+    }
+}
+
+extension FieldEffect {
+    func opacity(at t: Double) -> Double? {
+        guard t >= start, t < end else { return nil }
+        let u = t - start
+        if u < 0.12 { return u / 0.12 }
+        if u < Self.hold { return 1 }
+        return max(0, 1 - (u - Self.hold) / Self.fade)
+    }
+}
+
+// MARK: - 整轮状态机
+
+/// 一轮(同一个 runId)里叠层该处在哪一档。纯状态机:事件(act 开始 / 结束、overlayTurn end)+ 时刻 → 档位和下一个
+/// 要醒来的时刻。窗口和计时器只执行它的输出(AgentOverlayTurn)。
+///
+/// - 带 runId 的 act → 进行中(runId 变了就换一轮)。
+/// - 最后一个动作结束 0.3 s 后 → 在想。
+/// - overlayTurn end(runId 对得上),或 45 s 没有任何 act → 结束:再等 1.0 s,光标和边缘光一起淡出 0.4 s,然后归零。
+/// - 没有 runId 的 act(旧调用方)不开新的一轮;正好有一轮在进行时算作这一轮的活动。
+struct OverlayTurnModel: Equatable {
+    static let thinkingDelay = 0.3
+    static let idleTimeout = 45.0
+    static let endHold = 1.0
+    static let fadeDuration = 0.4
+
+    enum Phase: Equatable {
+        case idle
+        case acting
+        case thinking
+        /// 已经结束,fadeAt 起开始淡出。
+        case ending(fadeAt: Double)
+    }
+
+    private(set) var runId: String?
+    private(set) var active = false
+    private(set) var depth = 0
+    private(set) var lastActivity = 0.0
+    private(set) var endAt: Double?
+
+    /// 返回这一下是否属于一轮(带 runId 的整轮模式,且这一轮还没结束)。
+    @discardableResult
+    mutating func actStarted(runId: String?, at t: Double) -> Bool {
+        advance(to: t)
+        if let runId, !active || endAt != nil || runId != self.runId {
+            self.runId = runId
+            active = true
+            endAt = nil
+        }
+        depth += 1
+        lastActivity = t
+        return active && endAt == nil
+    }
+
+    mutating func actEnded(at t: Double) {
+        advance(to: t)
+        depth = max(0, depth - 1)
+        lastActivity = max(lastActivity, t)
+    }
+
+    /// overlayTurn end。runId 给了且对不上 → 不做事;没给 runId 而这一轮有 runId → 也不做事(别的会话收尾不能熄掉这一轮)。
+    @discardableResult
+    mutating func requestEnd(runId: String?, at t: Double) -> Bool {
+        advance(to: t)
+        guard active, endAt == nil else { return false }
+        guard let runId, runId == self.runId else { return false }
+        endAt = t
+        return true
+    }
+
+    /// 这一轮(会在)什么时刻结束:显式的 end,或者没有动作在跑时最后一次活动 + 45 s。
+    var effectiveEnd: Double? {
+        guard active else { return nil }
+        if let endAt { return endAt }
+        return depth == 0 ? lastActivity + Self.idleTimeout : nil
+    }
+
+    func phase(at t: Double) -> Phase {
+        guard active else { return .idle }
+        if let end = effectiveEnd, t >= end {
+            let fadeAt = end + Self.endHold
+            return t >= fadeAt + Self.fadeDuration ? .idle : .ending(fadeAt: fadeAt)
+        }
+        if depth > 0 || t < lastActivity + Self.thinkingDelay { return .acting }
+        return .thinking
+    }
+
+    /// 下一个档位可能变化的时刻(> t)。nil = 再没有要等的(包括一轮彻底结束之后)。
+    func nextDeadline(after t: Double) -> Double? {
+        guard active else { return nil }
+        var candidates: [Double] = []
+        if depth == 0 && endAt == nil { candidates.append(lastActivity + Self.thinkingDelay) }
+        if let end = effectiveEnd {
+            candidates += [end, end + Self.endHold, end + Self.endHold + Self.fadeDuration]
+        }
+        return candidates.filter { $0 > t }.min()
+    }
+
+    /// 45 s 超时一到就把结束时刻钉住:之后再来的旧调用方动作(没有 runId)不会把已经在收尾的这一轮续上。
+    mutating func advance(to t: Double) {
+        guard active, endAt == nil, depth == 0, t >= lastActivity + Self.idleTimeout else { return }
+        endAt = lastActivity + Self.idleTimeout
+    }
+
+    /// 一轮彻底放完后归零(phase 已是 idle 时调)。
+    mutating func settle(at t: Double) {
+        guard active, phase(at: t) == .idle else { return }
+        active = false
+        endAt = nil
+        depth = 0
+    }
+}
+
+/// 边缘光的不透明度:动手 1.0(亮起 0.2 s),在想 0.45(0.4 s 过渡),结束淡出 0.4 s。画在内容上,不动窗口的 alpha
+/// (check:overlay 只把 alpha > 0.5 的窗口算可见)。
+struct HighlightScene: Equatable {
+    static let actingLevel = 1.0
+    static let thinkingLevel = 0.45
+    static let riseDuration = 0.2
+    static let dimDuration = 0.4
+    static let fadeDuration = 0.4
+
+    var level = OverlayRamp(value: 0)
+
+    func opacity(at t: Double) -> Double { max(0, min(1, level.value(at: t))) }
+}

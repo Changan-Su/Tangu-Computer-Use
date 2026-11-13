@@ -272,7 +272,9 @@ Accessibility/Screen-Recording (TCC) grants to them.
 > stays put, everything else goes to `~/Applications` (no admin needed). Users whose `/Applications`
 > is not writable will be asked to re-grant TCC once, because the path moved.
 
-**Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **19** (18 → 19 in 0.7.2: `look` and `axWaitFor` ask a web page before reading it), in two places that must
+**Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **20** (19 → 20: on-screen overlay turn — `act` / `actBatch` take optional `overlayStyle`,
+`reduceMotion`, `runId`, `clickAfterArrival`, the new `overlayTurn` command ends a turn, and the cursor / rings /
+edge glow fade instead of hard-cutting; 18 → 19 in 0.7.2: `look` and `axWaitFor` ask a web page before reading it), in two places that must
 always match: `native/macos/bridge.swift` (`private let protocolVersion`) and
 `src/vendor/platform/macos/helper.ts` (`HELPER_PROTOCOL_VERSION`) — `npm run check:platform` fails when they
 differ. Checks never hard-code the number: they read it from those two files through
@@ -291,6 +293,17 @@ every new native feature silently does nothing (that is exactly how the first li
 - `native/macos/agent_highlight.swift` + `agent_highlight_tests.swift` — the glowing edge around the
   window being controlled. Listed in `helperSourcePaths` (setup-helper.mjs) and `macosSourcePaths`
   (build-native.mjs); forget either and the helper compiles without it.
+- `native/macos/agent_overlay_model.swift`, `agent_overlay_paint.swift`, `agent_overlay_turn.swift` (protocol 20) —
+  the overlay as pure data: palette (fill + contrast edge by WCAG luminance), time-parameterised flight
+  (`CursorFlight`: position is a function of time, so the arrival time is known without any render tick),
+  click rings / drag trail / scroll arrows / field outline, and the per-run turn state machine
+  (`OverlayTurnModel`: acting → thinking 0.3 s after the last action → end via `overlayTurn` or a 45 s idle
+  timeout → 1.0 s → 0.4 s fade → nothing left running). Drawing is a pure `(scene, palette, time) → CGContext`
+  function shared by the on-screen Canvas and `npm run check:cursor`, which renders PNGs offline (no helper,
+  no TCC) and asserts pixel colours. Listed in `macosSourcePaths` (build-native.mjs); `check:cursor` fails if
+  one is missing. `agent_cursor.swift` / `agent_cursor_motion.swift` are upstream files rewritten around this:
+  the tick-driven spring is gone, idle hide fades out, and `agent_cursor_tests.swift` (never run before) now
+  runs under `check:cursor`.
 - `native/macos/live_stream.swift` — `LiveWindowStream`, a **persistent `SCStream`** for the controlled
   window plus a window-sized one-shot (`captureOnce`). Same two source lists as the highlight.
   Two things it exists to fix, both measured, both easy to undo by accident:

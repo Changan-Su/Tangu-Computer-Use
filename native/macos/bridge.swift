@@ -386,7 +386,7 @@ struct PidWindow {
 }
 
 final class Bridge {
-	private let protocolVersion = 19
+	private let protocolVersion = 20
 	/// 截图里变了超过这么多像素(缩到最长边 800 后)才算「画面变了」:光标闪烁、JPEG 噪声在这之下。
 	static let pixelChangeThreshold = 12
 	/// NSEvent 带窗口号造出来的 CGEvent 里,窗口号在这个字段(CGEventTypes.h 没有它)。
@@ -683,14 +683,33 @@ final class Bridge {
 
 	/// 记下"现在正被操控的是哪个窗口",并按需点亮边缘光效。每次 act 调一次。
 	/// 记录与光效分开:即使用户关了光效,liveView 仍要知道该看哪个窗口。
-	private func noteControlledWindow(windowId: UInt32, pid: Int32, highlight: Bool) {
+	/// 协议 20:同时告诉整轮状态机「动手了」(带 runId 的 act 开一轮 / 续一轮,见 AgentOverlayTurn)。
+	/// ⚠️一律 DispatchQueue.main.async 按顺序投(不用 Task { @MainActor }):act 开始 → 画光标 → act 结束 必须按这个先后到主线程。
+	private func noteControlledWindow(windowId: UInt32, pid: Int32, overlay: OverlayActOptions) {
 		controlledLock.lock()
 		controlledWindowId = windowId
 		controlledPid = pid
 		controlledAt = Date()
 		controlledLock.unlock()
-		guard supportsAgentCursor, highlight else { return }
-		Task { @MainActor in AgentHighlight.shared.show(windowId: windowId) }
+		guard supportsAgentCursor else { return }
+		DispatchQueue.main.async { MainActor.assumeIsolated { AgentOverlayTurn.shared.actStarted(windowId: windowId, options: overlay) } }
+	}
+
+	/// 一条 act 做完(成功、失败、抛错都算):整轮状态机据此在 0.3 s 后转入「在想」。
+	private func noteActFinished() {
+		guard supportsAgentCursor else { return }
+		DispatchQueue.main.async { MainActor.assumeIsolated { AgentOverlayTurn.shared.actEnded() } }
+	}
+
+	/// overlayTurn:只收 end。runId 对不上 / 没给 runId 而这一轮有 runId 时不做事,但照样回 ok(见 OverlayTurnModel)。
+	private func overlayTurn(_ request: [String: Any]) throws -> [String: Any] {
+		guard let command = OverlayTurnCommand.parse(request) else {
+			throw BridgeFailure(message: "overlayTurn only accepts phase \"end\" with an optional string runId", code: "invalid_args")
+		}
+		if supportsAgentCursor {
+			DispatchQueue.main.async { MainActor.assumeIsolated { AgentOverlayTurn.shared.requestEnd(runId: command.runId) } }
+		}
+		return ["ok": true]
 	}
 
 	private func controlledSnapshot() -> (windowId: UInt32, pid: Int32, at: Date)? {
@@ -831,6 +850,8 @@ final class Bridge {
 			return try actBatch(request)
 		case "liveView":
 			return try liveView(request)
+		case "overlayTurn":
+			return try overlayTurn(request)
 		case "windowImage":
 			return try windowImage(request)
 		case "hitTest":
@@ -2207,7 +2228,11 @@ final class Bridge {
 		// 一步抛错都不该让用户失去"agent 正在动这个窗口"的可见信号。
 		// 复用 cursorOverlay 这一个开关(vendor 的 act 请求里本就带着它),不为光效另开配置键:
 		// 二者是同一件事——"把 agent 的动作画出来给人看"。要拆开时再加键不迟。
-		noteControlledWindow(windowId: record.windowId, pid: pid, highlight: request["cursorOverlay"] as? Bool ?? true)
+		// 协议 20:overlayStyle / reduceMotion / runId / clickAfterArrival 都是可选的,缺了走缺省(柔蓝、旧时长)。
+		let overlay = OverlayActOptions.parse(request)
+		noteControlledWindow(windowId: record.windowId, pid: pid, overlay: overlay)
+		// 下面有一堆提前 return / throw 的路,act 结束一律从这里报。
+		defer { noteActFinished() }
 		let deferRootDelta = boolArg(request, "deferRootDelta") ?? false
 		let delivery = policy == "background" ? "pid" : ((params["delivery"] as? String) == "pid" ? "pid" : "hid")
 		// pid 投递的坐标点击 / 滚轮投完看画面:变了多少像素(-1 = 截不到图),nil = 没走这条路。
@@ -2277,20 +2302,44 @@ final class Bridge {
 			throw BridgeFailure(message: "No coordinate grounding is available", code: "coordinate_unavailable")
 		}
 
-		/// `viaAx = true`:这一下是用 AX 直接按压完成的,压根没发物理事件 —— 无论 delivery 名义上
+		/// `viaAx = true`:这一下是用 AX 直接按压 / 写值完成的,压根没发物理事件 —— 无论 delivery 名义上
 		/// 是什么,系统指针都没动过,所以虚拟光标该画。否则前台策略下用 AX 打成的那一下毫无反馈。
-		func animateCursor(at point: CGPoint, viaAx: Bool = false) {
-			guard supportsAgentCursor,
-				(request["cursorOverlay"] as? Bool ?? true),
-				viaAx || (delivery == "pid" && policy != "ax_only"),
-				["press", "click", "moveMouse", "scroll", "drag"].contains(action)
-			else { return }
+		///
+		/// 协议 20:抢前台(HID)的点击不画光标(07-29 定的),只在落点画一圈环;抢前台的打字只描输入框。
+		/// 按键不画。cue 里的坐标一律是全局 CG 点 / 矩形。
+		func cue(_ requested: AgentCursor.Cue, at point: CGPoint, viaAx: Bool = false) {
+			guard supportsAgentCursor, overlay.enabled else { return }
+			var cue = requested
+			if !viaAx && delivery == "hid" {
+				switch cue {
+				case .click(let count): cue = .ringOnly(count: count)
+				case .field(let rect): cue = .fieldOnly(rect: rect)
+				case .ringOnly, .fieldOnly: break
+				default: return
+				}
+			} else if !viaAx && policy == "ax_only" {
+				return
+			}
 			// 钉在这一点上接住事件的那扇窗口上方(目标,或它画进截图的下拉 / 菜单),而不是压在所有窗口之上。
 			let candidates = onScreenWindows()
 			let target = candidates.first { $0.id == record.windowId && $0.pid == pid }
 			let anchor = target.map { pointerWindowId(target: $0, candidates: candidates, at: point) } ?? record.windowId
 			let layer = candidates.first { $0.id == anchor }?.layer
-			Task { @MainActor in AgentCursor.shared.animate(to: point, above: anchor, layer: layer, target: record.windowId) }
+			let windowId = record.windowId
+			let requestReduce = overlay.reduceMotion
+			DispatchQueue.main.async {
+				MainActor.assumeIsolated {
+					// 减少动态:宿主说的,或者系统设置里开着,任一为真。
+					let reduce = requestReduce || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+					AgentCursor.shared.perform(cue, at: point, above: anchor, layer: layer, target: windowId, reduceMotion: reduce)
+				}
+			}
+		}
+
+		/// 打字 / setText 的目标输入框:光标停到它前缘中线、描一圈边。拿不到框就不画。
+		func cueField(_ element: AXUIElement?, viaAx: Bool = false) {
+			guard let element, let frame = frameForElement(element) else { return }
+			cue(.field(rect: frame), at: CGPoint(x: frame.minX, y: frame.midY), viaAx: viaAx)
 		}
 
 		/// Tangu 新增:**纯坐标点击先做一次 AX 命中测试**。命中可按压元素就直接 AXPress ——
@@ -2329,7 +2378,7 @@ final class Bridge {
 			performed["hitRole"] = hitRole
 			// 坐标点击没有 before/after 值可比,和后台物理事件一样无从自证 —— 如实说要调用方自己查。
 			performed["verification"] = "caller_required"
-			animateCursor(at: point, viaAx: true)
+			cue(.click(count: 1), at: point, viaAx: true)
 			return true
 		}
 
@@ -2414,14 +2463,17 @@ final class Bridge {
 			if delivery == "hid" { try preflight(point); try requireUncovered(point) }
 			switch action {
 			case "press", "click":
-				animateCursor(at: point)
-				try postMouseClick(at: point, pid: pid, button: mouseButton(params["button"] as? String ?? "left"), clickCount: max(1, min(3, (params["clickCount"] as? NSNumber)?.intValue ?? 1)), delivery: delivery, window: window)
+				let clickCount = max(1, min(3, (params["clickCount"] as? NSNumber)?.intValue ?? 1))
+				cue(.click(count: clickCount), at: point)
+				try postMouseClick(at: point, pid: pid, button: mouseButton(params["button"] as? String ?? "left"), clickCount: clickCount, delivery: delivery, window: window)
 			case "moveMouse":
-				animateCursor(at: point)
+				cue(.move, at: point)
 				try postMouseMove(to: point, pid: pid, delivery: delivery, window: window)
 			case "scroll":
-				animateCursor(at: point)
-				try postScrollWheel(at: point, deltaX: (params["scrollX"] as? NSNumber)?.intValue ?? 0, deltaY: (params["scrollY"] as? NSNumber)?.intValue ?? 0, pid: pid, delivery: delivery, window: window)
+				let scrollX = (params["scrollX"] as? NSNumber)?.intValue ?? 0
+				let scrollY = (params["scrollY"] as? NSNumber)?.intValue ?? 0
+				cue(.scroll(dx: scrollX, dy: scrollY), at: point)
+				try postScrollWheel(at: point, deltaX: scrollX, deltaY: scrollY, pid: pid, delivery: delivery, window: window)
 			case "drag":
 				guard let rawPath = params["path"] as? [[String: Any]], rawPath.count >= 2 else {
 					throw BridgeFailure(message: "drag requires path", code: "invalid_args")
@@ -2432,7 +2484,7 @@ final class Bridge {
 					}
 					return lookPoint(record: record, x: x, y: y)
 				}
-				animateCursor(at: point)
+				cue(.drag(points: points), at: points.first ?? point)
 				try postMouseDrag(points: points, pid: pid, delivery: delivery)
 			default:
 				throw BridgeFailure(message: "Action \(action) cannot use coordinate grounding", code: "invalid_args")
@@ -2467,7 +2519,7 @@ final class Bridge {
 				if status == .success {
 					performed["grounding"] = "description"
 					performed["delivery"] = "ax"
-					if let cursorPoint { animateCursor(at: cursorPoint, viaAx: true) }
+					if let cursorPoint { cue(.click(count: 1), at: cursorPoint, viaAx: true) }
 				} else {
 					try executeCoordinates(coordinatePoint())
 				}
@@ -2480,6 +2532,7 @@ final class Bridge {
 				acquirePhysicalInputIfNeeded()
 				focusTargetForPhysicalInput()
 				_ = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+				cueField(element)
 				let currentValue = stringAttribute(element, attribute: kAXValueAttribute as CFString) ?? ""
 				var range = CFRange(location: 0, length: (currentValue as NSString).length)
 				let selected = AXValueCreate(.cfRange, &range).map {
@@ -2507,6 +2560,7 @@ final class Bridge {
 			if status == .success {
 				performed["grounding"] = "description"
 				performed["delivery"] = "ax"
+				cueField(targetElement, viaAx: true)
 				let value = stringAttribute(targetElement, attribute: kAXValueAttribute as CFString) ?? ""
 				if value != text && policy != "foreground" {
 					throw BridgeFailure(message: "The background accessibility value write was accepted but did not take effect", code: "foreground_required")
@@ -2523,6 +2577,7 @@ final class Bridge {
 			acquirePhysicalInputIfNeeded()
 			if delivery == "hid" && !preserveFocus { focusTargetForPhysicalInput() }
 			let text = params["text"] as? String ?? ""
+			if !text.isEmpty { cueField(element) }
 			try postUnicodeText(text, pid: pid, delivery: delivery)
 			performed["grounding"] = "coordinates"
 			if let element, !text.isEmpty {
@@ -2564,7 +2619,8 @@ final class Bridge {
 			if (result["scrolled"] as? Bool) == true {
 				performed["grounding"] = "description"
 				performed["delivery"] = "ax"
-				if let cursorPoint { animateCursor(at: cursorPoint) }
+				// AX 滚动没发物理事件(和 AXPress 一样算 viaAx);以前没传,前台策略下这一下没有任何反馈。
+				if let cursorPoint { cue(.scroll(dx: (params["scrollX"] as? NSNumber)?.intValue ?? 0, dy: (params["scrollY"] as? NSNumber)?.intValue ?? 0), at: cursorPoint, viaAx: true) }
 				let after = scrollPositionSignature(element)
 				return finish(["outcome": before != after ? "worked" : "unknown", "performed": performed])
 			}
@@ -2626,6 +2682,10 @@ final class Bridge {
 		for (index, action) in actions.enumerated() {
 			var deferred = action
 			deferred["deferRootDelta"] = true
+			// 协议 20:叠层字段先认每一步自己的,没有再用整批顶层的(TS 现在把 cursorOverlay 放在每一步上)。
+			for key in OverlayActOptions.keys where deferred[key] == nil {
+				if let value = request[key] { deferred[key] = value }
+			}
 			do {
 				let step = try act(deferred)
 				steps.append(step)
