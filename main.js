@@ -394,11 +394,21 @@ function watchTheme(doc, cb, delay = STYLE_DEBOUNCE_MS) {
   }
 }
 
-/** 主窗才上报 / 收尾(插件 setup 在每扇窗都跑,不拦的话 Mini 会和主窗抢着写)。旧宿主不写 data-window → 当主窗。 */
+/** 主窗才上报颜色(插件 setup 在每扇窗都跑,不拦的话 Mini 会和主窗抢着写)。旧宿主不写 data-window → 当主窗。 */
 function isMainWindow(doc) {
   const root = doc && doc.documentElement
   const kind = root && root.dataset ? root.dataset.window : undefined
   return !kind || kind === 'main'
+}
+/**
+ * 收尾(overlay-turn end)不只主窗发:每扇窗各管自己看得见的那几轮 —— 在 Mini 里发起的一轮,主窗的状态里没有它,
+ * 只让主窗发的话这一轮只能等 helper 的 45 s 超时才熄。重复发无害(带 runId,helper 对不上就不做事)。
+ * 悬浮小画面除外:它自己没有会话,状态是从别的窗口转来的,那扇窗会发。
+ */
+function tracksTurns(doc) {
+  const root = doc && doc.documentElement
+  const kind = root && root.dataset ? root.dataset.window : undefined
+  return kind !== 'pip'
 }
 
 // ── 状态句 / 步数 / 补间(纯函数,check.mjs 钉着)──────────────────────────────────────
@@ -1017,7 +1027,11 @@ const CSS = `
 .cu-live-pip svg{display:block}
 .cu-live-pip:hover{background:var(--accent-light,var(--overlay-light,rgba(128,128,128,.14)));color:var(--accent-hover,var(--accent,inherit))}
 .cu-live.narrow .cu-live-pip-label{display:none}
-/* 悬浮小画面(surface 'pip',264 宽,高度随内容):上面画面、下面一行状态句 + 停止 + 放回去。
+/* 窄的时候(Agent Desk 的卡片就是这个宽度)而这一步有状态句:状态句是这一行里最要紧的,别的让位 ——
+   标题、「刚刚」、缩放的 − / + 先收起(滚轮和双击照样能缩放,百分比那颗还在,点它复位)。没有状态句时头部照旧。 */
+.cu-live.narrow .cu-live-head.has-status .cu-live-title,.cu-live.narrow .cu-live-head.has-status .cu-live-age{display:none}
+.cu-live.narrow .cu-live-head.has-status .cu-live-zoom .cu-live-step{display:none}
+/* 悬浮小画面(surface 'pip',264 宽,高度随内容):上面画面、下面一行状态句 + 停止(「放回去」由宿主画在窗顶的拖动条里)。
    ⚠️舞台高度由 JS 按宽 × 窗口比例写死(pipStageHeight),根不能 height:100% —— 宿主量的就是它的内容高。 */
 .cu-live.is-pip{height:auto;font-size:12px}
 .cu-live.is-pip .cu-live-stage{flex:0 0 auto}
@@ -1028,8 +1042,6 @@ const CSS = `
 .cu-live.is-pip .cu-live-stop{padding:3px 7px}
 .cu-live.is-pip .cu-live-msg{padding:0 12px;line-height:1.45}
 .cu-live.is-pip .cu-live-msg b{margin-bottom:2px}
-.cu-live-back{flex:0 0 auto;font:inherit;line-height:1;padding:3px 7px;border-radius:7px;border:1px solid var(--border,rgba(128,128,128,.25));background:transparent;color:var(--text-muted,var(--text-light,inherit));cursor:pointer;white-space:nowrap}
-.cu-live-back:hover{color:var(--text,inherit)}
 /* 减少动态:状态句直接换、环固定大小只淡出、结束态不渐变(宿主设置里的「只淡入淡出」同样算) */
 @keyframes cu-live-ring-fade{0%{opacity:.95}100%{opacity:0}}
 @media (prefers-reduced-motion: reduce){
@@ -1042,9 +1054,10 @@ html[data-motion-fade="on"] .cu-live-ring{animation-name:cu-live-ring-fade;trans
 html[data-motion-fade="on"] .cu-live-veil{transition:none}
 `
 
-// 光标形状:实心箭头,尖端在 (2,1)。尺寸固定 18px,不跟画面缩放。
-const CURSOR_SVG = '<svg viewBox="0 0 18 18" aria-hidden="true"><path d="M2 1 L2 15.2 L5.9 11.6 L8.6 17 L11.1 15.8 L8.5 10.6 L13.8 10.6 Z" fill="var(--cu-fill,#2c5f9e)" stroke="var(--cu-edge,#fff)" stroke-width="1.6" stroke-linejoin="round"/></svg>'
-const CURSOR_TIP = { x: 2, y: 1 }
+// 光标形状:和屏上叠层同一支箭头(尖端朝左上,和 helper 停稳时的朝向一致),尖端在 18px 盒子的 (1.45,1.45)。
+// 尺寸固定 18px,不跟画面缩放。
+const CURSOR_SVG = '<svg viewBox="-12 -12 26 26" aria-hidden="true"><path transform="rotate(225)" d="M10.48 1.44Q14 0 10.48 -1.44L-4.48 -7.56Q-8 -9 -7.20 -7.56L-3.80 -1.44Q-3 0 -3.80 1.44L-7.20 7.56Q-8 9 -4.48 7.56Z" fill="var(--cu-fill,#2c5f9e)" stroke="var(--cu-edge,#fff)" stroke-width="2" stroke-linejoin="round"/></svg>'
+const CURSOR_TIP = { x: 1.45, y: 1.45 }
 const TWEEN_MS = 140
 const RING_MS = 500
 const DOUBLE_RING_GAP_MS = 150
@@ -1065,13 +1078,13 @@ function onTurnStart(runId) {
   if (reporter) reporter.turnStart() // 引擎重启会丢颜色:每一轮开始时也发一次
 }
 
-/** 这一轮结束 → POST /overlay-turn(带 runId,同一个 runId 只发一次;只在主窗发)。 */
+/** 这一轮结束 → POST /overlay-turn(带 runId,同一个 runId 每扇窗只发一次;悬浮小画面不发)。 */
 function endTurn(runId) {
   if (!runId || sentEnds.has(runId)) return
   sentEnds.add(runId)
   trimSet(sentEnds)
   const tg = ctx.tangu
-  if (!tg || typeof tg.request !== 'function' || !isMainWindow(globalThis.document)) return
+  if (!tg || typeof tg.request !== 'function' || !tracksTurns(globalThis.document)) return
   try {
     Promise.resolve(tg.request(ENGINE_ID, '/overlay-turn', { method: 'POST', body: { phase: 'end', runId } })).catch(() => { /* 旧引擎没有这条路由:交给 helper 的超时 */ })
   } catch { /* 同上 */ }
@@ -1108,7 +1121,7 @@ function applyRunStatus(runId, st) {
 }
 const pollRunStatus = (runId) => applyRunStatus(runId, readRunStatus(runId))
 
-// 新宿主上,对最近一轮单独订阅一路 { runId } 状态 —— 视图看不见(6 s 慢速)时也能及时收尾。只在主窗。
+// 新宿主上,对最近一轮单独订阅一路 { runId } 状态 —— 视图看不见(6 s 慢速)时也能及时收尾。悬浮小画面不订。
 let watchedRun = null
 let watchedRunOff = null
 function unwatchRun(runId) {
@@ -1121,7 +1134,7 @@ function watchRun(runId) {
   const tg = ctx.tangu
   const rec = runs.get(runId)
   if (!rec || rec.viaRunArg !== true || rec.statusEnded || watchedRun === runId) return
-  if (!tg || typeof tg.subscribeAgentStatus !== 'function' || !isMainWindow(globalThis.document)) return
+  if (!tg || typeof tg.subscribeAgentStatus !== 'function' || !tracksTurns(globalThis.document)) return
   unwatchRun()
   watchedRun = runId
   try { watchedRunOff = tg.subscribeAgentStatus((st) => applyRunStatus(runId, st), { runId }) } catch { watchedRun = null }
@@ -1197,21 +1210,19 @@ ctx.registerView({
     const btnPct = mkBtn('100%', tr('zoom.reset'))
     btnPct.className = 'cu-live-pct'
     const btnIn = mkBtn('+', tr('zoom.in'))
+    btnOut.className = 'cu-live-step'
+    btnIn.className = 'cu-live-step'
     zoomBar.append(btnOut, btnPct, btnIn)
     // 停止:宿主给了 ctx.tangu.stop(契约 §2.2)且知道这一轮的 runId 才露出来。
     const btnStop = mkBtn(tr('btn.stop'), tr('btn.stopTip'))
     btnStop.className = 'cu-live-stop'
     head.append(dot, title, status, age, zoomBar, btnStop)
-    // 「移到悬浮窗」↔「放回去」(悬浮窗开着时同一个按钮把它收回);悬浮窗里的是「放回去」。
+    // 「移到悬浮窗」↔「放回去」(悬浮窗开着时同一个按钮把它收回)。悬浮窗里不再画「放回去」:
+    // 宿主在那扇窗顶上的拖动条里画了(视图坏了也关得掉),这里再画一个就重复了。
     let btnPip = null
-    let btnBack = null
     let pipOpen = false
     let pipCheckedAt = 0
-    if (inPip) {
-      btnBack = mkBtn(tr('btn.putBack'), tr('btn.putBackTip'))
-      btnBack.className = 'cu-live-back'
-      head.append(btnBack)
-    } else if (pipBridge()) {
+    if (!inPip && pipBridge()) {
       btnPip = doc.createElement('button')
       btnPip.className = 'cu-live-pip'
       head.append(btnPip)
@@ -1426,7 +1437,8 @@ ctx.registerView({
       if (!natW || !natH) return
       if (curPt) {
         const p = overlayPx(curPt, natW, natH, scale, offX, offY)
-        cursorEl.style.transform = `translate(${p.x - CURSOR_TIP.x}px, ${p.y - CURSOR_TIP.y}px)`
+        const r2 = (v) => Math.round(v * 100) / 100 // 尖端偏移是小数,别把浮点尾巴写进样式
+        cursorEl.style.transform = `translate(${r2(p.x - CURSOR_TIP.x)}px, ${r2(p.y - CURSOR_TIP.y)}px)`
       }
       for (const r of rings) {
         const p = overlayPx(r.pt, natW, natH, scale, offX, offY)
@@ -1562,16 +1574,6 @@ ctx.registerView({
         p.catch(() => {}).then(() => { if (!stopped) refreshPip() })
       })
     }
-    if (btnBack) {
-      on(btnBack, 'click', () => {
-        const api = pipBridge()
-        try {
-          if (api) Promise.resolve(api.close()).catch(() => {})
-          else if (view && typeof view.close === 'function') view.close()
-        } catch { /* 宿主的卡头上也有关闭 */ }
-      })
-    }
-
     const clearOverlay = () => {
       setCursor(null)
       setStatus('')
@@ -1834,12 +1836,12 @@ const teardown = []
   }
 }
 
-// ── 主区会话的整轮(插件顶层,只在主窗)──────────────────────────────────────────────
-// 没有视图开着时也要收尾:主区会话里跑过 act_ui / jev_ui 的那一轮,不跑了就发 overlay-turn end。
+// ── 本窗会话的整轮(插件顶层;主窗、Mini、独立窗各管各的,悬浮小画面不管)──────────────────
+// 没有视图开着时也要收尾:本窗当前会话里跑过 act_ui / jev_ui 的那一轮,不跑了就发 overlay-turn end。
 // 这里拿到的 runId 是宿主的;引擎把同一个 id 交给工具(tcx.runId)—— 对不上时 helper 照契约不做事,无害。
 {
   const tg = ctx.tangu
-  if (tg && typeof tg.subscribeAgentStatus === 'function' && isMainWindow(globalThis.document)) {
+  if (tg && typeof tg.subscribeAgentStatus === 'function' && tracksTurns(globalThis.document)) {
     let lastMainRun = null
     const onStatus = (st) => {
       if (!st || typeof st !== 'object') return
@@ -1866,7 +1868,7 @@ globalThis.__CU_LIVE_TEST__ = {
   explain, ago, describe, PLUGIN_ID, VIEW_ID, TICK_MS, IDLE_TICK_MS,
   fitScaleOf, viewportBoxOf, fetchFrame, clampOffset, anchoredOffset, clampScale, MAX_SCALE, HIDDEN_TICK_MS,
   MSG, fmt, chroma, toHex, hexToRgb, relLuminance, edgeFor, pickFill, styleBody, statusText, stepCount, doneText,
-  fracPoint, easeOut, tweenPoint, overlayPx, isMainWindow, reducedMotionIn, ENGINE_ID, FALLBACK_FILL,
+  fracPoint, easeOut, tweenPoint, overlayPx, isMainWindow, tracksTurns, reducedMotionIn, ENGINE_ID, FALLBACK_FILL,
   DOING_MS, LOOKING_AFTER_MS, TWEEN_MS,
   CU_TOOLS, describeCall, tlClip, joinZh, keysText, labelForRef, appForState, appForRoot, appInResult, appBundles, learnBundle,
   pipStageHeight, PIP_STAGE_DEFAULT,

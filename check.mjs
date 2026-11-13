@@ -428,6 +428,11 @@ const routes = JSON.parse(readFileSync(new URL('./harness/fixtures/routes.v1.jso
   A.equal(T.isMainWindow({ documentElement: { dataset: { window: 'mini' } } }), false, 'Mini 窗不上报')
   A.equal(T.isMainWindow({ documentElement: { dataset: { window: 'main' } } }), true)
   A.equal(T.isMainWindow({ documentElement: { dataset: {} } }), true, '旧宿主不写 data-window → 当主窗')
+  // 收尾不只主窗发:Mini / 独立窗各管自己那几轮(否则在 Mini 里发起的一轮只能等 helper 45 s 超时);悬浮小画面不发
+  A.equal(T.tracksTurns({ documentElement: { dataset: { window: 'mini' } } }), true, 'Mini 里发起的一轮由 Mini 收尾')
+  A.equal(T.tracksTurns({ documentElement: { dataset: { window: 'detached' } } }), true)
+  A.equal(T.tracksTurns({ documentElement: { dataset: {} } }), true)
+  A.equal(T.tracksTurns({ documentElement: { dataset: { window: 'pip' } } }), false, '悬浮小画面不收尾:状态是别的窗口转来的')
   A.equal(T.reducedMotionIn({ documentElement: { dataset: { motionFade: 'on' } } }), true, '宿主的「只淡入淡出」算减少动态')
 }
 
@@ -530,7 +535,9 @@ const spyRings = () => {
   const cur = byClass(root2(), 'cu-live-cur')[0]
   A.ok(cur && cur.style.display === 'block', '新回包带 cursor → 画光标')
   // 800x524 塞进 400x300 → 画布 400x262、倍率 0.5;光标尖端对准 (0.2·800·0.5, 0.3·524·0.5)
-  A.equal(cur.style.transform, `translate(${80 - 2}px, ${0.3 * 524 * 0.5 - 1}px)`, '光标位置必须按取景换算(垫片里没有 rAF → 直接到位)')
+  // 尖端(箭头朝左上)在 18px 盒子的 (1.45,1.45):落点减掉它,箭尖才正好压在落点上
+  A.equal(cur.style.transform, 'translate(78.55px, 77.15px)', '光标位置必须按取景换算(垫片里没有 rAF → 直接到位)')
+  A.ok(/rotate\(225\)/.test(cur.innerHTML) && /M10\.48 1\.44Q14 0/.test(cur.innerHTML), '画面里的光标和屏上叠层是同一支箭头(尖端朝左上)')
   A.equal(byClass(root2(), 'cu-live-status')[0].textContent, 'Clicking “Send”', '头部状态句(英文界面)')
   A.ok(ringSpy.rings().length >= 1, 'seq 变了且是点击 → 放一圈环')
   const stopBtn = byClass(root2(), 'cu-live-stop')[0]
@@ -870,7 +877,7 @@ const spyRings = () => {
   await sleep(20)
   A.equal(btnOf(hostW, 'cu-live-pip'), undefined, '没有 computerUsePip → 不画「移到悬浮窗」')
   disposeW()
-  // 悬浮窗里:紧凑卡 —— 画面在上、一行说明在下,有「放回去」,没有「移到悬浮窗」,舞台高度按比例写死
+  // 悬浮窗里:紧凑卡 —— 画面在上、一行说明在下,没有「移到悬浮窗」也没有自己的「放回去」(宿主画在窗顶),舞台高度按比例写死
   globalThis.window = { tangu: { computerUseLiveView: async () => frame, computerUsePip: bridge } }
   pipCalls.length = 0
   const hostP = mkNode('div')
@@ -884,25 +891,16 @@ const spyRings = () => {
   await sleep(T.TICK_MS + 40)
   A.equal(rootP.children[0].style.height, '173px', '264 宽 × 800×524 → 173')
   A.equal(btnOf(hostP, 'cu-live-pip'), undefined, '悬浮窗里不再给「移到悬浮窗」')
-  const back = btnOf(hostP, 'cu-live-back')
-  A.ok(back && back.textContent === '放回去')
-  back.fire('click')
-  await sleep(10)
-  A.deepEqual(pipCalls, ['close'], '「放回去」→ close()')
+  A.equal(btnOf(hostP, 'cu-live-back'), undefined, '悬浮窗里不画自己的「放回去」:宿主的拖动条上有')
+  const allText = (n) => (typeof n.textContent === 'string' ? n.textContent : '') + (Array.isArray(n.children) ? n.children.map(allText).join('') : '')
+  A.ok(!/放回去/.test(allText(rootP)), '紧凑卡里不出现「放回去」字样')
+  A.deepEqual(pipCalls, [], '挂载紧凑卡不碰悬浮窗的桥')
   // 悬浮窗里不缩放:滚轮不被吃掉
   let prevented = false
   const vp = byClass(hostP, 'cu-live-viewport')[0]
   vp.fire('wheel', { deltaY: -100, preventDefault() { prevented = true } })
   A.equal(prevented, false, '悬浮窗里滚轮不缩放、不拦')
   disposePip()
-  // 悬浮窗里没有桥(理论上不会):「放回去」退回视图自己的 close
-  globalThis.window = { tangu: { computerUseLiveView: async () => frame } }
-  let closedByView = 0
-  const hostQ = mkNode('div')
-  const disposeQ = viewsP[0].mount(hostQ, { surface: 'pip', close: () => { closedByView++ } })
-  btnOf(hostQ, 'cu-live-back').fire('click')
-  A.equal(closedByView, 1)
-  disposeQ()
   if (typeof disposeP === 'function') disposeP()
 }
 
