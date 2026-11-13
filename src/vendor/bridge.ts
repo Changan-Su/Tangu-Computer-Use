@@ -12,7 +12,7 @@ import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputer
 import { applyWheelFix, wheelFix } from "../wheel.ts"; // Forsion patch, see UPSTREAM.md
 import { noteContact, webContentWait } from "../webContent.ts"; // Forsion patch, see UPSTREAM.md
 import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
-import { foldToBudget, graftScopedOutline, nodeByRef, outlineNodeLabel, outlineNodePath, rankedTextMatch, restoreOutline, searchOutline, searchOutlineRanked, serializeOutline, serializeOutlineNodeShallow, serializeOutlineSearchMatch, type LookResponse, type Outline, type OutlineChange, type OutlineNode, type OutlineSearchMatch, type SerializedOutline, type SerializedOutlineNode, type SerializedOutlineSearchMatch } from "./outline.ts";
+import { foldToBudget, graftScopedOutline, nodeByRef, outlineNodeLabel, outlineNodePath, rankedTextMatch, restoreOutline, searchOutline, searchOutlineRanked, serializeOutline, serializeOutlineNodeShallow, serializeOutlineSearchMatch, type LookResponse, type Outline, type OutlineChange, type OutlineNode, type OutlineRect, type PictureGrid, type OutlineSearchMatch, type SerializedOutline, type SerializedOutlineNode, type SerializedOutlineSearchMatch } from "./outline.ts";
 import { applyOutputEnvelope, boundToolError, clearStoredOutputs, readStoredOutput, UI_TEXT_PAGE_CHARS } from "./output.ts";
 import { AGENT_TOOL_NAMES, type ActParams, type EvaluateBrowserParams, type ExpandUiParams, type ImageMode, type InspectUiParams, type LaunchBrowserParams, type FindParams, type NavigateBrowserParams, type ObserveParams, type ObserveTargetParams, type ReadTextParams, type RootSelector, type SearchUiParams, type UiAction, type WaitForParams } from "./contract.ts";
 import { toFiniteNumber } from "./platform/coerce.ts";
@@ -22,7 +22,7 @@ import type { PermissionStatus } from "./permissions.ts";
 import { ResourceScheduler } from "./runtime.ts";
 import { scoreWindow, shouldPreferForegroundModalWindow } from "./root-selection.ts";
 import { SavedStates, type CurrentCapture, type CurrentTarget, type OperationState } from "./state.ts";
-import { changesBetween, renderChanges, stabilizeRefs, webContentChanged } from "./view.ts";
+import { changesBetween, pictureChangedNear, renderChanges, stabilizeRefs, webContentChanged } from "./view.ts";
 export type { ActParams, EvaluateBrowserParams, ExpandUiParams, ImageMode, InspectUiParams, LaunchBrowserParams, FindParams, MouseButtonName, NavigateBrowserParams, ObserveParams, ObserveTargetParams, ReadTextParams, RootSelector, SearchUiParams, StateTargetParams, UiAction, WaitForParams } from "./contract.ts";
 
 interface ActivationFlags {
@@ -58,7 +58,10 @@ interface ExecutionTrace {
 	stoppedAt?: number;
 	backgroundFirst?: boolean;
 	accessibilityPress?: boolean;
-	staleAccessibilityTree?: "current_screenshot" | "no_screenshot";
+	/** Forsion patch. This press showed no change in the page: "current_screenshot" after its window was brought forward, "no_screenshot" when it could not be. */
+	pressUnconfirmed?: "current_screenshot" | "no_screenshot";
+	/** Forsion patch. Nothing was sent, once: this element's earlier press showed no change, and the window has moved since (the page's tree, or the picture around the element). */
+	earlierPressTookEffect?: "tree" | "picture";
 	escalatedToForeground?: boolean;
 	escalationReason?: string;
 	backgroundAttempt?: { outcome: "foreground_required" | "didnt"; reason: string };
@@ -984,6 +987,7 @@ async function performLook(target: ResolvedTarget, options: { readText: "auto" |
 		scopeRef: options.scopeRef,
 		maxDimension: options.maxDimension,
 		includeImage: options.includeImage,
+		...(webFlushEnabled() ? {} : { flushWeb: false as const }),
 	}, { signal, timeoutMs: LOOK_TIMEOUT_MS });
 	const look = await observe();
 	// Forsion patch, see UPSTREAM.md: the first read of a Chromium app comes back before its web content exists.
@@ -1042,8 +1046,10 @@ async function buildToolResult(
 	base?: { stateId: string; outline: Outline },
 ): Promise<AgentToolResult<ComputerUseDetails>> {
 	const state = operationState();
-	const fallbackReason = execution.staleAccessibilityTree === "current_screenshot"
-		? { reason: "fallback_recovery" as const, message: "The accessibility tree did not change right after this press, so a current screenshot is attached." }
+	const fallbackReason = execution.pressUnconfirmed === "current_screenshot"
+		? { reason: "fallback_recovery" as const, message: "Nothing in the page changed after this press, so a current screenshot is attached." }
+		: execution.earlierPressTookEffect === "picture"
+		? { reason: "fallback_recovery" as const, message: "The picture around the pressed element changed since the earlier press, so a current screenshot is attached." }
 		: imageFallbackReason(tool, result, imageMode);
 	const transition = base ? changesBetween(base.outline, result.outline) : undefined;
 	const useDiff = Boolean(transition && !transition.useFullView);
@@ -1217,6 +1223,22 @@ const backgroundPointerMisses = new Map<string, number>();
  * foreground from its second press, as every web click did before this. Compare outlines if that matters.
  */
 let lastAccessibilityPress: string | undefined;
+
+/**
+ * Forsion patch, see UPSTREAM.md. The AXPress whose result showed nothing changing, kept until the next action. The page
+ * was asked before it was read (the helper's webFlush) and its window was brought forward where allowed, and still
+ * nothing in it moved: whether the press landed is unknown, so nothing is sent again by itself. If the next action is
+ * the model pressing that element again, the window is read once more and compared with what is kept here before the
+ * real click goes out (earlierPressTookEffect).
+ * `outline` is the page before the press; `picture` and `rect` are the screenshot that went out with the result and
+ * where the element is in it.
+ */
+let unconfirmedPress: { key: string; outline: Outline; picture?: PictureGrid; rect?: OutlineRect } | undefined;
+
+/** Forsion patch. PI_COMPUTER_USE_WEB_FLUSH=0 reads web windows without asking the page first: the negative control of web-covered.check.mjs, and the way out if the hit-test ever upsets an app. */
+function webFlushEnabled(): boolean {
+	return process.env.PI_COMPUTER_USE_WEB_FLUSH !== "0";
+}
 
 async function helperAct(
 	target: ResolvedTarget,
@@ -2058,6 +2080,45 @@ async function terminalDesktopActionResult(
 	};
 }
 
+/**
+ * Forsion patch, see UPSTREAM.md. The model is pressing again the element whose last press showed no change
+ * (unconfirmedPress). Before that goes out as a real click, read the window once more: if the page's tree moved since
+ * before that press, or the picture around the element moved since the screenshot that went out with it, the press most
+ * likely took effect late and a second one would act twice. Then nothing is sent, once, and the model gets the current
+ * state to judge by. It is evidence and not proof (a clock on the page moves too), so the result says what changed and
+ * leaves the verdict to the model; its next press of the element goes out. A model told "the tree may be old, trust the
+ * picture" still follows the tree, so the comparison is made here and not left to it.
+ * Nothing moved: the state is put back and the click goes out as promised.
+ */
+async function earlierPressTookEffect(
+	actions: UiAction[],
+	target: ResolvedTarget,
+	look: LookResponse,
+	baseView: { stateId: string; outline: Outline },
+	signal?: AbortSignal,
+): Promise<AgentToolResult<ComputerUseDetails> | undefined> {
+	const pending = unconfirmedPress;
+	const first = actions[0];
+	if (!pending || !first?.ref || (first.action !== "click" && first.action !== "press")) return undefined;
+	// A right or double click on that element is another gesture, which the earlier press cannot have performed.
+	if ((first.button ?? "left") !== "left" || (first.clickCount ?? 1) !== 1) return undefined;
+	const node = nodeByRef(look.parsedOutline!, first.ref.trim());
+	if (!node || `${target.pid}:${target.windowId}:${[node.role, node.title, node.description].join("\u0000")}` !== pending.key) return undefined;
+	const state = operationState();
+	const held = { currentCapture: state.currentCapture, currentLook: state.currentLook, currentOutline: state.currentOutline, currentNote: state.currentNote, currentStateTarget: state.currentStateTarget };
+	const capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);
+	const moved = webContentChanged(pending.outline, capture.outline)
+		? "tree" as const
+		: pending.rect && pictureChangedNear(pending.picture, capture.look.image?.grid, pending.rect) ? "picture" as const : undefined;
+	if (!moved) {
+		Object.assign(state, held);
+		return undefined;
+	}
+	unconfirmedPress = undefined;
+	const execution: ExecutionTrace = { strategy: "act", outcome: "worked", actionCount: 0, earlierPressTookEffect: moved };
+	return await buildToolResult("act_ui", `Nothing was sent to ${target.appName} — ${target.windowTitle}: the page has changed since this element was last pressed. Returned state ${capture.capture.stateId}.`, capture, execution, signal, state.currentImageMode, baseView);
+}
+
 async function performDesktopTransaction(params: ActParams, actions: UiAction[], signal?: AbortSignal): Promise<AgentToolResult<ComputerUseDetails | TerminalDesktopActionDetails>> {
 	const state = operationState();
 	state.currentImageMode = "auto";
@@ -2073,6 +2134,11 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 	const noteBefore = state.currentNote;
 	return await withWindowWriteLock(target, async () => {
 		const headless = getComputerUseConfig().headless;
+		const alreadyApplied = await earlierPressTookEffect(actions, target, look, baseView, signal);
+		if (alreadyApplied) return alreadyApplied;
+		// Kept for the next action only, and that is this one: forget it before anything is sent, so a failure further
+		// down cannot leave it standing while this action changes the page.
+		unconfirmedPress = undefined;
 		const execution = await dispatchUiTransaction(actions, target, look, headless, signal);
 		const executedActions = actions.slice(0, execution.actionCount ?? actions.length);
 		try {
@@ -2090,6 +2156,7 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 					scopeExact,
 					gone,
 					timeoutMs,
+					...(webFlushEnabled() ? {} : { flushWeb: false as const }),
 				}, { signal, timeoutMs: timeoutMs + 2_000 });
 				execution.verification = {
 					status: verification.found ? (desiredWasPreexisting ? "preexisting" : "verified") : "failed",
@@ -2110,17 +2177,27 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 				await sleep(settleMsForExecution(execution), signal);
 			}
 			let capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);
-			// Forsion patch, see UPSTREAM.md. A covered page takes an AXPress but its tree and its picture both stop updating,
-			// so an unchanged page says nothing and a retry would press twice. Only activating brings the picture back.
-			const pressed = (execution.steps?.length ? execution.steps : [execution]).filter((step) => step.accessibilityPress);
+			// Forsion patch, see UPSTREAM.md. A covered page takes an AXPress but stops reporting and repainting. The helper asks
+			// the page before each read (webFlush), which gets the tree back without touching the window, so this read normally
+			// shows the change. What is left is a press that changed nothing, a change that is only painted, and a page that
+			// could not be asked: only then is the window brought forward, where a page reports and repaints by itself. A press
+			// that still shows nothing is never sent again here; it is remembered for earlierPressTookEffect().
+			const pressedSteps = execution.steps?.length ? execution.steps : [execution];
+			const pressed = pressedSteps.filter((step) => step.accessibilityPress);
 			if (pressed.length > 0 && !execution.rootDelta?.length && (!execution.error || execution.error.code === "postcondition_failed") && !webContentChanged(baseView.outline, capture.outline)) {
 				const activated = await currentPlatformBackend.activateWindow?.(nativeWindowRequest(target), signal);
 				if (activated) {
 					await sleep(COVERED_PAGE_REPAINT_MS, signal);
 					capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);
 				}
+				const confirmed = Boolean(activated) && webContentChanged(baseView.outline, capture.outline);
 				for (const trace of [execution, ...pressed]) {
-					Object.assign(trace, activated ? { staleAccessibilityTree: "current_screenshot", escalatedToForeground: true, escalationReason: "stale_accessibility_tree" } : { staleAccessibilityTree: "no_screenshot" });
+					if (activated) Object.assign(trace, { escalatedToForeground: true, escalationReason: confirmed ? "page_not_reporting" : "press_unconfirmed" });
+					if (!confirmed) trace.pressUnconfirmed = activated ? "current_screenshot" : "no_screenshot";
+				}
+				const ref = executedActions[pressedSteps.lastIndexOf(pressed[pressed.length - 1])]?.ref?.trim();
+				if (!confirmed && lastAccessibilityPress) {
+					unconfirmedPress = { key: lastAccessibilityPress, outline: baseView.outline, picture: capture.look.image?.grid, rect: ref ? (nodeByRef(capture.outline, ref) ?? nodeByRef(baseView.outline, ref))?.rect : undefined };
 				}
 			}
 			if (!execution.error) execution.outcome = outcomeAfterObservedValues(execution.outcome ?? "unknown", executedActions, (ref) => nodeByRef(capture.outline, ref)?.value);

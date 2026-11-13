@@ -142,6 +142,8 @@ export interface PlatformObserveRequest {
 	scopeRef?: string;
 	maxDimension?: number;
 	includeImage?: boolean;
+	/** macOS: false reads a web window without asking the page first (see WebFlush). Leave unset otherwise. */
+	flushWeb?: false;
 }
 
 export type PlatformActTarget = { ref: string } | { x: number; y: number } | { focus: PlatformPoint };
@@ -192,6 +194,8 @@ export interface PlatformWaitForRequest extends PlatformTarget {
 	scopeExact?: boolean;
 	gone: boolean;
 	timeoutMs: number;
+	/** macOS: false waits without asking the page before each read (see WebFlush). Leave unset otherwise. */
+	flushWeb?: false;
 }
 
 export interface PlatformWaitForResponse {

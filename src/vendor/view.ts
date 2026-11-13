@@ -1,4 +1,4 @@
-import { serializeOutlineNode, type Outline, type OutlineChange, type OutlineDiff, type OutlineNode, type SerializedOutlineNode } from "./outline.ts";
+import { serializeOutlineNode, type Outline, type OutlineChange, type OutlineDiff, type OutlineNode, type PictureGrid, type SerializedOutlineNode } from "./outline.ts";
 
 function numericRef(ref: string): number {
 	const match = /^@e(\d+)$/.exec(ref);
@@ -141,6 +141,31 @@ export function webContentChanged(base: Outline, next: Outline): boolean {
 		return false;
 	};
 	return changesBetween(base, next).changes.some((change) => inWebContent(change.type === "removed" ? base : next, change.ref));
+}
+
+/**
+ * Forsion patch, see UPSTREAM.md. Whether two screenshots of one window differ around `rect` (image pixels), told from
+ * the helper's grayscale grids. undefined when it cannot be told: a grid is missing, or the window changed size.
+ * Identical pictures give identical grids, so the threshold only has to ignore a caret blinking in a neighbouring field:
+ * two squares must move by more than 12 of 255.
+ */
+export function pictureChangedNear(base: PictureGrid | undefined, next: PictureGrid | undefined, rect: { x: number; y: number; w: number; h: number }, pad = 24): boolean | undefined {
+	if (!base || !next || base.cols !== next.cols || base.rows !== next.rows || base.cell !== next.cell) return undefined;
+	const a = Buffer.from(base.data, "base64");
+	const b = Buffer.from(next.data, "base64");
+	if (a.length !== base.cols * base.rows || b.length !== a.length) return undefined;
+	const left = Math.max(0, Math.floor((rect.x - pad) / base.cell));
+	const top = Math.max(0, Math.floor((rect.y - pad) / base.cell));
+	const right = Math.min(base.cols - 1, Math.floor((rect.x + rect.w + pad) / base.cell));
+	const bottom = Math.min(base.rows - 1, Math.floor((rect.y + rect.h + pad) / base.cell));
+	if (right < left || bottom < top) return undefined;
+	let moved = 0;
+	for (let row = top; row <= bottom; row += 1) {
+		for (let col = left; col <= right; col += 1) {
+			if (Math.abs(a[row * base.cols + col] - b[row * base.cols + col]) > 12 && ++moved >= 2) return true;
+		}
+	}
+	return false;
 }
 
 function label(node: SerializedOutlineNode): string {

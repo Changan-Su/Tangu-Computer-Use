@@ -18,14 +18,14 @@ let mod;
 try {
   const outfile = path.join(temp, 'bundle.mjs');
   await build({
-    stdin: { contents: "export * from './src/webContent.ts'\nexport { executionNote } from './src/foregroundNote.ts'\nexport { webContentChanged } from './src/vendor/view.ts'", resolveDir: root, loader: 'ts' },
+    stdin: { contents: "export * from './src/webContent.ts'\nexport { executionNote } from './src/foregroundNote.ts'\nexport { webContentChanged, pictureChangedNear } from './src/vendor/view.ts'", resolveDir: root, loader: 'ts' },
     bundle: true, platform: 'node', format: 'esm', target: 'node20', outfile, logLevel: 'silent', external: ['node:*'],
   });
   mod = await import(pathToFileURL(outfile).href);
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
-const { appBundleOf, hasChromiumFramework, hasWebArea, noteContact, webContentWait, executionNote, webContentChanged, WEB_CONTENT_SETTLE_MS } = mod;
+const { appBundleOf, hasChromiumFramework, hasWebArea, noteContact, webContentWait, executionNote, webContentChanged, pictureChangedNear, WEB_CONTENT_SETTLE_MS } = mod;
 
 assert.equal(appBundleOf('/Applications/Visual Studio Code.app/Contents/MacOS/Electron'), '/Applications/Visual Studio Code.app');
 assert.equal(appBundleOf('/Applications/Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper'), '/Applications/Code.app', 'the outer app, not the helper');
@@ -67,11 +67,40 @@ const details = (step) => ({ config: { headless: false }, execution: { outcome: 
 assert.match(executionNote(details({ accessibilityPress: true })), /press the same element again/);
 assert.doesNotMatch(executionNote(details({})), /press the same element again/, 'only after an accessibility press');
 assert.doesNotMatch(executionNote(details({ accessibilityPress: false })), /press the same element again/);
-assert.match(executionNote(details({ accessibilityPress: true, staleAccessibilityTree: 'current_screenshot' })), /only if the screenshot shows/);
-assert.doesNotMatch(executionNote(details({ accessibilityPress: true, staleAccessibilityTree: 'current_screenshot' })), /changed nothing, press the same element again/);
-assert.match(executionNote(details({ accessibilityPress: true, staleAccessibilityTree: 'no_screenshot' })), /Do not press again/);
-assert.doesNotMatch(executionNote(details({ accessibilityPress: true, staleAccessibilityTree: 'no_screenshot' })), /screenshot is current/);
+// 按完没看到变化:已送出、界面可能还没刷新、先看、不要再按;给的下一步只有读
+for (const how of ['current_screenshot', 'no_screenshot']) {
+  const note = executionNote(details({ accessibilityPress: true, pressUnconfirmed: how }));
+  assert.match(note, /was sent through accessibility/);
+  assert.match(note, /may not have refreshed/);
+  assert.match(note, /Do not press again now/);
+  assert.match(note, /Next, only look/);
+  assert.match(note, /observe_ui/);
+  assert.doesNotMatch(note, /changed nothing, press the same element again/, how);
+}
+assert.match(executionNote(details({ accessibilityPress: true, pressUnconfirmed: 'current_screenshot' })), /attached screenshot is current/);
+assert.doesNotMatch(executionNote(details({ accessibilityPress: true, pressUnconfirmed: 'no_screenshot' })), /screenshot is current/);
+assert.match(executionNote(details({ accessibilityPress: true, pressUnconfirmed: 'no_screenshot' })), /ask the user to check the window/);
+// 再按之前比出窗口变了:没有发任何动作,不列步骤,不说「执行器确认了这次动作」
+const held = (how) => ({ config: { headless: false }, execution: { strategy: 'act', outcome: 'worked', actionCount: 0, earlierPressTookEffect: how } });
+assert.match(executionNote(held('tree')), /Nothing was sent this time/);
+assert.match(executionNote(held('tree')), /the page has changed \(see the changes in this result\), so that press most likely took effect late/);
+assert.match(executionNote(held('tree')), /If it shows the press did nothing, press the element once more/, 'the changed page is evidence, the model still decides');
+assert.match(executionNote(held('picture')), /picture around the element has changed/);
+assert.doesNotMatch(executionNote(held('tree')), /confirmed this action/);
+assert.match(executionNote(held('tree')), /"steps":\[\]/);
 console.log('✓ 模型提示');
+
+// 两张截图某一块变没变:网格每格 8 像素,第 0 行在最上面
+const grid = (paint = () => 200) => { const cols = 40, rows = 30; return { cols, rows, cell: 8, data: Buffer.from(Array.from({ length: cols * rows }, (_, i) => paint(i % cols, Math.floor(i / cols)))).toString('base64') } };
+const button = { x: 160, y: 80, w: 80, h: 24 };
+assert.equal(pictureChangedNear(grid(), grid(), button), false, 'the same picture');
+assert.equal(pictureChangedNear(grid(), grid((c, r) => (c >= 20 && c <= 29 && r >= 10 && r <= 12 ? 90 : 200)), button), true, 'the button was repainted');
+assert.equal(pictureChangedNear(grid(), grid((c, r) => (r >= 25 ? 90 : 200)), button), false, 'a change far below the element is not its picture');
+assert.equal(pictureChangedNear(grid(), grid((c, r) => (c === 21 && r === 11 ? 90 : 200)), button), false, 'one square (a caret) is not enough');
+assert.equal(pictureChangedNear(grid(), grid((c, r) => (c >= 20 && c <= 29 && r >= 10 && r <= 12 ? 208 : 200)), button), false, 'a few levels of noise');
+assert.equal(pictureChangedNear(undefined, grid(), button), undefined, 'no picture to compare with');
+assert.equal(pictureChangedNear(grid(), { ...grid(), cols: 41 }, button), undefined, 'the window changed size');
+console.log('✓ 截图局部比对');
 
 const outline = (extra = {}) => {
   const node = (ref, role, parent, more = {}) => ({ ref, role, parent, subrole: '', value: '', text: [], actions: [], children: [], ...more });

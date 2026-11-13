@@ -3,20 +3,23 @@
  * 网页被完全盖住时的后台 AXPress —— 走真 bridge.ts、真 helper、一个 Electron 替身加一扇原生盖窗。
  *
  * 10-31 真模型台架里有一轮:页面已经变了,无障碍树一直是旧的,模型以为没按上又按了一次,页面收到两次点击。
- * 根因:窗口被完全盖住时页面进 hidden,AXPress 照样落地,但无障碍树和画面都停在按之前,按压前也看不出来。
- * 激活 App 约 1 秒后画面回来,树有时跟着回来(这里的盖窗),有时要等页面下一次变化(10-31 用真 App 的窗口盖住时量到的)。
- * 所以按完网页内容一点没变时,提窗口、带截图,让模型按画面判断。窗口自带的控件不算:真模型台架里按的那一下标题栏多了一个节点,这里没有。
+ * 根因:窗口被完全盖住时页面进 hidden,AXPress 照样落地,但页面不再把无障碍变化送出来、也不重绘,按压前也看不出来。
+ * 修法(11-13):helper 读网页窗口之前先问页面一次(按 App 限定的位置查询),页面会先把积压的变化送出来,
+ * 不用动窗口;探针见 web-flush.probe.mjs。问了仍然没变化(按了没反应、只改了画面)才提窗口、带当前截图,
+ * 并叫模型先看、不要再按。
  *
- * 每轮判据:页面 hidden 时收到的点击只有一次,动作结果带的截图是新的(点击后页面变绿,读截图像素),提示叫模型按截图判断。
+ * 前 --rounds 轮(盖住、按 Save draft,页面改文字):页面 hidden 时收到的点击只有一次;结果里直接读得到新状态;
+ * 没提窗口(前台没变、页面读完还是 hidden)、没有「没确认」标记、不带那张没重绘的旧截图。
+ * 最后一轮(盖住、按 Repaint,页面只改背景色、树里什么都不变):提了窗口,带的截图是当前的(读像素),提示叫模型先看、不要再按。
  *
  * 盖窗要连替身的阴影一起盖住:只比替身大 30 点时页面不进 hidden。Electron 窗口当盖窗也不行,要原生窗口。
  * 会切前台,每轮结束还回去,要走 devlock。不动真鼠标。
  *
  *   node scripts/web-covered.check.mjs [--root <被测检出>] [--rounds 3]
  *
- * 负对照(应该在「带截图」红):--root <a855a69 的检出>
+ * 负对照(前几轮应该在「没提窗口」红):PI_COMPUTER_USE_WEB_FLUSH=0 node scripts/web-covered.check.mjs
  *
- * 需要:macOS、协议版本和 vendor 一致且已授权的 helper(PI_COMPUTER_USE_HELPER_APP_PATH,缺省用已安装的那份)、
+ * 需要:macOS、协议版本和 vendor 一致且已授权(辅助功能 + 录屏)的 helper(PI_COMPUTER_USE_HELPER_APP_PATH,缺省用已安装的那份)、
  * Electron(CU_ELECTRON,缺省用 Forsion-Genesis/desktop 装的那份)。
  */
 import assert from 'node:assert/strict'
@@ -45,13 +48,17 @@ process.env.PI_CU_SOCKET_PATH = sock
 process.env.PI_COMPUTER_USE_HELPER_APP_PATH = helperApp
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>CU Web Covered</title></head><body>
-<h1>Draft Desk</h1><p>Grocery list</p><button id="save">Save draft</button><p id="status">Status: pending</p>
+<h1>Draft Desk</h1><p>Grocery list</p><button id="paint" autofocus>Repaint</button> <button id="save">Save draft</button><p id="status">Status: pending</p>
 <script>
 const post = (o) => fetch('/log', { method: 'POST', body: JSON.stringify(o), keepalive: true })
 document.getElementById('save').addEventListener('click', (e) => {
   document.getElementById('status').textContent = 'Status: saved'
+  post({ type: 'click', id: 'save', trusted: e.isTrusted, vis: document.visibilityState })
+})
+// 只改画面:按钮本来就有焦点,树里什么都不变
+document.getElementById('paint').addEventListener('click', (e) => {
   document.body.style.background = 'rgb(0,160,0)'
-  post({ type: 'click', trusted: e.isTrusted, vis: document.visibilityState })
+  post({ type: 'click', id: 'paint', trusted: e.isTrusted, vis: document.visibilityState })
 })
 addEventListener('load', () => post({ type: 'load', vis: document.visibilityState }))
 document.addEventListener('visibilitychange', () => post({ type: 'vis', vis: document.visibilityState }))
@@ -115,9 +122,13 @@ fs.writeFileSync(path.join(tmp, 'package.json'), '{ "name": "cu-web-covered", "v
 fs.writeFileSync(path.join(tmp, 'main.js'), MAIN)
 const failures = []
 const check = (name, fn) => { try { fn(); console.log(`✓ ${name}`) } catch (e) { failures.push(name); console.log(`✗ ${name}\n  ${e.message.split('\n')[0]}`) } }
-const hidden = () => events.some((e) => e.type === 'vis' && e.vis === 'hidden')
+const hidden = () => events.filter((e) => e.type === 'vis').at(-1)?.vis === 'hidden'
+const steps = (result) => { const e = result.details.execution; return e.steps?.length ? [e, ...e.steps] : [e] }
 try {
-  for (let round = 1; round <= rounds; round++) {
+  for (let round = 1; round <= rounds + 1; round++) {
+    const repaint = round > rounds
+    const label = repaint ? 'Repaint' : 'Save draft'
+    const name = repaint ? `末轮(只改画面)` : `第 ${round} 轮`
     events.length = 0
     const child = spawn(electron, [tmp], { stdio: 'ignore', env: { ...process.env, CU_FIXTURE_URL: `http://127.0.0.1:${server.address().port}/`, CU_FIXTURE_DATA: path.join(tmp, `data-${round}`) } })
     let coverPid
@@ -138,14 +149,35 @@ try {
       await sleep(300)
       assert.ok(hidden(), 'the cover did not make the page hidden, so this round tests nothing')
 
-      const pressed = await bridge.executeAct('', { stateId: state.details.capture.stateId, actions: [{ action: 'click', ref: refOf(text(state), 'Save draft') ?? refOf(body, 'Save draft') }] }, undefined, undefined, pctx)
+      const frontBefore = await askHelper('getFrontmost')
+      const pressed = await bridge.executeAct('', { stateId: state.details.capture.stateId, actions: [{ action: 'click', ref: refOf(text(state), label) ?? refOf(body, label) }] }, undefined, undefined, pctx)
+      const frontAfter = await askHelper('getFrontmost')
       await sleep(500)
       const clicks = events.filter((e) => e.type === 'click')
       const image = pressed.content.find((b) => b.type === 'image')
-      check(`第 ${round} 轮 页面 hidden 时点击落地一次`, () => { assert.equal(clicks.length, 1); assert.equal(clicks[0].vis, 'hidden') })
-      check(`第 ${round} 轮 带截图,截图是新的`, () => { assert.ok(image, 'no screenshot in the result'); assert.ok(showsClick(image), 'the screenshot is still the page before the press') })
-      check(`第 ${round} 轮 提示按截图判断`, () => assert.match(bridge.executionNote(pressed.details), /only if the screenshot shows/))
-    } catch (e) { failures.push(`round ${round}`); console.log(`✗ 第 ${round} 轮: ${e.message.split('\n')[0]}`) } finally {
+      const note = bridge.executionNote(pressed.details)
+      check(`${name} 页面 hidden 时点击落地一次`, () => { assert.equal(clicks.length, 1); assert.equal(clicks[0].vis, 'hidden'); assert.equal(clicks[0].id, repaint ? 'paint' : 'save') })
+      if (!repaint) {
+        check(`${name} 结果里读得到新状态`, () => assert.match(text(pressed), /Status: saved/, 'the result still shows the page before the press'))
+        check(`${name} 没提窗口(${frontBefore.appName} → ${frontAfter.appName})`, () => {
+          assert.ok(!steps(pressed).some((s) => s.escalatedToForeground), 'the window was brought forward')
+          assert.equal(frontAfter.pid, frontBefore.pid, 'the frontmost app changed')
+          assert.ok(hidden(), 'the page came out from under the cover')
+        })
+        check(`${name} 没有「没确认」标记,不带旧截图`, () => {
+          assert.ok(!steps(pressed).some((s) => s.pressUnconfirmed), 'the press is marked unconfirmed')
+          assert.ok(!image, 'a covered page is not repainted, so its picture is old and must not be attached')
+          assert.doesNotMatch(note, /Do not press again/)
+        })
+      } else {
+        check(`${name} 问了仍没变化:提窗口,标「没确认」`, () => {
+          assert.equal(pressed.details.execution.pressUnconfirmed, 'current_screenshot')
+          assert.ok(steps(pressed).some((s) => s.escalatedToForeground), 'the window was not brought forward')
+        })
+        check(`${name} 带截图,截图是当前的`, () => { assert.ok(image, 'no screenshot in the result'); assert.ok(showsClick(image), 'the screenshot is still the page before the press') })
+        check(`${name} 提示先看、不要再按`, () => { assert.match(note, /Do not press again now/); assert.match(note, /only look/); assert.doesNotMatch(note, /changed nothing, press the same element again/) })
+      }
+    } catch (e) { failures.push(`round ${round}`); console.log(`✗ ${name}: ${e.message.split('\n')[0]}`) } finally {
       child.kill()
       if (coverPid) await quitFixture(coverPid).catch(() => {})
       await askHelper('restoreUserFocus', { pid: front.pid }).catch(() => {})

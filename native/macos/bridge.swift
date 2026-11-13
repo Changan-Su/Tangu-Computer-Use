@@ -386,7 +386,7 @@ struct PidWindow {
 }
 
 final class Bridge {
-	private let protocolVersion = 18
+	private let protocolVersion = 19
 	/// 截图里变了超过这么多像素(缩到最长边 800 后)才算「画面变了」:光标闪烁、JPEG 噪声在这之下。
 	static let pixelChangeThreshold = 12
 	/// NSEvent 带窗口号造出来的 CGEvent 里,窗口号在这个字段(CGEventTypes.h 没有它)。
@@ -405,6 +405,9 @@ final class Bridge {
 	]
 	private var enhancedAccessibilityPids = Set<Int32>()
 	private let enhancedAccessibilityLock = NSLock()
+	/// 每扇窗("pid:windowId")上一次完整走过时看到的顶层网页区域;空数组 = 那一遍里没有网页。见 flushPendingWebUpdates。
+	private var webAreasByWindow: [String: [AXUIElement]] = [:]
+	private let webAreasLock = NSLock()
 	private var stdinBuffer = Data()
 	private var output = FileHandle.standardOutput
 	private var nextLookId: UInt64 = 0
@@ -1668,6 +1671,7 @@ final class Bridge {
 				}
 				var payload: [String: Any] = ["jpegBase64": jpeg.base64EncodedString(), "width": outputImage.width, "height": outputImage.height]
 				if !capture.overlays.isEmpty { payload["overlays"] = capture.overlays.count }
+				if let grid = pictureGrid(outputImage) { payload["grid"] = grid }
 				imagePayload = payload
 			} else {
 				imagePayload = nil
@@ -1678,9 +1682,14 @@ final class Bridge {
 			imagePayload = nil
 			transform = rectTransform(windowFrame: rootFrame, imageWidth: imageWidth, imageHeight: imageHeight)
 		}
+		// 读之前先问页面一次(见 flushPendingWebUpdates)。`flushWeb: false` 只给探针的对照组和负对照用。
+		let webFlush: [String: Any]? = (boolArg(request, "flushWeb") ?? true)
+			? flushPendingWebUpdates(pid: pid, window: window, windowId: windowId)
+			: nil
 		let describeStart = Date()
 		let outline = buildLookOutline(root: rootElement, transform: transform)
 		let describeMs = elapsedMs(describeStart)
+		if let windowId, sameElement(rootElement, window) { rememberWebAreas(in: outline, pid: pid, windowId: windowId) }
 
 		var readTextMs = 0
 		var readTextExecuted = false
@@ -1726,7 +1735,24 @@ final class Bridge {
 			"readText": ["requested": readText, "executed": readTextExecuted],
 		]
 		if let imagePayload { response["image"] = imagePayload }
+		if let webFlush { response["webFlush"] = webFlush }
 		return response
+	}
+
+	/// Forsion patch, see UPSTREAM.md. 截图的灰度缩略网格(每格 8 像素),给适配层比两张截图的某一块变没变:
+	/// 不用解码 JPEG,同一份画面算出来逐字节相同。第 0 行是画面最上面一行。
+	private func pictureGrid(_ image: CGImage, cell: Int = 8) -> [String: Any]? {
+		let cols = max(1, (image.width + cell - 1) / cell)
+		let rows = max(1, (image.height + cell - 1) / cell)
+		var bytes = [UInt8](repeating: 0, count: cols * rows)
+		let drawn = bytes.withUnsafeMutableBytes { buffer -> Bool in
+			guard let context = CGContext(data: buffer.baseAddress, width: cols, height: rows, bitsPerComponent: 8, bytesPerRow: cols, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return false }
+			context.interpolationQuality = .high
+			context.draw(image, in: CGRect(x: 0, y: 0, width: cols, height: rows))
+			return true
+		}
+		guard drawn else { return nil }
+		return ["cols": cols, "rows": rows, "cell": cell, "data": Data(bytes).base64EncodedString()]
 	}
 
 	private func elapsedMs(_ start: Date) -> Int {
@@ -2764,9 +2790,13 @@ final class Bridge {
 			return true
 		}
 
+		// 页面不可见时变化攒着不发,也就没有通知来叫醒这个循环:每一轮读之前都问。这扇窗没有网页就不再试(免得每一轮都去找);
+		// 别的原因没问成(位置查询一时没答、网页区域一时没有尺寸)下一轮照问。
+		var flushWeb = boolArg(request, "flushWeb") ?? true
 		var lastCount = 0
 		repeat {
 			let changeGeneration = rootChangeGeneration(pid: pid)
+			if flushWeb, (flushPendingWebUpdates(pid: pid, window: window, windowId: windowId)["reason"] as? String) == "no_web_area" { flushWeb = false }
 			let collected = collectDescendantsWithContext(startingAt: rootElement, maxDepth: 12, maxNodes: 2000)
 			let descendants = scopeExact ? Array(collected.prefix(1)) : collected
 			lastCount = descendants.count
@@ -2922,6 +2952,114 @@ final class Bridge {
 		if isBrowser(pid: pid) && (enhancedStatus == .success || manualStatus == .success) {
 			Thread.sleep(forTimeInterval: 0.35)
 		}
+	}
+
+	/// Forsion patch, see UPSTREAM.md. 窗口下第一个 AXWebArea,有界地按层找(工具栏节点多,按层比按深度先到页面)。
+	private func firstWebArea(under window: AXUIElement, visits: inout Int, maxDepth: Int = 14, maxVisits: Int = 400) -> AXUIElement? {
+		var queue: [(AXUIElement, Int)] = axElementArray(window, attribute: kAXChildrenAttribute as CFString).map { ($0, 1) }
+		var index = 0
+		while index < queue.count && visits < maxVisits {
+			let (element, depth) = queue[index]
+			index += 1
+			visits += 1
+			let role = stringAttribute(element, attribute: kAXRoleAttribute as CFString) ?? ""
+			if role == "AXWebArea" { return element }
+			if role == "AXMenuBar" || depth >= maxDepth { continue }
+			for child in axElementArray(element, attribute: kAXChildrenAttribute as CFString) where queue.count < maxVisits * 4 {
+				queue.append((child, depth + 1))
+			}
+		}
+		return nil
+	}
+
+	/// Forsion patch, see UPSTREAM.md. 读网页窗口之前先问页面一次。
+	///
+	/// 窗口被完全盖住时页面进 hidden,Chromium 不再把页面的无障碍变化送到浏览器进程:后台 AXPress 照样落地,
+	/// 但这扇窗的树一直停在按之前,直到页面被问到别的什么。位置查询会转给页面,页面先把积压的变化送出来再答,
+	/// 查询本身不改页面。必须按 App 限定:窗口被盖住时全系统范围的查询答的是盖在上面的那个 App。
+	/// 做法来自 cua-driver 5debb0dc5(MIT)。探针(scripts/web-flush.probe.mjs,docs/probes/web-flush/):
+	/// 不问 30 轮 3 秒内全是旧的,问了 60 轮紧接着那一遍读全是新的,一次约 2 毫秒;问完没有变化通知可等。
+	///
+	/// 问哪里:这扇窗上一次完整走过时看到的顶层网页区域(look 走完会记下,最多 4 个;嵌在页面里的 iframe 不单独问);
+	/// 这扇窗还没走过就有界地找第一个。记下的是空 = 这扇窗没有网页,不问也不找,原生窗口每次读不多花钱。
+	///
+	/// 返回这次问的证据,调用方据此决定信不信随后读到的树:没问成时 `asked` 为 false 并带 `reason`;
+	/// `hitInWindow` 为 false = 同一个 App 的另一扇窗挡在这个点上,问到的不是这扇窗的页面。
+	private func flushPendingWebUpdates(pid: Int32, window: AXUIElement, windowId: UInt32?) -> [String: Any] {
+		let start = Date()
+		let key = windowId.map { "\(pid):\($0)" }
+		webAreasLock.lock()
+		let remembered = key.flatMap { webAreasByWindow[$0] }
+		webAreasLock.unlock()
+		if let remembered, remembered.isEmpty {
+			return ["asked": false, "reason": "no_web_area", "remembered": true, "ms": 0]
+		}
+		var visits = 0
+		var areas = (remembered ?? []).filter { stringAttribute($0, attribute: kAXRoleAttribute as CFString) == "AXWebArea" }
+		if areas.isEmpty {
+			// 没找到不记:有界查找可能没走到页面,这扇窗有没有网页由随后完整走的那一遍说了算。
+			guard let found = firstWebArea(under: window, visits: &visits) else {
+				return ["asked": false, "reason": "no_web_area", "visits": visits, "ms": elapsedMs(start)]
+			}
+			areas = [found]
+		}
+		let windowFrame = frameForWindow(window)
+		let app = AXUIElementCreateApplication(pid)
+		AXUIElementSetMessagingTimeout(app, 1.0)
+		var asked = 0
+		var inWindow = 0
+		var inWebArea = 0
+		var hitRoles: [String] = []
+		var reason = "no_frame"
+		for area in areas {
+			guard let frame = frameForElement(area) else { continue }
+			let overlap = frame.intersection(windowFrame)
+			let target = !overlap.isNull && overlap.width >= 1 && overlap.height >= 1 ? overlap : frame
+			var hitRef: AXUIElement?
+			guard AXUIElementCopyElementAtPosition(app, Float(target.midX), Float(target.midY), &hitRef) == .success, let hit = hitRef else {
+				reason = "hit_test_failed"
+				continue
+			}
+			asked += 1
+			let hitRole = stringAttribute(hit, attribute: kAXRoleAttribute as CFString) ?? ""
+			hitRoles.append(hitRole)
+			let hitWindow = copyAttribute(hit, attribute: kAXWindowAttribute as CFString).flatMap(asAXElement)
+			if hitWindow.map({ sameElement($0, window) }) ?? (sameElement(hit, window) || isElement(hit, descendantOf: window)) { inWindow += 1 }
+			if hitRole == "AXWebArea" || hasAncestorRole(hit, role: "AXWebArea") { inWebArea += 1 }
+		}
+		var evidence: [String: Any] = ["asked": asked > 0, "areas": areas.count, "ms": elapsedMs(start)]
+		if visits > 0 { evidence["visits"] = visits }
+		if asked == 0 {
+			evidence["reason"] = reason
+			return evidence
+		}
+		evidence["hitInWindow"] = inWindow == asked
+		evidence["hitInWebArea"] = inWebArea == asked
+		evidence["hitRoles"] = hitRoles
+		return evidence
+	}
+
+	/// look 完整走过一扇窗之后记下它的顶层网页区域,下一次读之前直接问这几个。走的那一遍被截断又一个都没看到时不记。
+	private func rememberWebAreas(in outline: LookNode, pid: Int32, windowId: UInt32) {
+		var areas: [AXUIElement] = []
+		var truncated = false
+		var queue = [outline]
+		var index = 0
+		while index < queue.count {
+			let node = queue[index]
+			index += 1
+			if node.truncated { truncated = true }
+			if node.role == "AXWebArea" {
+				if let element = node.element, areas.count < 4 { areas.append(element) }
+				continue
+			}
+			queue.append(contentsOf: node.children)
+		}
+		if areas.isEmpty && truncated { return }
+		webAreasLock.lock()
+		if webAreasByWindow.count >= 64 { webAreasByWindow.removeAll() }
+		webAreasByWindow["\(pid):\(windowId)"] = areas
+		webAreasLock.unlock()
 	}
 
 	private func isBrowser(pid: Int32) -> Bool {

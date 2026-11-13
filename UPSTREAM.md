@@ -180,16 +180,47 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
   anything, so a replay could submit twice. Instead `lastAccessibilityPress` notices the model pressing the same element again in the same
   window and sends that one down the original path, and `executionNote` tells the model so. It is recorded only once the helper answered:
   a `stale_ref` delivered nothing and must not count as the first press.
-- **A covered page.** A fully covered window goes `document.visibilityState === 'hidden'`. An AXPress still lands there, but neither the tree
-  nor the picture updates, and nothing warns beforehand: the helper still reports `isOnscreen`. A press that landed then read as one that
-  missed and the model pressed again, twice for one request (live `cuweb`, one run in seven; 79 probe rounds: tree new in all 75 `visible`
-  rounds, old in all 4 `hidden` ones, and a focus change in the tree tracked that exactly). So when nothing inside `AXWebArea` changed after an
-  AXPress (window chrome changes on its own, which is `webContentChanged` in `view.ts`), `performDesktopTransaction` calls `activateWindow` (the helper's existing `restoreUserFocus`, which brings the page back, then
-  `focusWindow` for the right window of a multi-window app; `restoreUserFocus` only matches titles), waits `COVERED_PAGE_REPAINT_MS` and captures again with the screenshot attached. Measured: the screenshot before activating
-  is old, the one about 1 s after is new, and the tree sometimes stays old until the page next changes. It also runs after a failed
-  `expect`, the same stale tree under another name, and not when `rootDelta` shows a new window opened instead. If the app cannot be activated nothing certifies the press, so
-  the note says not to press again. Pressing an element with no visible effect pays one trip to the foreground. Strict background never gets here: `accessibilityPressIdentity` is undefined there,
-  and `npm run check:web-covered` proves the path on a real cover.
+- **A covered page.** A fully covered window goes `document.visibilityState === 'hidden'`. An AXPress still lands there, but the page stops
+  sending its accessibility changes to the browser process and stops repainting, and nothing warns beforehand: the helper still reports
+  `isOnscreen`. A press that landed then read as one that missed and the model pressed again, twice for one request (live `cuweb`, one run
+  in seven; 79 probe rounds on 10-31: tree new in all 75 `visible` rounds, old in all 4 `hidden` ones).
+  - **Ask before reading (helper, protocol 19).** `flushPendingWebUpdates` in `bridge.swift` hit-tests the window's `AXWebArea` before `look`
+    walks the tree and before every pass of `axWaitFor`. The hit-test is forwarded to the page, the page sends what it was holding back
+    before it answers, and the query itself changes nothing in the page. It must be scoped to the app
+    (`AXUIElementCopyElementAtPosition` on `AXUIElementCreateApplication(pid)`): the system-wide form answers with whatever covers the
+    window. The technique is from trycua/cua, `libs/cua-driver` commit `5debb0dc5` (2026-11-13, MIT); the code here is our own. Unlike
+    that commit we do not gate on the process having accepted the Chromium opt-in: `look` remembers the top-level web areas its full walk
+    saw per window (`webAreasByWindow`, at most 4; an empty list means a native window, which is then neither searched nor asked), and
+    only a window never walked gets the bounded search (`firstWebArea`). Iframes nested in the page are not asked separately.
+    Measured 11-13 with `scripts/web-flush.probe.mjs` (raw data in `docs/probes/web-flush/`, Electron 40, page asserted `hidden` around
+    every press): read without asking, old in 30 of 30 rounds for the whole 3 s; asked, new on the very next read in 60 of 60, about 2 ms
+    per ask (under 1 ms once the web area is remembered). Waiting for a change notification after the ask is useless: none arrived in 15
+    rounds. The answer comes back as `webFlush` on the look (`asked`, `hitInWindow`: false when another window of the same app sits on
+    that point and answered instead). `flushWeb: false` on a request turns it off; `PI_COMPUTER_USE_WEB_FLUSH=0` makes the adapter send
+    that, which is the negative control of `check:web-covered` and the way out if the hit-test ever upsets an app.
+    The picture is a different matter: a hidden page is still not repainted, so a screenshot of it stays old while the tree is current.
+  - **Bringing the window forward is the fallback.** When nothing inside `AXWebArea` changed after an AXPress even so (window chrome
+    changes on its own, which is `webContentChanged` in `view.ts`) the press did nothing, changed only pixels, or the page could not be
+    asked. Then `performDesktopTransaction` calls `activateWindow` (the helper's existing `restoreUserFocus`, then `focusWindow` for the
+    right window of a multi-window app), waits `COVERED_PAGE_REPAINT_MS` and captures again. If the page changed now, the press is
+    confirmed and the result is the ordinary one. If not, the trace gets `pressUnconfirmed` and the current screenshot is attached. It also
+    runs after a failed `expect`, and not when `rootDelta` shows a new window opened instead. Strict background never gets here:
+    `accessibilityPressIdentity` is undefined there.
+  - **What the model is told, and what it cannot do.** An unconfirmed press says: sent, the interface may not have refreshed, do not press
+    again now, next only look (`accessibilityPressNote` in `src/foregroundNote.ts`). That sentence alone is not relied on. The press is
+    kept in `unconfirmedPress` until the next action, and if that action presses the same element, `earlierPressTookEffect` reads the
+    window again first: the page's tree against the one from before the press, and the picture around the element against the
+    screenshot that went out (`pictureChangedNear` on the helper's `image.grid`, a grayscale thumbnail so no JPEG is decoded). If either
+    moved, nothing is sent that once and the model is told what changed and that the press most likely took effect late; a changed page
+    is evidence and not proof (a clock moves too), so the verdict stays with the model and its next press goes out. Only if nothing
+    moved does the real click go out at once. A right or double click on that element is another gesture and is not held back.
+    `unconfirmedPress` is forgotten before the next action is dispatched, whatever that action is. Nothing is ever replayed by the
+    adapter itself.
+  - `npm run check:web-covered` proves both halves on a real cover (no window raise when the page changes; raise, current screenshot and
+    the hold-off note when it only repaints), `npm run check:web-press` ⑦ ⑧ ⑨ the fallback and the repeat guard, `check:web-content` the
+    wording and the picture comparison.
+  - Not taken from the other drivers: writing CGEvent field 58. It is the event timestamp, and another value there crashes Chromium and
+    Electron pages on a same-page navigation (trycua/cua issue 7292). We do not set it.
 - **Waiting for web content on first read.** `performLook` reads once more when `src/webContent.ts` says the first read of a Chromium app
   came back as a shell. The helper's own wait is 0.35 s and browsers only; the web tree needs about 2.1 s from first contact.
   `executeFind` starts the clock for every root it lists, because `listWindows` is what turns accessibility on.
@@ -241,7 +272,7 @@ Accessibility/Screen-Recording (TCC) grants to them.
 > stays put, everything else goes to `~/Applications` (no admin needed). Users whose `/Applications`
 > is not writable will be asked to re-grant TCC once, because the path moved.
 
-**Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **17**, in two places that must
+**Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **19** (18 → 19 in 0.7.2: `look` and `axWaitFor` ask a web page before reading it), in two places that must
 always match: `native/macos/bridge.swift` (`private let protocolVersion`) and
 `src/vendor/platform/macos/helper.ts` (`HELPER_PROTOCOL_VERSION`) — `npm run check:platform` fails when they
 differ. Checks never hard-code the number: they read it from those two files through
