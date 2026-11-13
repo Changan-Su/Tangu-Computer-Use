@@ -228,6 +228,18 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
 Not touched, and native: `backgroundPressAtPoint` still skips web content for coordinate clicks, and `setText` in web content still goes
 through key events, which do not land in the background (measured). `AXValue` writes there are unmeasured.
 
+### Overlay fields on every act (vendor TS patch, protocol 20)
+
+`src/vendor/platform/macos/backend.ts` spreads `overlayActExtras()` (from `src/overlayState.ts`, outside vendor) into every
+`act` and every `actBatch` step, next to `cursorOverlay`: `overlayStyle` / `reduceMotion` (cached from the engine route
+`POST /overlay-style`), `runId` (AsyncLocalStorage set around each tool `execute` in `src/tools.ts`, so concurrent runs and Jev
+carry their own) and `clickAfterArrival` (`PI_COMPUTER_USE_CLICK_AFTER_ARRIVAL=0` → false, the negative control of "click after
+the cursor arrives"). **A re-sync wipes it; replay it.** `npm run check:overlay-routes` fails without it.
+
+On the native side `act()` now resolves its target first, starts the cursor flight, waits for the part of the flight that has not
+finished (≤ 0.45 s, ≤ 2.0 s per `actBatch`, see `ArrivalWait`), and only then takes its before-evidence; AXPress / AX scroll get the
+same wait. `liveView` (window-capture paths only) carries `cursor` / `lastAction` / `actionCount` / `runId` / `turnActive`.
+
 ### PACKAGE_ROOT — no longer patched, but still guarded
 `platform/{macos,windows,linux}/helper.ts` locate `scripts/setup-helper.mjs` via
 `path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..")`. Correct in the source
