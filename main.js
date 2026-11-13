@@ -181,9 +181,11 @@ function explain(code) {
 }
 
 // ── 取色:Agent 光标 / 点击环跟 Forsion 当前窗口正在显示的主题色 ────────────────────────
-// 规则(契约 §3,与宿主 base.css / skins.css 对齐):
-//   根上有 --signal-skin(经典 / 墨色这种单色配色、近乎无彩的自定义色才有)→ 用 --signal(缺省柔蓝,设置里另选了强调色就是选的);
-//   否则用 --accent 本色。兜底:--accent 的 RGB 极差 < 24 也当无彩,改用 --signal。读不到 → 不发(helper 用柔蓝)。
+// 规则(契约 §3「拿不准以宿主代码为准」):--accent 是彩色(RGB 极差 ≥ 24)→ 用 --accent 本色;
+//   近乎无彩(经典 / 墨色的主题色就是正文色,近黑白灰的自定义色)→ 用 --signal(缺省柔蓝,设置里另选了强调色就是选的)。
+//   ⚠️别改回「有 --signal-skin 就用 --signal」:宿主的自定义主题色**一律**写 --signal-skin(彩色时写的是 accent-ink,
+//   lovableData.ts customAccentVars),那样彩色自定义主题会拿到加深的墨色或另选的强调色,不是「主题色的本色」。
+//   --signal-skin 只在 accent 读不出时当作「该用 signal」的旁证。读不到 → 不发(helper 用柔蓝)。
 // ⚠️颜色一律**读像素**,不解析 getPropertyValue 的字符串:值可能是 color-mix() / oklch() / 嵌套 var()。
 const ENGINE_ID = 'computer-use'
 const FALLBACK_FILL = '#2c5f9e'
@@ -206,9 +208,10 @@ const edgeFor = (rgb) => (relLuminance(rgb) < 0.28 ? '#ffffff' : '#1c1b1f')
 
 /** 取色规则本身(纯函数)。accent / signal 是读回的 [r,g,b] 或 null。返回 { source, rgb } 或 null(= 不发)。 */
 function pickFill({ hasSignalSkin, accent, signal }) {
-  const accentUsable = Boolean(accent) && chroma(accent) >= ACHROMATIC_RANGE
-  if ((hasSignalSkin || !accentUsable) && signal) return { source: 'signal', rgb: signal }
-  if (accentUsable) return { source: 'accent', rgb: accent }
+  if (accent && chroma(accent) >= ACHROMATIC_RANGE) return { source: 'accent', rgb: accent }
+  // accent 无彩或读不出 → signal(单色配色本来就会标 --signal-skin;hasSignalSkin 只留作诊断,不参与判定)
+  void hasSignalSkin
+  if (signal) return { source: 'signal', rgb: signal }
   return null
 }
 /** 发给引擎 /overlay-style 的体(routes.v1.json 的形状)。pick 为空 → null,不发。 */
@@ -383,6 +386,7 @@ const runs = new Map()
 const RUNS_KEEP = 32
 let lastCount = null      // 最近一次看到的 actionCount
 let lastCountRun = null   // 那一次属于哪个 runId(没有 = null)
+let mountedViews = 0      // 这扇窗里开着几个实时画面(全关了 → 基数作废)
 const isAgentPhaseOver = (st) => !st || st.phase === 'idle' || st.phase === 'done' || st.phase === 'error'
 
 function runRecord(runId) {
@@ -675,12 +679,15 @@ ctx.registerView({
   title: (ctx.getLocale ? ctx.getLocale() : 'zh') === 'en' ? 'Controlled window' : '被操控的窗口',
   mount(el) {
     const doc = el.ownerDocument || document
-    if (!doc.getElementById('cu-live-style')) {
-      const style = doc.createElement('style')
+    let style = doc.getElementById('cu-live-style')
+    if (!style) {
+      style = doc.createElement('style')
       style.id = 'cu-live-style'
-      style.textContent = CSS
       doc.head.appendChild(style)
     }
+    // ⚠️插件在开着的窗口里升级 / 重载时,旧版留下的同名 <style> 还在:不换掉的话新节点全没样式(光标 SVG 撑满、停止常显)。
+    if (style.textContent !== CSS) style.textContent = CSS
+    mountedViews++
 
     const root = doc.createElement('div')
     root.className = 'cu-live'
@@ -1028,7 +1035,9 @@ ctx.registerView({
     const updateOverlay = (frame) => {
       const fresh = frame.lastAction !== undefined || frame.cursor !== undefined || frame.runId !== undefined
         || frame.turnActive !== undefined || frame.actionCount !== undefined
-      if (!fresh) return clearOverlay()
+      // 没有协议 20 的字段:**带图**的回包才说明是旧 helper → 收起叠层;unchanged / 我们没要图的回包里
+      // helper 可能本来就不带这些字段,不能因此让光标和状态句每个静止帧闪没一次。
+      if (!fresh) { if (frame.jpegBase64) clearOverlay(); return }
       noteFrame(frame)
       const runId = typeof frame.runId === 'string' && frame.runId ? frame.runId : null
       const ended = runId ? runEnded(runId) : frame.turnActive === false
@@ -1212,6 +1221,8 @@ ctx.registerView({
       overlayTimers.forEach((id) => clearTimeout(id))
       overlayTimers.clear()
       unwatchColors()
+      // 最后一个视图关了:之后的动作没人看着,计数基数作废 —— 否则下次打开会把这段空白期的动作算进下一轮的步数。
+      if (--mountedViews <= 0) { mountedViews = 0; lastCount = null; lastCountRun = null }
       offs.forEach((f) => f())
       offs.length = 0
       img.src = ''

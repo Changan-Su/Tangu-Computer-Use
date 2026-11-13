@@ -402,18 +402,21 @@ const routes = JSON.parse(readFileSync(new URL('./harness/fixtures/routes.v1.jso
   A.equal(T.edgeFor([255, 255, 255]), '#1c1b1f')
   A.equal(T.edgeFor([0, 0, 0]), '#ffffff')
   A.ok(Math.abs(T.relLuminance([255, 255, 255]) - 1) < 1e-9 && T.relLuminance([0, 0, 0]) === 0)
-  // 有 --signal-skin(经典 / 墨色)→ 一律用 --signal,哪怕 accent 读出来是彩色
-  A.deepEqual(T.pickFill({ hasSignalSkin: true, accent: orange, signal: blue }), { source: 'signal', rgb: blue })
+  // 经典 / 墨色:主题色就是正文色(无彩)→ --signal(缺省柔蓝)
+  A.deepEqual(T.pickFill({ hasSignalSkin: true, accent: cream, signal: blue }), { source: 'signal', rgb: blue })
   // 彩色配色 → accent 本色
   A.deepEqual(T.pickFill({ hasSignalSkin: false, accent: orange, signal: blue }), { source: 'accent', rgb: orange })
-  // 兜底:accent 近乎无彩(RGB 极差 < 24)→ signal
+  // ⚠️彩色的**自定义**主题色:宿主照样写了 --signal-skin(= accent-ink,lovableData.ts customAccentVars)——
+  // 仍要用 accent 本色,不能被 --signal-skin 拐到加深的墨色或另选的强调色上
+  A.deepEqual(T.pickFill({ hasSignalSkin: true, accent: orange, signal: [150, 60, 10] }), { source: 'accent', rgb: orange })
+  // 近乎无彩的自定义色(RGB 极差 < 24)→ signal
   A.deepEqual(T.pickFill({ hasSignalSkin: false, accent: cream, signal: blue }), { source: 'signal', rgb: blue })
   A.equal(T.pickFill({ hasSignalSkin: false, accent: [100, 100, 123], signal: blue }).source, 'signal', '极差 23 算无彩')
   A.equal(T.pickFill({ hasSignalSkin: false, accent: [100, 100, 124], signal: blue }).source, 'accent', '极差 24 算彩色')
   // 读不出 → null = 不发(helper 用柔蓝,不回橙色)
   A.equal(T.pickFill({ hasSignalSkin: false, accent: null, signal: null }), null)
   A.equal(T.pickFill({ hasSignalSkin: true, accent: cream, signal: null }), null, '该用 signal 却读不出、accent 又无彩 → 不发')
-  A.deepEqual(T.pickFill({ hasSignalSkin: true, accent: orange, signal: null }), { source: 'accent', rgb: orange }, 'signal 读不出时彩色 accent 仍可用')
+  A.deepEqual(T.pickFill({ hasSignalSkin: true, accent: null, signal: blue }), { source: 'signal', rgb: blue }, 'accent 读不出 → signal')
   // 发出去的体与 routes.v1.json 逐字一致
   A.deepEqual(T.styleBody({ source: 'signal', rgb: blue }, false), routes.overlayStyle.body, '/overlay-style 的体必须照 routes.v1.json')
   A.equal(T.styleBody(null, true), null)
@@ -509,8 +512,13 @@ const spyRings = () => {
     if (o && o.image === false) { const { jpegBase64, width, height, ...rest } = reply2; return rest }
     return reply2
   } } }
+  // 旧版插件在这扇窗里留下的同名样式表:升级 / 重载后必须换成新的,否则新节点全没样式
+  const oldStyle = globalThis.document.getElementById('cu-live-style')
+  A.ok(oldStyle, '前面的挂载应已插入样式表')
+  oldStyle.textContent = '.cu-live{color:red}'
   const host2 = mkNode('div')
   const disposeView = views2[0].mount(host2)
+  A.ok(globalThis.document.getElementById('cu-live-style').textContent.includes('.cu-live-cur'), '旧样式表必须被换成新版')
   const root2 = () => host2.children[0]
   root2().children[1].clientWidth = 400
   root2().children[1].clientHeight = 300
@@ -532,6 +540,16 @@ const spyRings = () => {
   await sleep(10)
   A.deepEqual(stops, [{ runId: RUN }], '停止必须带这一轮的 runId(绝不去停别的)')
   A.equal(stopBtn.disabled, true, '停止发出去以后先禁用,别连发')
+
+  // 静止帧(unchanged、不带协议 20 的字段)不许把光标和状态句闪没
+  {
+    const keep = reply2
+    reply2 = { active: true, windowId: 4211, app: 'Chatter', ageMs: 60, unchanged: true, frameSeq: 2 }
+    await sleep(T.TICK_MS + 80)
+    A.equal(byClass(root2(), 'cu-live-status')[0].textContent, 'Clicking “Send”', 'unchanged 回包没带字段时保留状态句')
+    A.equal(byClass(root2(), 'cu-live-cur')[0].style.display, 'block', 'unchanged 回包没带字段时保留光标')
+    reply2 = keep
+  }
 
   // 双击 → 两圈
   const before2 = ringSpy.rings().length
