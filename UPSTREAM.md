@@ -180,6 +180,47 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
   anything, so a replay could submit twice. Instead `lastAccessibilityPress` notices the model pressing the same element again in the same
   window and sends that one down the original path, and `executionNote` tells the model so. It is recorded only once the helper answered:
   a `stale_ref` delivered nothing and must not count as the first press.
+- **A repeat is a retry only while the page shows nothing.** `lastAccessibilityPress` used to match on the element alone, so a
+  stepper, a "next page" or an "add" button took the foreground from its second press on (real machine 11-14, live `cudeskchain`
+  141708: two of five presses of one button went out as real clicks, raised the window and moved the pointer). The element is now
+  forgotten once the page shows its press acting, and pressing it again is a new AXPress:
+  - right after the press, when the result's own capture differs from the page before it (`pressConfirmed` on the trace; the model
+    is told the repeat is a new press and stays in the background, the sentence about a real click is left out);
+  - when the model presses the element again and the page it is looking at differs from the one before that press
+    (`pressBaseline`, `pressActedSince`): a page that answers after the result went back, and a call that could not read the page
+    back at all. Nothing is read for this, both pages are states the model has seen.
+  The baseline is stored when the press is sent, not when its result is read. A call whose `expect` is scoped to a node the press
+  replaces leaves through the error path ("could not be observed afterward"), and with the baseline stored only after the read-back
+  the next press of the element went out as a real click although the first had acted (live `cudeskrepeat` 155037, `check:web-press` ⑭).
+  It is spent by the one repeat it answers: kept past a repeat that went out as the real click, the page that click changed read as
+  the first press acting, and an element that only takes real clicks was sent an AXPress again every other time (⑮).
+  "Differs" is `webContentChanged(..., { effectOnly: true })`, or a window appearing or closing. That comparison leaves out:
+  - focus. An AXPress puts focus on its element whether or not the element does anything (`check:web-press` ②: a button with no
+    handler still changes the tree), so focus alone keeps the old rule and the repeat is the real click (③);
+  - what depends on how the window was read: `rect` (image pixels in a fused read, points in a semantic one), `text`, picture-only
+    nodes, `truncated`. The model's state and an action's result are often read differently, and with `rect` compared every
+    semantic state read as "changed" against a fused one: a button whose AXPress does nothing was then never sent the real click
+    (⑯, found before release).
+  Only a call whose one action is that press is judged. With more actions in the call the change cannot be put down to the press
+  (`[press(counter), press(dead)]` confirmed the dead one: ⑰), so nothing is confirmed, no baseline is kept, and the old rule
+  applies. That includes pressing one element twice in one call (the second is the real click) and a call that reaches the element
+  after other actions. A call only clears or confirms the slot while its own press still holds it: the slot is one for all windows.
+  A press that showed nothing at all stays with `unconfirmedPress`, untouched: no baseline is kept for it, and after
+  `earlierPressTookEffect` holds a press back the next one is still the real click it promised (⑨b).
+  Known limit, pinned as `check:web-press` ⑬: on a page that changes by itself (a clock, a feed) an element whose AXPress does
+  nothing no longer gets the real click by being pressed again, because the change cannot be told from the press acting. Reading
+  the tree once more right before the press would tell them apart; it costs a read per press and is not done.
+  Not verified, read from the code: `effectOnly` still compares `offscreen` and `scrollExtent`, so an AXPress on an element below
+  the fold, whose focus scrolls it into view, most likely reads as acting even when the element does nothing. The model is then
+  told the page changed; its next press finds nothing moving at all and goes down the `unconfirmedPress` path, so the real click
+  comes two presses later than before. Leaving those two fields out would instead miss a press whose only effect is to scroll.
+  `act_ui` and `jev_ui` share the rule: Jev sends its actions through the same executor (the result text says so). Jev is not
+  checked separately, and the live `cuwebdead` scene (a button that only takes real clicks, through `jev_ui`) was not rerun
+  after this change: that side rests on `check:web-press` ③ ⑧ ⑮ ⑯, where the real click is answered by the check's proxy.
+  Not changed here, noticed on the way: the plain `webContentChanged` (used by `unconfirmedPress` and `earlierPressTookEffect`)
+  still compares `rect`, so from a semantic state a press that changed nothing reads as "changed" there and is not escalated.
+  Negative controls: `check:web-press --root <a checkout before this change>` is red in ⑪ ⑫ ⑬ ⑭ only (⑪ reads
+  `ax_only → foreground → foreground`); `--root <commit 24921ea, the first version>` is red in ⑭ ⑮ ⑯ ⑰ only.
 - **A covered page.** A fully covered window goes `document.visibilityState === 'hidden'`. An AXPress still lands there, but the page stops
   sending its accessibility changes to the browser process and stops repainting, and nothing warns beforehand: the helper still reports
   `isOnscreen`. A press that landed then read as one that missed and the model pressed again, twice for one request (live `cuweb`, one run
@@ -216,6 +257,13 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
     moved does the real click go out at once. A right or double click on that element is another gesture and is not held back.
     `unconfirmedPress` is forgotten before the next action is dispatched, whatever that action is. Nothing is ever replayed by the
     adapter itself.
+  - **The page's tree is compared by content, not by ref.** The tree from before the press and the one read for the repeat come from
+    two separate reads, each numbered on its own in reading order. The group under the fullscreen button comes and goes between reads
+    (the same chrome node as above), and when it does every ref after it shifts by one; matched by ref the whole page then read as
+    changed and the repeat was held back although nothing had moved (real machine 11-14: `check:web-press` ⑧ red in four runs of five).
+    `webContentChanged` now walks each `AXWebArea` subtree and compares the nodes in order, where each hangs and the same fields
+    `changesBetween` looks at; refs take no part. `check:web-content` has the renumbered cases, and `CU_WEB_PRESS_DUMP=<dir>` makes
+    `check:web-press` write the trees it read around ⑦ ⑧ for the next time one of them is red.
   - `npm run check:web-covered` proves both halves on a real cover (no window raise when the page changes; raise, current screenshot and
     the hold-off note when it only repaints), `npm run check:web-press` ⑦ ⑧ ⑨ the fallback and the repeat guard, `check:web-content` the
     wording and the picture comparison.
@@ -227,6 +275,19 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
 
 Not touched, and native: `backgroundPressAtPoint` still skips web content for coordinate clicks, and `setText` in web content still goes
 through key events, which do not land in the background (measured). `AXValue` writes there are unmeasured.
+
+### Overlay fields on every act (vendor TS patch, protocol 20)
+
+`src/vendor/platform/macos/backend.ts` passes every `act` and every `actBatch` step through `withOverlayActExtras()` (from
+`src/overlayState.ts`, outside vendor), next to `cursorOverlay`. It only fills keys the caller left undefined, so a caller's own
+`clickAfterArrival` / `runId` / `overlayStyle` / `reduceMotion` are kept. The filled fields are `overlayStyle` / `reduceMotion` (cached from the engine route
+`POST /overlay-style`), `runId` (AsyncLocalStorage set around each tool `execute` in `src/tools.ts`, so concurrent runs and Jev
+carry their own) and `clickAfterArrival` (`PI_COMPUTER_USE_CLICK_AFTER_ARRIVAL=0` → false, the negative control of "click after
+the cursor arrives"). **A re-sync wipes it; replay it.** `npm run check:overlay-routes` fails without it.
+
+On the native side `act()` now resolves its target first, starts the cursor flight, waits for the part of the flight that has not
+finished (≤ 0.45 s, ≤ 2.0 s per `actBatch`, see `ArrivalWait`), and only then takes its before-evidence; AXPress / AX scroll get the
+same wait. `liveView` (window-capture paths only) carries `cursor` / `lastAction` / `actionCount` / `runId` / `turnActive`.
 
 ### PACKAGE_ROOT — no longer patched, but still guarded
 `platform/{macos,windows,linux}/helper.ts` locate `scripts/setup-helper.mjs` via
@@ -272,7 +333,9 @@ Accessibility/Screen-Recording (TCC) grants to them.
 > stays put, everything else goes to `~/Applications` (no admin needed). Users whose `/Applications`
 > is not writable will be asked to re-grant TCC once, because the path moved.
 
-**Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **19** (18 → 19 in 0.7.2: `look` and `axWaitFor` ask a web page before reading it), in two places that must
+**Helper protocol version — bumped by us.** Upstream v0.5.1 is still at 6; we run **20** (19 → 20: on-screen overlay turn — `act` / `actBatch` take optional `overlayStyle`,
+`reduceMotion`, `runId`, `clickAfterArrival`, the new `overlayTurn` command ends a turn, and the cursor / rings /
+edge glow fade instead of hard-cutting; 18 → 19 in 0.7.2: `look` and `axWaitFor` ask a web page before reading it), in two places that must
 always match: `native/macos/bridge.swift` (`private let protocolVersion`) and
 `src/vendor/platform/macos/helper.ts` (`HELPER_PROTOCOL_VERSION`) — `npm run check:platform` fails when they
 differ. Checks never hard-code the number: they read it from those two files through
@@ -291,6 +354,17 @@ every new native feature silently does nothing (that is exactly how the first li
 - `native/macos/agent_highlight.swift` + `agent_highlight_tests.swift` — the glowing edge around the
   window being controlled. Listed in `helperSourcePaths` (setup-helper.mjs) and `macosSourcePaths`
   (build-native.mjs); forget either and the helper compiles without it.
+- `native/macos/agent_overlay_model.swift`, `agent_overlay_paint.swift`, `agent_overlay_turn.swift` (protocol 20) —
+  the overlay as pure data: palette (fill + contrast edge by WCAG luminance), time-parameterised flight
+  (`CursorFlight`: position is a function of time, so the arrival time is known without any render tick),
+  click rings / drag trail / scroll arrows / field outline, and the per-run turn state machine
+  (`OverlayTurnModel`: acting → thinking 0.3 s after the last action → end via `overlayTurn` or a 45 s idle
+  timeout → 1.0 s → 0.4 s fade → nothing left running). Drawing is a pure `(scene, palette, time) → CGContext`
+  function shared by the on-screen Canvas and `npm run check:cursor`, which renders PNGs offline (no helper,
+  no TCC) and asserts pixel colours. Listed in `macosSourcePaths` (build-native.mjs); `check:cursor` fails if
+  one is missing. `agent_cursor.swift` / `agent_cursor_motion.swift` are upstream files rewritten around this:
+  the tick-driven spring is gone, idle hide fades out, and `agent_cursor_tests.swift` (never run before) now
+  runs under `check:cursor`.
 - `native/macos/live_stream.swift` — `LiveWindowStream`, a **persistent `SCStream`** for the controlled
   window plus a window-sized one-shot (`captureOnce`). Same two source lists as the highlight.
   Two things it exists to fix, both measured, both easy to undo by accident:
@@ -477,4 +551,4 @@ button; `install.sh dev|prod` stays as the developer loop for iterating on the b
 - Background pointer input (protocol 17): pid-posted clicks / scrolls carry the window number and window-local location, and `act()` judges them by screenshot — see the `bridge.swift` bullets above. `grep -n "CGEventSetWindowLocation\|pointerWindowId\|pixelsChangedAfterInput" native/macos/*.swift` must find all three after a resync.
 - Pair gestures and window image (protocol 16, 0.7.1): `HotkeyMonitor` runs one `ModPairMachine` per `ModPairFamily` (⌘ / ⇧ / ⌥: flag, device bits, key codes) and each subscriber names one gesture; `bridge.swift` gains `windowImage` (preflight `CGPreflightScreenCaptureAccess` first, then `captureWindow` + `downscaledImage` + `jpegData`, no AX). Windows: `hotkey_logic.rs` / `hotkey.rs` gain the Shift and Alt families the same way; no Windows protocol number changes. `grep -n "windowImage" native/macos/bridge.swift` must find the case and the function after a resync.
 - Global gesture subscription (`hotkeySubscribe`, protocol 15, 0.7.0): `native/macos/hotkey_monitor.swift` + `hotkey_monitor_tests.swift` (`check:hotkey-logic`), listed in `macosSourcePaths` after `activity_recorder.swift` — it reuses that file's `RecorderSubscriber` write queue, `recorderPeerIsSameUser`, `recorderTitle` and `recorderSecureInputActive`, and never references `Bridge`. Three `bridge.swift` hooks to replay after a resync: `processClient` tries `subscribeHotkey()` right after `subscribeRecorder()` and on EOF also calls `HotkeyMonitor.shared.unsubscribe`; `handleRequest` rejects `hotkeySubscribe` on stdin with `unsupported`; `diagnostics` reports `hotkeySubscribers`. `grep -n "HotkeyMonitor" native/macos/bridge.swift` must find them. **Windows**: `native/windows/bridge-rs/src/hotkey.rs` (`#[cfg(windows)]`: its own `WH_KEYBOARD_LL` hook thread and a dispatcher thread, alive only while there are gesture subscribers) and `hotkey_logic.rs` (platform-neutral, tests in `tests/hotkey_logic_tests.rs`, run anywhere with `cargo test`). Replay after a resync: `lib.rs` declares both modules; in `recorder.rs`, `serve_client` branches on `hotkeySubscribe`, `idle_watchdog` also requires `hotkey::subscriber_count() == 0`, serve-mode `diagnostics` reports `hotkeySubscribers`, and `now_ms`, `Outbox::send`, `window_text`, `window_pid`, `window_app`, `process_path` and `file_description` are `pub(crate)`. `grep -n "hotkey" native/windows/bridge-rs/src/recorder.rs` must find them. Neither Windows number changes (`protocol::PROTOCOL_VERSION` 4, `RECORDER_PROTOCOL` 13): the command is additive there and an older exe answers `unknown_command`. Real-machine check: `scripts/probe-hotkey-windows.mjs`, run by `.github/workflows/windows-recorder-probe.yml` before the recorder probe.
-- Mini Panel foreground activity: `native/macos/foreground_activity.swift` emits a bounded, data-only lease beside the daemon socket. Hooked into actual HID/focus delivery and recursive input scopes, not the requested delivery policy. Included in both native-build and source-install inputs. No change to upstream tool schemas or input behavior.
+- Mini Panel foreground activity: `native/macos/foreground_activity.swift` emits a bounded, data-only lease beside the daemon socket. Hooked into actual HID/focus delivery and recursive input scopes, not the requested delivery policy. `restoreUserFocus` publishes a one-second lease before it puts an app the user was not in on top (`tookForeground`; one second because activation is asynchronous and Desktop only acts on a lease it reads after its own window lost focus): that is the adapter bringing a covered page forward, which took the screen with no HID input and so left Desktop without its conversation panel and without the hand-back when the run ended. Only the adapter sends that command; Desktop's own window switching uses `focusWindow`, which stays silent. Included in both native-build and source-install inputs. No change to upstream tool schemas or input behavior.

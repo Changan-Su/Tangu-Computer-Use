@@ -1,116 +1,195 @@
 import CoreGraphics
 import Foundation
-import Observation
 
-/// Main-actor Dubins-path animation state consumed by the SwiftUI overlay.
-@Observable
-@MainActor
-final class AgentCursorRenderer {
-    static let shared = AgentCursorRenderer()
+/// 光标的一个姿态:位置(画布坐标,左上原点、y 向下)+ 朝向(弧度,画箭头时旋转 heading + π)。
+struct CursorPose: Equatable {
+    var point: CGPoint
+    var heading: Double
 
-    private(set) var position = CGPoint(x: -200, y: -200)
-    private(set) var heading: Double = .pi / 4
-    private(set) var isAnimating = false
-
-    private var path: PlannedPath?
-    private var spring: Spring?
-    private var distanceSoFar: Double = 0
-    private var lastFrameTime: CFTimeInterval?
-    private var springTarget: (point: CGPoint, heading: Double)?
-
-    func moveTo(point clickPoint: CGPoint) {
-        let endAngle = Double.pi / 4
-        let targetPoint = CGPoint(
-            x: clickPoint.x + CGFloat(cos(endAngle) * 16),
-            y: clickPoint.y + CGFloat(sin(endAngle) * 16)
-        )
-        path = planPath(
-            x0: Double(position.x), y0: Double(position.y), th0: heading + .pi,
-            x1: Double(targetPoint.x), y1: Double(targetPoint.y), th1: endAngle + .pi,
-            R: 80, endVisualHeading: endAngle, targetPoint: targetPoint)
-        spring = nil
-        springTarget = nil
-        distanceSoFar = 0
-        lastFrameTime = nil
-        isAnimating = true
-    }
-
-    func setInitialPosition(_ point: CGPoint) {
-        position = point
-        cancelAnimation()
-    }
-
-    func cancelAnimation() {
-        path = nil
-        spring = nil
-        springTarget = nil
-        distanceSoFar = 0
-        lastFrameTime = nil
-        isAnimating = false
-    }
-
-    func tick(now: CFTimeInterval) {
-        guard isAnimating else { return }
-        let previous = lastFrameTime ?? now
-        let dt = min(0.05, now - previous)
-        lastFrameTime = now
-
-        if let path {
-            let progress = min(1.0, distanceSoFar / max(path.length, 1))
-            let profile = 16 * progress * progress * (1 - progress) * (1 - progress)
-            let minimumSpeed = progress < 0.5 ? 300.0 : 200.0
-            let speed = minimumSpeed + (900 - minimumSpeed) * profile
-            distanceSoFar += speed * dt
-
-            if distanceSoFar >= path.length {
-                let endState = path.sample(at: path.length)
-                spring = Spring(
-                    ox: 0,
-                    oy: 0,
-                    vx: cos(endState.heading) * speed * 0.8,
-                    vy: sin(endState.heading) * speed * 0.8
-                )
-                springTarget = (path.targetPoint, path.endVisualHeading)
-                position = path.targetPoint
-                heading = path.endVisualHeading
-                self.path = nil
-                distanceSoFar = 0
-            } else {
-                let state = path.sample(at: distanceSoFar)
-                position = CGPoint(x: state.x, y: state.y)
-                heading = rotateToward(current: heading, desired: state.heading + .pi, maxStep: 14 * dt)
-            }
-        } else if var spring, let target = springTarget {
-            let substep = dt / 4
-            for _ in 0..<4 {
-                spring.vx += (-400 * spring.ox - 17 * spring.vx) * substep
-                spring.vy += (-400 * spring.oy - 17 * spring.vy) * substep
-                spring.ox += spring.vx * substep
-                spring.oy += spring.vy * substep
-            }
-            position = CGPoint(x: target.point.x + CGFloat(spring.ox), y: target.point.y + CGFloat(spring.oy))
-            heading = target.heading
-            if hypot(spring.ox, spring.oy) < 0.3 && hypot(spring.vx, spring.vy) < 2 {
-                position = target.point
-                self.spring = nil
-                springTarget = nil
-                lastFrameTime = nil
-                isAnimating = false
-            } else {
-                self.spring = spring
-            }
-        }
-    }
-
-    private func rotateToward(current: Double, desired: Double, maxStep: Double) -> Double {
-        var difference = desired - current
-        while difference > .pi { difference -= 2 * .pi }
-        while difference < -.pi { difference += 2 * .pi }
-        return current + max(-maxStep, min(maxStep, difference))
+    /// 外形里箭尖到本体中心的距离(OverlayPaint.cursorShape 的箭尖就画在这里)。
+    static let tipReach: Double = 14
+    /// 落点(箭尖要对准的那一点)→ 光标停靠的位置。箭头是斜 45° 停的,本体中心在箭尖右下 tipReach 处。
+    /// 这个距离必须和外形里的箭尖是同一个数:原来这里写死 16、外形的箭尖在 14,停稳后箭尖离落点差 2pt
+    /// (2026-11-14 真机上连圆角和投影量到约 4pt,箭尖没落在点击环的圆心上)。
+    static let restHeading = Double.pi / 4
+    static func resting(atTip tip: CGPoint) -> CursorPose {
+        CursorPose(point: CGPoint(x: tip.x + CGFloat(cos(restHeading) * tipReach), y: tip.y + CGFloat(sin(restHeading) * tipReach)), heading: restHeading)
     }
 }
 
-private struct Spring { var ox, oy, vx, vy: Double }
+/// 一段飞行,**位置是时间的纯函数**(Tangu,协议 20):起点、终点、起飞时刻、时长 → 任意时刻的姿态。
+///
+/// 以前的飞行靠 SwiftUI 每帧 tick 推进(按速度曲线积分 + 弹簧收尾),窗口没在渲染就永远到不了,
+/// 也没人知道「什么时候到」。现在重绘只是取样;到达时刻 = start + duration,调用方可以直接算出来。
+struct CursorFlight: Equatable {
+    let from: CursorPose
+    let to: CursorPose
+    let start: Double
+    let duration: Double
+    private let path: DubinsPlannedPath?
+
+    /// 飞行时长按距离定:1100 pt/s,夹在 0.18–0.45 s;离落点不到 6 pt 就不飞(0)。
+    static func duration(distance: Double) -> Double {
+        guard distance.isFinite, distance >= 6 else { return 0 }
+        return min(0.45, max(0.18, distance / 1100))
+    }
+
+    init(from: CursorPose, to: CursorPose, start: Double, duration: Double? = nil) {
+        self.from = from
+        self.to = to
+        self.start = start
+        let distance = Double(hypot(to.point.x - from.point.x, to.point.y - from.point.y))
+        let d = duration ?? Self.duration(distance: distance)
+        self.duration = d
+        path = d > 0 ? Self.route(from: from, to: to, distance: distance) : nil
+    }
+
+    /// 路线:带转弯弧线(Dubins),转弯半径从 80 起逐档收小,收到路线不超过直线的 routeStretch 倍为止。
+    ///
+    /// 半径原来固定 80。箭头只能朝自己指的方向(左上)走,目标不在那个方向时要先掉头、到了再掉回来,
+    /// 两次掉头合起来正好多走一整圈(2π × 80 ≈ 503pt),和这一跳有多远无关:邻键 54pt 实际飞 557pt、探出连线 137pt。
+    /// 0.7.2 按 200–900 pt/s 慢慢飞(这一圈约 1 秒),看得清;协议 20 把飞行压到 0.18–0.45 s,时长按直线距离给,
+    /// 同一圈成了 3000 pt/s 以上的一闪(2026-11-14 真机取样到光标在窗口外面、离线量出上面的数)。
+    /// 时长不动(0.18–0.45 s 是定过的,先到再点等的也是它),收的是路线:半径最小到直线距离的 1/10,
+    /// 这时多出来的一圈是 2π × 0.1 = 0.63 倍,所以总能收到 routeStretch 以内。顺着箭头朝向的那一跳本来就是直线,不受影响。
+    private static func route(from: CursorPose, to: CursorPose, distance: Double) -> DubinsPlannedPath {
+        let smallest = max(0.5, distance * 0.1)
+        var radius = 80.0
+        while true {
+            let path = planPath(
+                x0: Double(from.point.x), y0: Double(from.point.y), th0: from.heading + .pi,
+                x1: Double(to.point.x), y1: Double(to.point.y), th1: to.heading + .pi,
+                R: radius, endVisualHeading: to.heading, targetPoint: to.point)
+            if path.length <= distance * routeStretch || radius <= smallest { return path }
+            radius = max(smallest, radius * 0.7)
+        }
+    }
+
+    var arrival: Double { start + duration }
+
+    /// 路线总长(不飞时为 0)。测试用它核对路线没有绕远。
+    var routeLength: Double { path?.length ?? 0 }
+    /// 路线最多是直线距离的几倍。
+    static let routeStretch = 1.65
+
+    func pose(at t: Double) -> CursorPose {
+        guard let path, duration > 0, t < arrival else { return t < start && duration > 0 ? from : to }
+        let u = max(0, min(1, (t - start) / duration))
+        let s = path.length * easeInOut(u)
+        let state = path.sample(at: s)
+        // 起飞头 25% 从原来的朝向转向路径切线,最后 40% 转回停靠角(Dubins 末端切线本来就接近它)。
+        var heading = lerpAngle(from.heading, state.heading + .pi, smooth(min(1, u / 0.25)))
+        heading = lerpAngle(heading, to.heading, smooth(max(0, (u - 0.6) / 0.4)))
+        return CursorPose(point: CGPoint(x: state.x, y: state.y), heading: heading)
+    }
+
+    static func == (lhs: CursorFlight, rhs: CursorFlight) -> Bool {
+        lhs.from == rhs.from && lhs.to == rhs.to && lhs.start == rhs.start && lhs.duration == rhs.duration
+    }
+}
+
+/// 拖动时沿路径匀速走(按住的姿态,朝向保持停靠角)。points 是光标位置(已加过箭尖偏移)。
+struct CursorPolyline: Equatable {
+    let points: [CGPoint]
+    let start: Double
+    let duration: Double
+
+    /// 拖动路径按 900 pt/s 走,夹在 0.25–0.8 s(纯视觉;真实拖动事件照旧同步投递)。
+    static func duration(points: [CGPoint]) -> Double {
+        min(0.8, max(0.25, polylineLength(points) / 900))
+    }
+
+    var end: Double { start + duration }
+
+    func point(at t: Double) -> CGPoint {
+        guard let first = points.first else { return .zero }
+        guard points.count > 1, duration > 0 else { return points.last ?? first }
+        let u = max(0, min(1, (t - start) / duration))
+        return polylinePoint(points, fraction: u)
+    }
+}
+
+/// 光标的整条运动:若干段首尾相接(飞行 / 拖动),之前停在 rest。
+enum CursorMotionSegment: Equatable {
+    case flight(CursorFlight)
+    case polyline(CursorPolyline)
+
+    var start: Double {
+        switch self { case .flight(let f): return f.start; case .polyline(let p): return p.start }
+    }
+    var end: Double {
+        switch self { case .flight(let f): return f.arrival; case .polyline(let p): return p.end }
+    }
+    func pose(at t: Double) -> CursorPose {
+        switch self {
+        case .flight(let f): return f.pose(at: t)
+        case .polyline(let p): return CursorPose(point: p.point(at: t), heading: CursorPose.restHeading)
+        }
+    }
+}
+
+func polylineLength(_ points: [CGPoint]) -> Double {
+    zip(points, points.dropFirst()).reduce(0) { $0 + Double(hypot($1.1.x - $1.0.x, $1.1.y - $1.0.y)) }
+}
+
+/// 折线上按弧长比例取点(fraction 0…1)。
+func polylinePoint(_ points: [CGPoint], fraction: Double) -> CGPoint {
+    guard let first = points.first else { return .zero }
+    let total = polylineLength(points)
+    guard total > 0 else { return first }
+    var remaining = total * max(0, min(1, fraction))
+    for (a, b) in zip(points, points.dropFirst()) {
+        let length = Double(hypot(b.x - a.x, b.y - a.y))
+        if remaining <= length, length > 0 {
+            let k = CGFloat(remaining / length)
+            return CGPoint(x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k)
+        }
+        remaining -= length
+    }
+    return points.last ?? first
+}
+
+/// 折线截到 fraction 处(拖动轨迹「走到哪画到哪」)。
+func polylinePrefix(_ points: [CGPoint], fraction: Double) -> [CGPoint] {
+    guard points.count > 1 else { return points }
+    if fraction >= 1 { return points }
+    let total = polylineLength(points)
+    var remaining = total * max(0, fraction)
+    var out = [points[0]]
+    for (a, b) in zip(points, points.dropFirst()) {
+        let length = Double(hypot(b.x - a.x, b.y - a.y))
+        if remaining <= length {
+            let k = length > 0 ? CGFloat(remaining / length) : 0
+            out.append(CGPoint(x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k))
+            return out
+        }
+        out.append(b)
+        remaining -= length
+    }
+    return out
+}
+
+func smooth(_ u: Double) -> Double {
+    let x = max(0, min(1, u))
+    return x * x * (3 - 2 * x)
+}
+
+func easeInOut(_ u: Double) -> Double {
+    let x = max(0, min(1, u))
+    return x < 0.5 ? 2 * x * x : 1 - 2 * (1 - x) * (1 - x)
+}
+
+func easeOut(_ u: Double) -> Double {
+    let x = max(0, min(1, u))
+    return 1 - (1 - x) * (1 - x) * (1 - x)
+}
+
+func lerpAngle(_ a: Double, _ b: Double, _ k: Double) -> Double {
+    var difference = b - a
+    while difference > .pi { difference -= 2 * .pi }
+    while difference < -.pi { difference += 2 * .pi }
+    return a + difference * k
+}
 
 struct DubinsPlannedPath {
     enum Kind { case dubins, linear }
@@ -161,7 +240,7 @@ struct DubinsPlannedPath {
     }
 }
 
-private typealias PlannedPath = DubinsPlannedPath
+typealias PlannedPath = DubinsPlannedPath
 
 private func mod2pi(_ x: Double) -> Double {
     let tau = 2 * Double.pi; let r = x - tau * floor(x / tau); return r < 0 ? r + tau : r
@@ -212,7 +291,7 @@ private func dubinsLRL(_ d: Double, _ a: Double, _ b: Double) -> DubinsSolution?
     return DubinsSolution(t: t, p: p, q: mod2pi(mod2pi(b) - a - t + p), types: ["L","R","L"])
 }
 
-private func planPath(x0: Double, y0: Double, th0: Double,
+func planPath(x0: Double, y0: Double, th0: Double,
                       x1: Double, y1: Double, th1: Double,
                       R: Double, endVisualHeading: Double,
                       targetPoint: CGPoint) -> PlannedPath {

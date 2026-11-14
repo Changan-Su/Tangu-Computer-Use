@@ -281,7 +281,7 @@ MIT (see `LICENSE`). Derived from pi-computer-use — upstream license in `LICEN
 
 ### Mini Panel foreground signal
 
-The macOS helper publishes a short-lived `foreground.json` beside its socket for Genesis Mini Panel. It becomes active only when real HID input is posted or the input path activates the target app; successful AX and PID background operations do not activate it. Nested physical-input scopes keep the signal active until the outer action finishes. A 1-second heartbeat renews a lease of at most 2500ms; short completed clicks remain observable for 350ms. Desktop checks expiry and helper liveness, never starts the helper or requests screenshots for this feature.
+The macOS helper publishes a short-lived `foreground.json` beside its socket for Genesis Mini Panel. It becomes active only when real HID input is posted or the input path activates the target app; successful AX and PID background operations do not activate it. Bringing a covered web page's app forward so the page reports again (`restoreUserFocus`, no HID input) publishes a one-second lease first. Nested physical-input scopes keep the signal active until the outer action finishes. A 1-second heartbeat renews a lease of at most 2500ms; short completed clicks remain observable for 350ms. Desktop checks expiry and helper liveness, never starts the helper or requests screenshots for this feature.
 
 Build the helper with `npm run build:native` and pair it with Genesis's Mini Panel adapter update. Builds produce a sealed App ZIP alongside each binary; installation never compiles or signs on the user's machine. `npm run check:mini-foreground` tests signal lifetime without controlling any application.
 

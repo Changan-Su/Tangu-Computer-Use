@@ -11,6 +11,7 @@ import { SETTINGS } from './settings.ts';
 import { cliMain } from './setup.ts';
 import { shutdownComputerUseSession } from './vendor/bridge.ts';
 import { stopJevRuns } from './jevRun.ts';
+import { registerOverlayRoutes } from './overlayRoutes.ts';
 
 // helper 惰性启动后常驻;进程退出时收口(无 pi 的 session_shutdown 钩子)。
 // stop 放模块级、引用唯一:宿主热插拔时会在同一个模块对象上反复 activate / deactivate(启动时每个插件先 activate、
@@ -55,6 +56,9 @@ const plugin: TanguPlugin = {
             ].join('\n')
           : '',
     });
+
+    // 叠层配色 / 一轮结束的两条路由(插件视图调;老引擎没有 registerScopedRoutes → 不挂,helper 用缺省柔蓝)。
+    registerOverlayRoutes(ctx);
 
     // CLI 子命令(老宿主无 registerCommand → 守卫降级):tangu computer-use setup/doctor/stop
     if (typeof ctx.registerCommand === 'function') {

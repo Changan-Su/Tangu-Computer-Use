@@ -18,14 +18,14 @@ let mod;
 try {
   const outfile = path.join(temp, 'bundle.mjs');
   await build({
-    stdin: { contents: "export * from './src/webContent.ts'\nexport { executionNote } from './src/foregroundNote.ts'\nexport { webContentChanged, pictureChangedNear } from './src/vendor/view.ts'", resolveDir: root, loader: 'ts' },
+    stdin: { contents: "export * from './src/webContent.ts'\nexport { executionNote } from './src/foregroundNote.ts'\nexport { webContentChanged, pictureChangedNear } from './src/vendor/view.ts'\nexport { serializeOutline, restoreOutline } from './src/vendor/outline.ts'", resolveDir: root, loader: 'ts' },
     bundle: true, platform: 'node', format: 'esm', target: 'node20', outfile, logLevel: 'silent', external: ['node:*'],
   });
   mod = await import(pathToFileURL(outfile).href);
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
-const { appBundleOf, hasChromiumFramework, hasWebArea, noteContact, webContentWait, executionNote, webContentChanged, pictureChangedNear, WEB_CONTENT_SETTLE_MS } = mod;
+const { appBundleOf, hasChromiumFramework, hasWebArea, noteContact, webContentWait, executionNote, webContentChanged, pictureChangedNear, serializeOutline, restoreOutline, WEB_CONTENT_SETTLE_MS } = mod;
 
 assert.equal(appBundleOf('/Applications/Visual Studio Code.app/Contents/MacOS/Electron'), '/Applications/Visual Studio Code.app');
 assert.equal(appBundleOf('/Applications/Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper'), '/Applications/Code.app', 'the outer app, not the helper');
@@ -65,6 +65,14 @@ console.log('✓ 首读等待');
 
 const details = (step) => ({ config: { headless: false }, execution: { outcome: 'unknown', steps: [{ outcome: 'unknown', delivery: 'ax', ...step }] } });
 assert.match(executionNote(details({ accessibilityPress: true })), /press the same element again/);
+assert.match(executionNote(details({ accessibilityPress: true })), /while the page still shows no change, the repeat goes out as a real click/, 'the real click is promised only while the page has not changed');
+// 页面上看得到这一下起了作用:再按同一个是新的一下、还在后台,不能再许诺真实点击
+const acted = executionNote(details({ accessibilityPress: true, pressConfirmed: true }));
+assert.match(acted, /the page changed after it/);
+assert.match(acted, /is a new press/);
+assert.match(acted, /stays in the background/);
+assert.doesNotMatch(acted, /real click/, 'a confirmed press must not promise a real click on repeat');
+assert.match(executionNote(details({ accessibilityPress: true, pressConfirmed: true })), /"pressConfirmed":true/, 'the summary carries the flag');
 assert.doesNotMatch(executionNote(details({})), /press the same element again/, 'only after an accessibility press');
 assert.doesNotMatch(executionNote(details({ accessibilityPress: false })), /press the same element again/);
 // 按完没看到变化:已送出、界面可能还没刷新、先看、不要再按;给的下一步只有读
@@ -117,4 +125,83 @@ assert.equal(webContentChanged(outline(), outline({ chrome: true })), false, 'li
 assert.equal(webContentChanged(outline(), outline({ status: 'saved' })), true);
 assert.equal(webContentChanged(outline(), outline({ page: true })), true);
 assert.equal(webContentChanged(outline({ page: true }), outline()), true, 'a removed node is looked up in the old outline');
+// 只有焦点移到被按的元素上:AXPress 不管有没有效果都会把焦点放上去,所以焦点不算「这一下起了作用」
+const focusOn = (extra = {}) => { const o = outline({ page: true, status: extra.status }); o.nodes.find((n) => n.ref === '@e6').focused = extra.focused === true; return o; };
+assert.equal(webContentChanged(focusOn(), focusOn({ focused: true })), true, 'focus moving is a change in the page');
+assert.equal(webContentChanged(focusOn(), focusOn({ focused: true }), { effectOnly: true }), false, 'but not evidence that the press acted');
+assert.equal(webContentChanged(focusOn(), focusOn({ focused: true, status: 'saved' }), { effectOnly: true }), true, 'the content changed as well');
+assert.equal(webContentChanged(focusOn(), focusOn({ status: 'saved' }), { effectOnly: true }), true);
+// 同一个页面换一种方式读:带图的读法 rect 是图像像素、还带读图得到的文字和只在图里看到的节点,不带图的读法 rect 是点。
+// 这些都不是页面自己的变化(真机 2026-11-14,web-press ⑯:两种读法之间每个 rect 都不一样)。
+const readAt = (scale, more = {}) => { // scale 1 = 点(不带图的读法),2 = 图像像素(带图的读法)
+  const o = focusOn();
+  o.nodes.forEach((n, i) => { n.rect = { x: 10 * scale, y: (20 + 30 * i) * scale, w: 100 * scale, h: 24 * scale }; });
+  Object.assign(o.nodes.find((n) => n.ref === '@e6'), more);
+  return o;
+};
+assert.equal(webContentChanged(readAt(1), readAt(2)), true, 'read differently, the plain comparison sees every rect change');
+assert.equal(webContentChanged(readAt(1), readAt(2), { effectOnly: true }), false, 'but the page itself says nothing happened');
+assert.equal(webContentChanged(readAt(1), readAt(1, { text: [{ string: 'Save', confidence: 0.93 }], truncated: true }), { effectOnly: true }), false, 'text read off the picture is not the page changing');
+assert.equal(webContentChanged(readAt(1), readAt(2, { value: 'on' }), { effectOnly: true }), true, 'a value changing still is');
+const withPictureNode = () => {
+  const o = focusOn(); const area = o.nodes.find((n) => n.role === 'AXWebArea');
+  const seen = { ...o.nodes.find((n) => n.ref === '@e6'), ref: '@e99', wireRef: undefined, role: 'AXImage', title: 'seen in the picture', pictureOnly: true, focused: false, children: [], parent: area };
+  area.children.push(seen); o.nodes.push(seen);
+  return o;
+};
+assert.equal(webContentChanged(focusOn(), withPictureNode(), { effectOnly: true }), false, 'a node only the picture shows is not the page changing');
+assert.equal(webContentChanged(focusOn(), withPictureNode()), true);
 console.log('✓ 只看网页区域的变化');
+
+// 两次各自读出来的树,编号各排各的:窗口边框里多一个 / 少一个节点,后面的编号整体错一位。
+// 真机 2026-11-14(web-press ⑧):全屏按钮下面那个分组时有时无,按编号一对,整页都成了「变了」,该发出去的点击被拦下。
+const renumbered = (extra = {}) => {
+  const node = (role, parent, more = {}) => ({ ref: '', role, parent, subrole: '', value: '', text: [], actions: [], children: [], ...more });
+  const window = node('AXWindow');
+  const fullscreen = node('AXButton', window);
+  const nodes = [window, fullscreen];
+  if (extra.chrome) nodes.push(node('AXGroup', fullscreen));
+  const web = node('AXWebArea', window);
+  const first = node('AXButton', web, { title: 'Save' });
+  const second = node('AXButton', web, { title: extra.title ?? 'Still' });
+  nodes.push(web, ...(extra.swapped ? [second, first] : [first, second]), node('AXStaticText', extra.moved ? first : web, { value: extra.status ?? 'pending' }));
+  nodes.forEach((entry, index) => { entry.ref = `@e${index + 1}`; });
+  return { root: window, nodes };
+};
+assert.equal(webContentChanged(renumbered({ chrome: true }), renumbered()), false, 'chrome lost a node between two reads: the page is numbered one lower and did not change');
+assert.equal(webContentChanged(renumbered(), renumbered({ chrome: true })), false, 'chrome grew a node between two reads');
+assert.equal(webContentChanged(renumbered({ chrome: true }), renumbered({ status: 'saved' })), true, 'renumbered and the page did change');
+assert.equal(webContentChanged(renumbered({ chrome: true }), renumbered({ title: 'Other' })), true, 'renumbered and an element was renamed');
+assert.equal(webContentChanged(renumbered(), renumbered({ swapped: true })), true, 'two elements changed places');
+assert.equal(webContentChanged(renumbered(), renumbered({ moved: true })), true, 'an element moved under another parent');
+// 节点列表有两种排法:现读的是一层一层排(buildOutline / rebuildIndexes),从存档还原的是一条枝走到底(restoreOutline)。
+// 同一棵树两种排法不能算变了,否则没确认的按压会被当成「页面动了 = 已确认」。
+const listed = (order, extra = {}) => {
+  const node = (role, parent, more = {}) => ({ ref: '', role, parent, subrole: '', value: '', text: [], actions: [], children: [], ...more });
+  const window = node('AXWindow');
+  const web = node('AXWebArea', window);
+  const left = node('AXGroup', web);
+  const right = node('AXGroup', web);
+  const a = node('AXButton', left, { title: 'A' });
+  const b = node('AXButton', extra.regrouped ? left : right, { title: 'B' });
+  const other = node('AXWebArea', node('AXGroup', window));
+  const nodes = order === 'breadth' ? [window, web, other.parent, left, right, other, a, b] : [window, web, left, a, ...(extra.regrouped ? [b, right] : [right, b]), other.parent, other];
+  nodes.forEach((entry, index) => { entry.ref = `@e${index + 1}`; });
+  return { root: window, nodes };
+};
+assert.equal(webContentChanged(listed('breadth'), listed('depth')), false, 'the same page listed breadth first and depth first');
+assert.equal(webContentChanged(listed('depth'), listed('breadth')), false, 'and the other way round');
+assert.equal(webContentChanged(listed('breadth'), listed('depth', { regrouped: true })), true, 'listed differently and an element did move to another group');
+// 真的走一遍存档再还原(SavedStates.hydrate 走的就是 restoreOutline):现读的那份按层排,还原出来的按枝排。
+// Codex 评审 2026-11-14 用这个往返复现了上一版(按 nodes 先后逐行比)把没变的页面判成变了。
+const linked = () => {
+  const outline = listed('breadth');
+  for (const entry of outline.nodes) if (entry.parent) entry.parent.children.push(entry);
+  return { lookId: 'check', ...outline, refToWireRef: new Map(), wireRefToRef: new Map() };
+};
+const fresh = linked();
+const restored = restoreOutline(serializeOutline(linked()));
+assert.notDeepEqual(fresh.nodes.map((entry) => entry.title ?? entry.role), restored.nodes.map((entry) => entry.title ?? entry.role), 'the round trip no longer reorders nodes: this case tests nothing');
+assert.equal(webContentChanged(fresh, restored), false, 'a saved and restored outline of the same page');
+assert.equal(webContentChanged(restored, fresh), false, 'and the other way round');
+console.log('✓ 两次读出来的编号对不上、节点排法不同时,仍按内容比');
