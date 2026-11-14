@@ -1438,6 +1438,9 @@ final class Bridge {
 			throw BridgeFailure(message: "App with pid \(pid) is no longer running", code: "app_not_found")
 		}
 
+		// Tangu: only the adapter sends this (to bring a covered page forward); Desktop's own window switching uses
+		// focusWindow. Putting an app the user was not in on top takes the screen like a real click does, so say so.
+		if !app.isActive { ForegroundActivity.shared.tookForeground() }
 		let appRestored = app.activate()
 		var restoredWindowTitle = ""
 		var windowRestored = false
