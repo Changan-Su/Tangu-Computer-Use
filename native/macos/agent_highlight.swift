@@ -302,8 +302,10 @@ private struct HighlightView: View {
     var body: some View {
         let scene = model.scene
         let palette = model.palette
-        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !model.isAnimating)) { _ in
+        // ⚠️Canvas 里必须用到 timeline 的时刻(OverlayFrameBeat.mark),否则 SwiftUI 不逐帧重画,见 OverlayFrameBeat。
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !model.isAnimating)) { timeline in
             Canvas { graphics, size in
+                OverlayFrameBeat.highlight.mark(timeline.date)
                 let opacity = scene.opacity(at: OverlayClock.now())
                 graphics.withCGContext { ctx in
                     OverlayPaint.drawHighlight(ctx, size: size, inset: inset, palette: palette, opacity: opacity)

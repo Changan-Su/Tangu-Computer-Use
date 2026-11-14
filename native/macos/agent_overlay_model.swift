@@ -12,6 +12,33 @@ enum OverlayClock {
     static func now() -> Double { ProcessInfo.processInfo.systemUptime }
 }
 
+/// 重绘节拍:TimelineView 每给一帧,Canvas 里就记一次。两个用处:
+///  1. Canvas 的闭包因此用到了这一帧的时刻。不用的话,每一帧生成的 Canvas 值相同,SwiftUI 不重画,
+///     过渡只在状态变化的那一刻画一次起点值(2026-11-14 真机量到:动手时边光显示的是上一档的 0.45、在想时反而满亮,
+///     光标不摆;离屏测试画的是固定时刻,看不出来)。0.7.2 的光标画布本来就用了 context.date,别再改回 `{ _ in`。
+///  2. 帧数经 diagnostics 交出去(overlayFrames),真机检查不用录屏授权也能断言「动画真的在逐帧画」。
+final class OverlayFrameBeat: @unchecked Sendable {
+    static let cursor = OverlayFrameBeat()
+    static let highlight = OverlayFrameBeat()
+
+    private let lock = NSLock()
+    private var frames: UInt64 = 0
+    private var lastFrameAt: Double = 0
+
+    func mark(_ date: Date) {
+        lock.lock()
+        frames &+= 1
+        lastFrameAt = date.timeIntervalSinceReferenceDate
+        lock.unlock()
+    }
+
+    var count: UInt64 {
+        lock.lock()
+        defer { lock.unlock() }
+        return frames
+    }
+}
+
 // MARK: - 配色
 
 struct OverlayRGB: Equatable {

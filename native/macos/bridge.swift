@@ -1104,6 +1104,11 @@ final class Bridge {
 			"recentCompletedRequestIds": completedRequestIds(),
 			"recorderSubscribers": ActivityRecorder.shared.subscriberCount,
 			"hotkeySubscribers": HotkeyMonitor.shared.subscriberCount,
+			// Tangu(协议 20):两扇叠层各画了多少帧,只增不减。真机检查据此断言动画在逐帧画(见 OverlayFrameBeat)。
+			"overlayFrames": [
+				"cursor": Int(clamping: OverlayFrameBeat.cursor.count),
+				"highlight": Int(clamping: OverlayFrameBeat.highlight.count),
+			],
 		]
 		// Tangu:电脑历史的无痕扫描计数(只有计数)—— 浏览器窗口的有上限遍历走了几次、几次没看完、各因什么停手。
 		// 真机上据此判断「扫描不完整时仍按普通窗口记」要不要改(见 activity_recorder.swift RecorderScanStats)。

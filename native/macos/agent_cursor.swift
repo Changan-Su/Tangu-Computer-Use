@@ -382,8 +382,10 @@ private struct AgentCursorView: View {
     var body: some View {
         let scene = renderer.scene
         let palette = renderer.palette
-        TimelineView(.animation(minimumInterval: renderer.frameInterval, paused: !renderer.isAnimating)) { _ in
+        // ⚠️Canvas 里必须用到 timeline 的时刻(OverlayFrameBeat.mark),否则 SwiftUI 不逐帧重画,见 OverlayFrameBeat。
+        TimelineView(.animation(minimumInterval: renderer.frameInterval, paused: !renderer.isAnimating)) { timeline in
             Canvas { graphics, _ in
+                OverlayFrameBeat.cursor.mark(timeline.date)
                 graphics.withCGContext { ctx in
                     OverlayPaint.drawCursorScene(ctx, scene: scene, palette: palette, at: OverlayClock.now())
                 }
