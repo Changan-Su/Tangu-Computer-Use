@@ -18,14 +18,14 @@ let mod;
 try {
   const outfile = path.join(temp, 'bundle.mjs');
   await build({
-    stdin: { contents: "export * from './src/webContent.ts'\nexport { executionNote } from './src/foregroundNote.ts'\nexport { webContentChanged, pictureChangedNear } from './src/vendor/view.ts'", resolveDir: root, loader: 'ts' },
+    stdin: { contents: "export * from './src/webContent.ts'\nexport { executionNote } from './src/foregroundNote.ts'\nexport { webContentChanged, pictureChangedNear } from './src/vendor/view.ts'\nexport { serializeOutline, restoreOutline } from './src/vendor/outline.ts'", resolveDir: root, loader: 'ts' },
     bundle: true, platform: 'node', format: 'esm', target: 'node20', outfile, logLevel: 'silent', external: ['node:*'],
   });
   mod = await import(pathToFileURL(outfile).href);
 } finally {
   rmSync(temp, { recursive: true, force: true });
 }
-const { appBundleOf, hasChromiumFramework, hasWebArea, noteContact, webContentWait, executionNote, webContentChanged, pictureChangedNear, WEB_CONTENT_SETTLE_MS } = mod;
+const { appBundleOf, hasChromiumFramework, hasWebArea, noteContact, webContentWait, executionNote, webContentChanged, pictureChangedNear, serializeOutline, restoreOutline, WEB_CONTENT_SETTLE_MS } = mod;
 
 assert.equal(appBundleOf('/Applications/Visual Studio Code.app/Contents/MacOS/Electron'), '/Applications/Visual Studio Code.app');
 assert.equal(appBundleOf('/Applications/Code.app/Contents/Frameworks/Code Helper.app/Contents/MacOS/Code Helper'), '/Applications/Code.app', 'the outer app, not the helper');
@@ -158,4 +158,16 @@ const listed = (order, extra = {}) => {
 assert.equal(webContentChanged(listed('breadth'), listed('depth')), false, 'the same page listed breadth first and depth first');
 assert.equal(webContentChanged(listed('depth'), listed('breadth')), false, 'and the other way round');
 assert.equal(webContentChanged(listed('breadth'), listed('depth', { regrouped: true })), true, 'listed differently and an element did move to another group');
+// 真的走一遍存档再还原(SavedStates.hydrate 走的就是 restoreOutline):现读的那份按层排,还原出来的按枝排。
+// Codex 评审 2026-11-14 用这个往返复现了上一版(按 nodes 先后逐行比)把没变的页面判成变了。
+const linked = () => {
+  const outline = listed('breadth');
+  for (const entry of outline.nodes) if (entry.parent) entry.parent.children.push(entry);
+  return { lookId: 'check', ...outline, refToWireRef: new Map(), wireRefToRef: new Map() };
+};
+const fresh = linked();
+const restored = restoreOutline(serializeOutline(linked()));
+assert.notDeepEqual(fresh.nodes.map((entry) => entry.title ?? entry.role), restored.nodes.map((entry) => entry.title ?? entry.role), 'the round trip no longer reorders nodes: this case tests nothing');
+assert.equal(webContentChanged(fresh, restored), false, 'a saved and restored outline of the same page');
+assert.equal(webContentChanged(restored, fresh), false, 'and the other way round');
 console.log('✓ 两次读出来的编号对不上、节点排法不同时,仍按内容比');
