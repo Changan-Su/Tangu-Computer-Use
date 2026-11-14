@@ -215,10 +215,12 @@ struct AgentOverlayRenderTests {
         expect(a == c && a != b, "飞行位置是时间的纯函数")
         expect(hypot(a.point.x - from.point.x, a.point.y - from.point.y) > 20, "半程时已经离开起点")
 
-        // 路线不绕远:八个方向、远近五档,停着起飞和带着任意朝向中途改目标,路线都不超过直线的 routeStretch 倍,
-        // 也不探出起终点连线太远。真机 2026-11-14 量到的是邻键 54pt 实际飞 557pt(半径固定 80 的一整圈)、0.18 s 飞完。
-        var worstRatio = 0.0, worstCase = ""
-        for distance in [30.0, 54, 153, 400, 900] {
+        // 路线是直线、箭头不转:八个方向、远近五档,停着起飞和带着任意朝向中途改目标,都走起终点连线,
+        // 朝向只从起飞朝向平滑转到停靠角(停着起飞就一路不转)。
+        // 真机 2026-11-14 量到半径固定 80 的 Dubins 路线邻键 54pt 飞 557pt;半径收小后箭头仍原地转 327°,
+        // 700pt 以上的远跳照旧绕 1.35–1.5 倍(试玩页四版对比后用户选了「直线、不转头」)。
+        var worstOffLine = 0.0, worstTurn = 0.0
+        for distance in [8.0, 30, 54, 153, 400, 900] {
             for direction in 0..<8 {
                 let angle = Double(direction) * .pi / 4
                 let tipA = CGPoint(x: 1000, y: 1000)
@@ -229,33 +231,37 @@ struct AgentOverlayRenderTests {
                     let end = CursorPose.resting(atTip: tipB)
                     let hop = CursorFlight(from: start, to: end, start: 0)
                     let label = "\(Int(distance))pt 方向 \(direction * 45)° 起飞朝向 \(String(format: "%.1f", startHeading))"
-                    let ratio = hop.routeLength / distance
-                    if ratio > worstRatio { worstRatio = ratio; worstCase = label }
-                    expect(hop.routeLength >= distance - 0.5, "\(label):路线不会比直线短(\(hop.routeLength))")
-                    expect(ratio <= CursorFlight.routeStretch + 0.01, "\(label):路线 \(Int(hop.routeLength))pt 是直线的 \(String(format: "%.2f", ratio)) 倍,绕远了")
-                    var farthest = 0.0, travelled = 0.0
-                    var previous = hop.pose(at: 0).point
+                    expect(near(hop.routeLength, distance, 1e-6), "\(label):路线就是直线(\(hop.routeLength))")
+                    var offLine = 0.0, travelled = 0.0, turned = 0.0
+                    var previous = hop.pose(at: 0)
                     for step in 1...240 {
-                        let point = hop.pose(at: hop.duration * Double(step) / 240).point
-                        travelled += Double(hypot(point.x - previous.x, point.y - previous.y))
-                        previous = point
+                        let pose = hop.pose(at: hop.duration * Double(step) / 240)
+                        travelled += Double(hypot(pose.point.x - previous.point.x, pose.point.y - previous.point.y))
+                        turned += abs(lerpAngle(previous.heading, pose.heading, 1) - previous.heading)
+                        previous = pose
                         let dx = Double(end.point.x - start.point.x), dy = Double(end.point.y - start.point.y)
-                        farthest = max(farthest, abs(dy * Double(point.x - start.point.x) - dx * Double(point.y - start.point.y)) / distance)
+                        offLine = max(offLine, abs(dy * Double(pose.point.x - start.point.x) - dx * Double(pose.point.y - start.point.y)) / distance)
                     }
-                    expect(near(travelled, hop.routeLength, max(2, hop.routeLength * 0.02)), "\(label):取样走过的长度(\(Int(travelled)))和路线长度(\(Int(hop.routeLength)))对得上")
-                    // 一段半圆弧正好探出 0.5 倍、长 1.57 倍,在 routeStretch 以内;再宽就是绕圈了。
-                    expect(farthest <= distance * 0.55 + 4, "\(label):探出起终点连线 \(Int(farthest))pt")
-                    // 时长按直线距离给(0.18–0.45 s 是定过的);路线不绕远,平均速度才不会失控。495pt 以上被 0.45 s 封顶,不在此列。
-                    if distance <= 495 {
-                        expect(hop.routeLength / hop.duration <= 1900, "\(label):平均 \(Int(hop.routeLength / hop.duration)) pt/s,快得看不清")
+                    expect(near(travelled, distance, 1e-6), "\(label):取样走过的长度(\(travelled))等于直线距离")
+                    expect(offLine < 1e-6, "\(label):探出起终点连线 \(offLine)pt")
+                    expect(previous == end, "\(label):到达时姿态就是停靠姿态")
+                    // 朝向只走一次最短的那一段角度差(从起飞朝向到停靠角),不来回打转。
+                    let needed = abs(lerpAngle(startHeading, CursorPose.restHeading, 1) - startHeading)
+                    expect(turned <= needed + 1e-6, "\(label):箭头转了 \(turned * 180 / .pi)°,最多该转 \(needed * 180 / .pi)°")
+                    if startHeading == CursorPose.restHeading { expect(turned < 1e-12, "\(label):停着起飞一路不转") }
+                    // 时长按直线距离给(0.18–0.45 s 是定过的);0.45 s 封顶之前平均速度不超过 1100 pt/s。
+                    if hop.duration > 0 && hop.duration < 0.45 {
+                        expect(hop.routeLength / hop.duration <= 1100 + 1e-6, "\(label):平均 \(Int(hop.routeLength / hop.duration)) pt/s")
                     }
+                    worstOffLine = max(worstOffLine, offLine)
+                    if startHeading == CursorPose.restHeading { worstTurn = max(worstTurn, turned) }
                 }
             }
         }
-        // 顺着箭头朝向(左上)的那一跳本来就是直线,收半径不该把它变弯。
-        let ahead = CursorFlight(from: CursorPose.resting(atTip: CGPoint(x: 500, y: 500)), to: CursorPose.resting(atTip: CGPoint(x: 400, y: 400)), start: 0)
-        expect(near(ahead.routeLength, (100.0 * 100 + 100 * 100).squareRoot(), 0.5), "顺着箭头朝向飞是直线(\(ahead.routeLength))")
-        print("  飞行路线最绕的一种:\(worstCase),直线的 \(String(format: "%.2f", worstRatio)) 倍")
+        // 真机那一跳:邻键往右 54pt,路线 54pt、箭头不转。
+        let neighbour = CursorFlight(from: CursorPose.resting(atTip: CGPoint(x: 34, y: 211)), to: CursorPose.resting(atTip: CGPoint(x: 88, y: 211)), start: 0)
+        expect(near(neighbour.routeLength, 54, 1e-9) && near(neighbour.duration, 0.18), "邻键 54pt:路线 \(neighbour.routeLength)pt、\(neighbour.duration) s")
+        print("  飞行路线:最远探出连线 \(String(format: "%.1e", worstOffLine))pt,停着起飞箭头最多转 \(String(format: "%.1e", worstTurn * 180 / .pi))°")
 
         var scene = CursorScene()
         scene.place(from)

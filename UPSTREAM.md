@@ -369,7 +369,10 @@ every new native feature silently does nothing (that is exactly how the first li
   (build-native.mjs); forget either and the helper compiles without it.
 - `native/macos/agent_overlay_model.swift`, `agent_overlay_paint.swift`, `agent_overlay_turn.swift` (protocol 20) —
   the overlay as pure data: palette (fill + contrast edge by WCAG luminance), time-parameterised flight
-  (`CursorFlight`: position is a function of time, so the arrival time is known without any render tick),
+  (`CursorFlight`: position is a function of time, so the arrival time is known without any render tick; the
+  route is a straight line and the arrow keeps its resting angle. Upstream's Dubins planner is deleted: it only
+  lets the arrow travel the way it points, so every hop not toward the resting up-left heading turned around
+  twice, a full loop for a 54 pt neighbour key),
   click rings / drag trail / scroll arrows / field outline, and the per-run turn state machine
   (`OverlayTurnModel`: acting → thinking 0.3 s after the last action → end via `overlayTurn` or a 45 s idle
   timeout → 1.0 s → 0.4 s fade → nothing left running). Drawing is a pure `(scene, palette, time) → CGContext`
