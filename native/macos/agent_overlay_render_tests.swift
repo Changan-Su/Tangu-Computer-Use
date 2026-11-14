@@ -234,6 +234,8 @@ struct AgentOverlayRenderTests {
                     expect(near(hop.routeLength, distance, 1e-6), "\(label):路线就是直线(\(hop.routeLength))")
                     var offLine = 0.0, travelled = 0.0, turned = 0.0
                     var previous = hop.pose(at: 0)
+                    // 起飞那一刻就是起点姿态(朝向不跳):后面累加的转角都从这里量,不核对它的话,一开始就跳到停靠角也测得出「没转」。
+                    expect(previous == start, "\(label):起飞那一刻就是起点姿态")
                     for step in 1...240 {
                         let pose = hop.pose(at: hop.duration * Double(step) / 240)
                         travelled += Double(hypot(pose.point.x - previous.point.x, pose.point.y - previous.point.y))
@@ -247,7 +249,7 @@ struct AgentOverlayRenderTests {
                     expect(previous == end, "\(label):到达时姿态就是停靠姿态")
                     // 朝向只走一次最短的那一段角度差(从起飞朝向到停靠角),不来回打转。
                     let needed = abs(lerpAngle(startHeading, CursorPose.restHeading, 1) - startHeading)
-                    expect(turned <= needed + 1e-6, "\(label):箭头转了 \(turned * 180 / .pi)°,最多该转 \(needed * 180 / .pi)°")
+                    expect(abs(turned - needed) <= 1e-6, "\(label):箭头转了 \(turned * 180 / .pi)°,该正好转 \(needed * 180 / .pi)°(不来回)")
                     if startHeading == CursorPose.restHeading { expect(turned < 1e-12, "\(label):停着起飞一路不转") }
                     // 时长按直线距离给(0.18–0.45 s 是定过的);0.45 s 封顶之前平均速度不超过 1100 pt/s。
                     if hop.duration > 0 && hop.duration < 0.45 {
