@@ -1227,21 +1227,30 @@ const backgroundPointerMisses = new Map<string, number>();
  * raised the window). Two places forget it, both in performDesktopTransaction:
  * - right after the press, when its own result shows the page changed (pressConfirmed);
  * - when the model presses the element again and the page it is looking at differs from the one before that press
- *   (pressBaseline), which covers a page that answers late.
- * "Changed" is something in the web content other than focus moving, or a window appearing or closing. An AXPress puts
- * focus on its element whether or not anything happens, so focus alone keeps the old rule: the repeat is the real click.
+ *   (pressBaseline), which covers a page that answers late and a call that could not read the page back.
+ * "Changed" is webContentChanged(..., { effectOnly: true }), or a window appearing or closing. An AXPress puts focus on
+ * its element whether or not anything happens, so focus alone keeps the old rule: the repeat is the real click.
+ * Only a call whose one action is that press is judged this way. With more in the call, what the page
+ * shows cannot be put down to the press, so nothing is confirmed and no baseline is kept: the old rule. The same goes
+ * for pressing one element twice in one call (the second is the real click) and for a call that reaches the element
+ * after other actions.
  * A press that showed nothing at all is not touched by this (unconfirmedPress has its own rule).
+ * act_ui and jev_ui share it: Jev sends its actions through the same executor.
  * ponytail: a page that changes by itself (a clock, a live feed) reads as acting, so on such a page an element whose
  * AXPress does nothing no longer gets the real click by being pressed again. Read the tree once more right before the
  * press and compare against that if it matters.
- * Only act_ui does this; presses sent by jev_ui keep the old rule.
+ * ponytail: one slot for all windows, as before. Calls on two apps at once can take the slot from each other; a call
+ * only clears or confirms what its own press put there, so the loser falls back to the old rule.
  */
 let lastAccessibilityPress: string | undefined;
 
 /**
- * Forsion patch, see UPSTREAM.md. The page as the model saw it before the press in lastAccessibilityPress, kept only when
- * that press's own result showed nothing but focus moving. Compared with what the model is looking at when it presses
- * the element again (pressActedSince).
+ * Forsion patch, see UPSTREAM.md. The page as the model saw it before the press in lastAccessibilityPress. Stored as soon
+ * as that press is sent, not when its result is read: a call that cannot read the page back leaves through the error
+ * path, and without a baseline the next press of the element went out as a real click although the first had acted
+ * (live cudeskrepeat 155037, 2026-11-14: `expect` was scoped to the text node the press replaced). Dropped when the
+ * result shows the press acting, or showing nothing at all (unconfirmedPress takes over), and spent by the one repeat
+ * it answers (pressActedSince).
  */
 let pressBaseline: { key: string; outline: Outline } | undefined;
 
@@ -2160,9 +2169,22 @@ function pressActedSince(actions: UiAction[], target: ResolvedTarget, look: Look
 	if ((first.button ?? "left") !== "left" || (first.clickCount ?? 1) !== 1) return;
 	const node = nodeByRef(look.parsedOutline!, first.ref.trim());
 	if (!node || pressKeyFor(target, node) !== kept.key) return;
-	if (!webContentChanged(kept.outline, baseView.outline, { ignoreFocus: true })) return;
-	lastAccessibilityPress = undefined;
+	// Spent either way: it answers this one repeat. Kept past a repeat that goes out as the real click, the page that
+	// click changes would read as the first press having acted, and an element that only takes real clicks would be sent
+	// an AXPress again every other time.
 	pressBaseline = undefined;
+	if (webContentChanged(kept.outline, baseView.outline, { effectOnly: true })) lastAccessibilityPress = undefined;
+}
+
+/**
+ * The identity of the AXPress this call sent, when that press is the one action the call carried out. Only then can
+ * what the page shows afterwards be put down to it.
+ */
+function solePressKey(actions: UiAction[], execution: ExecutionTrace, target: ResolvedTarget, look: LookResponse): string | undefined {
+	const step = execution.steps?.length ? execution.steps[0] : execution;
+	const ref = actions.length === 1 && step.accessibilityPress ? actions[0].ref?.trim() : undefined;
+	const node = ref ? nodeByRef(look.parsedOutline!, ref) : undefined;
+	return node ? pressKeyFor(target, node) : undefined;
 }
 
 async function performDesktopTransaction(params: ActParams, actions: UiAction[], signal?: AbortSignal): Promise<AgentToolResult<ComputerUseDetails | TerminalDesktopActionDetails>> {
@@ -2188,6 +2210,11 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 		pressActedSince(actions, target, look, baseView);
 		const execution = await dispatchUiTransaction(actions, target, look, headless, signal);
 		const executedActions = actions.slice(0, execution.actionCount ?? actions.length);
+		// Forsion patch, see UPSTREAM.md (pressBaseline). Before anything below can throw: the page as it was before the
+		// press this call just sent. A call that pressed something else among other actions leaves no baseline behind.
+		const ownPress = solePressKey(executedActions, execution, target, look);
+		if (ownPress && lastAccessibilityPress === ownPress) pressBaseline = { key: ownPress, outline: baseView.outline };
+		else if (pressBaseline && pressBaseline.key !== lastAccessibilityPress) pressBaseline = undefined;
 		try {
 			if (condition && !execution.error) {
 				const { text: expectedText, role: expectedRole, value: expectedValue, scopeExact, gone, timeoutMs } = condition;
@@ -2249,20 +2276,18 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 			}
 			// Forsion patch, see UPSTREAM.md. The page shows the press acting: forget which element it was, so the model
 			// pressing it again is a new background press and not the real click a retry gets (lastAccessibilityPress).
-			// Only focus moved: keep the page from before the press for pressActedSince. Nothing moved at all: that is
-			// unconfirmedPress's case, set above, and nothing is kept here.
-			if (pressed.length > 0) {
+			// Only for a call that sent this one press and still holds the slot (ownPress). Only focus moved: the baseline
+			// stored above stays for pressActedSince. Nothing moved at all: that is unconfirmedPress's case, set above.
+			if (ownPress && lastAccessibilityPress === ownPress) {
 				const acted = !execution.error && (
 					(execution.rootDelta ?? []).some((delta) => delta.change !== "focused")
-					|| webContentChanged(baseView.outline, capture.outline, { ignoreFocus: true })
+					|| webContentChanged(baseView.outline, capture.outline, { effectOnly: true })
 				);
 				if (acted) {
 					lastAccessibilityPress = undefined;
-					pressBaseline = undefined;
 					for (const trace of pressed) trace.pressConfirmed = true;
-				} else {
-					pressBaseline = lastAccessibilityPress && !pressed.some((trace) => trace.pressUnconfirmed) ? { key: lastAccessibilityPress, outline: baseView.outline } : undefined;
 				}
+				if ((acted || pressed.some((trace) => trace.pressUnconfirmed)) && pressBaseline?.key === ownPress) pressBaseline = undefined;
 			}
 			if (!execution.error) execution.outcome = outcomeAfterObservedValues(execution.outcome ?? "unknown", executedActions, (ref) => nodeByRef(capture.outline, ref)?.value);
 			for (const action of executedActions) {

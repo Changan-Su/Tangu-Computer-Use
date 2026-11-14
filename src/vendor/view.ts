@@ -139,16 +139,22 @@ export function changesBetween(base: Outline, next: Outline): OutlineDiff {
  * 11-14, web-press check ⑧, four runs of five). What is compared is each web area's subtree, walked branch by branch:
  * how deep each node sits and the same fields changesBetween looks at.
  *
- * `ignoreFocus` leaves out which node has focus. An AXPress moves focus onto the element it presses whether or not the
- * element does anything, so focus alone says the press arrived, not that it acted (see lastAccessibilityPress).
+ * `effectOnly` asks a narrower question: does the page itself say something happened (see lastAccessibilityPress)? Left out:
+ * - which node has focus. An AXPress moves focus onto the element it presses whether or not the element does anything,
+ *   so focus alone says the press arrived, not that it acted;
+ * - what depends on how the window was read and not on the page: `rect` (a fused read is in image pixels, a semantic one
+ *   in points, so the same page differs in every rect: web-press check ⑯, 2026-11-14), `text` and picture-only nodes
+ *   (only a read with a picture has them) and `truncated`. The two outlines compared here are often read differently:
+ *   the model looks in one mode, the result of an action is always read with a picture.
+ * A press whose only effect is to move things is therefore not seen; a scroller's `scrollExtent` and `offscreen` still are.
  */
-export function webContentChanged(base: Outline, next: Outline, options: { ignoreFocus?: boolean } = {}): boolean {
-	const before = webContentSignature(base, options.ignoreFocus === true);
-	const after = webContentSignature(next, options.ignoreFocus === true);
+export function webContentChanged(base: Outline, next: Outline, options: { effectOnly?: boolean } = {}): boolean {
+	const before = webContentSignature(base, options.effectOnly === true);
+	const after = webContentSignature(next, options.effectOnly === true);
 	return before.length !== after.length || before.some((line, index) => line !== after[index]);
 }
 
-function webContentSignature(outline: Outline, ignoreFocus = false): string[] {
+function webContentSignature(outline: Outline, effectOnly = false): string[] {
 	// The tree is rebuilt from parent links and walked one branch at a time, so the result does not depend on how nodes
 	// is ordered: a fresh read lists it level by level (buildOutline, rebuildIndexes), a restored one branch by branch
 	// (restoreOutline). Siblings keep their order either way. One line per node inside a web area: how deep it sits there
@@ -163,9 +169,9 @@ function webContentSignature(outline: Outline, ignoreFocus = false): string[] {
 	const lines: string[] = [];
 	const walk = (node: OutlineNode, depth: number): void => {
 		const within = depth >= 0 ? depth : node.role === "AXWebArea" ? 0 : -1;
-		if (within >= 0) {
+		if (within >= 0 && !(effectOnly && node.pictureOnly)) {
 			const { ref: _ref, wireRef: _wireRef, ...fields } = comparable(node);
-			lines.push(`${within}|${JSON.stringify(ignoreFocus ? { ...fields, focused: undefined } : fields)}`);
+			lines.push(`${within}|${JSON.stringify(effectOnly ? { ...fields, focused: undefined, rect: undefined, text: undefined, truncated: undefined } : fields)}`);
 		}
 		for (const child of children.get(node) ?? []) walk(child, within >= 0 ? within + 1 : -1);
 	};

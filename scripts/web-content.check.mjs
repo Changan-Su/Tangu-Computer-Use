@@ -128,9 +128,29 @@ assert.equal(webContentChanged(outline({ page: true }), outline()), true, 'a rem
 // 只有焦点移到被按的元素上:AXPress 不管有没有效果都会把焦点放上去,所以焦点不算「这一下起了作用」
 const focusOn = (extra = {}) => { const o = outline({ page: true, status: extra.status }); o.nodes.find((n) => n.ref === '@e6').focused = extra.focused === true; return o; };
 assert.equal(webContentChanged(focusOn(), focusOn({ focused: true })), true, 'focus moving is a change in the page');
-assert.equal(webContentChanged(focusOn(), focusOn({ focused: true }), { ignoreFocus: true }), false, 'but not evidence that the press acted');
-assert.equal(webContentChanged(focusOn(), focusOn({ focused: true, status: 'saved' }), { ignoreFocus: true }), true, 'the content changed as well');
-assert.equal(webContentChanged(focusOn(), focusOn({ status: 'saved' }), { ignoreFocus: true }), true);
+assert.equal(webContentChanged(focusOn(), focusOn({ focused: true }), { effectOnly: true }), false, 'but not evidence that the press acted');
+assert.equal(webContentChanged(focusOn(), focusOn({ focused: true, status: 'saved' }), { effectOnly: true }), true, 'the content changed as well');
+assert.equal(webContentChanged(focusOn(), focusOn({ status: 'saved' }), { effectOnly: true }), true);
+// 同一个页面换一种方式读:带图的读法 rect 是图像像素、还带读图得到的文字和只在图里看到的节点,不带图的读法 rect 是点。
+// 这些都不是页面自己的变化(真机 2026-11-14,web-press ⑯:两种读法之间每个 rect 都不一样)。
+const readAt = (scale, more = {}) => { // scale 1 = 点(不带图的读法),2 = 图像像素(带图的读法)
+  const o = focusOn();
+  o.nodes.forEach((n, i) => { n.rect = { x: 10 * scale, y: (20 + 30 * i) * scale, w: 100 * scale, h: 24 * scale }; });
+  Object.assign(o.nodes.find((n) => n.ref === '@e6'), more);
+  return o;
+};
+assert.equal(webContentChanged(readAt(1), readAt(2)), true, 'read differently, the plain comparison sees every rect change');
+assert.equal(webContentChanged(readAt(1), readAt(2), { effectOnly: true }), false, 'but the page itself says nothing happened');
+assert.equal(webContentChanged(readAt(1), readAt(1, { text: [{ string: 'Save', confidence: 0.93 }], truncated: true }), { effectOnly: true }), false, 'text read off the picture is not the page changing');
+assert.equal(webContentChanged(readAt(1), readAt(2, { value: 'on' }), { effectOnly: true }), true, 'a value changing still is');
+const withPictureNode = () => {
+  const o = focusOn(); const area = o.nodes.find((n) => n.role === 'AXWebArea');
+  const seen = { ...o.nodes.find((n) => n.ref === '@e6'), ref: '@e99', wireRef: undefined, role: 'AXImage', title: 'seen in the picture', pictureOnly: true, focused: false, children: [], parent: area };
+  area.children.push(seen); o.nodes.push(seen);
+  return o;
+};
+assert.equal(webContentChanged(focusOn(), withPictureNode(), { effectOnly: true }), false, 'a node only the picture shows is not the page changing');
+assert.equal(webContentChanged(focusOn(), withPictureNode()), true);
 console.log('✓ 只看网页区域的变化');
 
 // 两次各自读出来的树,编号各排各的:窗口边框里多一个 / 少一个节点,后面的编号整体错一位。

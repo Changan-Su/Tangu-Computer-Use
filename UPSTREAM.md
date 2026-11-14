@@ -187,19 +187,35 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
   - right after the press, when the result's own capture differs from the page before it (`pressConfirmed` on the trace; the model
     is told the repeat is a new press and stays in the background, the sentence about a real click is left out);
   - when the model presses the element again and the page it is looking at differs from the one before that press
-    (`pressBaseline`, `pressActedSince`): a page that answers after the result went back. Nothing is read for this, both pages are
-    states the model has seen.
-  "Differs" is `webContentChanged(..., { ignoreFocus: true })`, or a window appearing or closing. An AXPress puts focus on its
-  element whether or not the element does anything (`check:web-press` ②: a button with no handler still changes the tree), so
-  focus alone keeps the old rule and the repeat is the real click (③). A press that showed nothing at all stays with
-  `unconfirmedPress`, untouched: no baseline is kept for it, and after `earlierPressTookEffect` holds a press back the next one is
-  still the real click it promised (⑨b).
+    (`pressBaseline`, `pressActedSince`): a page that answers after the result went back, and a call that could not read the page
+    back at all. Nothing is read for this, both pages are states the model has seen.
+  The baseline is stored when the press is sent, not when its result is read. A call whose `expect` is scoped to a node the press
+  replaces leaves through the error path ("could not be observed afterward"), and with the baseline stored only after the read-back
+  the next press of the element went out as a real click although the first had acted (live `cudeskrepeat` 155037, `check:web-press` ⑭).
+  It is spent by the one repeat it answers: kept past a repeat that went out as the real click, the page that click changed read as
+  the first press acting, and an element that only takes real clicks was sent an AXPress again every other time (⑮).
+  "Differs" is `webContentChanged(..., { effectOnly: true })`, or a window appearing or closing. That comparison leaves out:
+  - focus. An AXPress puts focus on its element whether or not the element does anything (`check:web-press` ②: a button with no
+    handler still changes the tree), so focus alone keeps the old rule and the repeat is the real click (③);
+  - what depends on how the window was read: `rect` (image pixels in a fused read, points in a semantic one), `text`, picture-only
+    nodes, `truncated`. The model's state and an action's result are often read differently, and with `rect` compared every
+    semantic state read as "changed" against a fused one: a button whose AXPress does nothing was then never sent the real click
+    (⑯, found before release).
+  Only a call whose one action is that press is judged. With more actions in the call the change cannot be put down to the press
+  (`[press(counter), press(dead)]` confirmed the dead one: ⑰), so nothing is confirmed, no baseline is kept, and the old rule
+  applies. That includes pressing one element twice in one call (the second is the real click) and a call that reaches the element
+  after other actions. A call only clears or confirms the slot while its own press still holds it: the slot is one for all windows.
+  A press that showed nothing at all stays with `unconfirmedPress`, untouched: no baseline is kept for it, and after
+  `earlierPressTookEffect` holds a press back the next one is still the real click it promised (⑨b).
   Known limit, pinned as `check:web-press` ⑬: on a page that changes by itself (a clock, a feed) an element whose AXPress does
   nothing no longer gets the real click by being pressed again, because the change cannot be told from the press acting. Reading
   the tree once more right before the press would tell them apart; it costs a read per press and is not done.
-  Only `act_ui` does this. `jev_ui` presses keep the old rule.
-  Negative control: `check:web-press --root <a checkout before this change>` is red in ⑪ ⑫ ⑬ only (⑪ reads
-  `ax_only → foreground → foreground`).
+  `act_ui` and `jev_ui` share the rule: Jev sends its actions through the same executor (the result text says so). Jev is not
+  checked separately.
+  Not changed here, noticed on the way: the plain `webContentChanged` (used by `unconfirmedPress` and `earlierPressTookEffect`)
+  still compares `rect`, so from a semantic state a press that changed nothing reads as "changed" there and is not escalated.
+  Negative controls: `check:web-press --root <a checkout before this change>` is red in ⑪ ⑫ ⑬ ⑭ only (⑪ reads
+  `ax_only → foreground → foreground`); `--root <commit 24921ea, the first version>` is red in ⑭ ⑮ ⑯ ⑰ only.
 - **A covered page.** A fully covered window goes `document.visibilityState === 'hidden'`. An AXPress still lands there, but the page stops
   sending its accessibility changes to the browser process and stops repainting, and nothing warns beforehand: the helper still reports
   `isOnscreen`. A press that landed then read as one that missed and the model pressed again, twice for one request (live `cuweb`, one run
