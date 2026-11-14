@@ -210,8 +210,13 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
   Known limit, pinned as `check:web-press` ⑬: on a page that changes by itself (a clock, a feed) an element whose AXPress does
   nothing no longer gets the real click by being pressed again, because the change cannot be told from the press acting. Reading
   the tree once more right before the press would tell them apart; it costs a read per press and is not done.
+  Not verified, read from the code: `effectOnly` still compares `offscreen` and `scrollExtent`, so an AXPress on an element below
+  the fold, whose focus scrolls it into view, most likely reads as acting even when the element does nothing. The model is then
+  told the page changed; its next press finds nothing moving at all and goes down the `unconfirmedPress` path, so the real click
+  comes two presses later than before. Leaving those two fields out would instead miss a press whose only effect is to scroll.
   `act_ui` and `jev_ui` share the rule: Jev sends its actions through the same executor (the result text says so). Jev is not
-  checked separately.
+  checked separately, and the live `cuwebdead` scene (a button that only takes real clicks, through `jev_ui`) was not rerun
+  after this change: that side rests on `check:web-press` ③ ⑧ ⑮ ⑯, where the real click is answered by the check's proxy.
   Not changed here, noticed on the way: the plain `webContentChanged` (used by `unconfirmedPress` and `earlierPressTookEffect`)
   still compares `rect`, so from a semantic state a press that changed nothing reads as "changed" there and is not escalated.
   Negative controls: `check:web-press --root <a checkout before this change>` is red in ⑪ ⑫ ⑬ ⑭ only (⑪ reads
