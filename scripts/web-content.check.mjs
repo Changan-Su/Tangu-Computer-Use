@@ -65,6 +65,14 @@ console.log('✓ 首读等待');
 
 const details = (step) => ({ config: { headless: false }, execution: { outcome: 'unknown', steps: [{ outcome: 'unknown', delivery: 'ax', ...step }] } });
 assert.match(executionNote(details({ accessibilityPress: true })), /press the same element again/);
+assert.match(executionNote(details({ accessibilityPress: true })), /while the page still shows no change, the repeat goes out as a real click/, 'the real click is promised only while the page has not changed');
+// 页面上看得到这一下起了作用:再按同一个是新的一下、还在后台,不能再许诺真实点击
+const acted = executionNote(details({ accessibilityPress: true, pressConfirmed: true }));
+assert.match(acted, /the page changed after it/);
+assert.match(acted, /is a new press/);
+assert.match(acted, /stays in the background/);
+assert.doesNotMatch(acted, /real click/, 'a confirmed press must not promise a real click on repeat');
+assert.match(executionNote(details({ accessibilityPress: true, pressConfirmed: true })), /"pressConfirmed":true/, 'the summary carries the flag');
 assert.doesNotMatch(executionNote(details({})), /press the same element again/, 'only after an accessibility press');
 assert.doesNotMatch(executionNote(details({ accessibilityPress: false })), /press the same element again/);
 // 按完没看到变化:已送出、界面可能还没刷新、先看、不要再按;给的下一步只有读
@@ -117,6 +125,12 @@ assert.equal(webContentChanged(outline(), outline({ chrome: true })), false, 'li
 assert.equal(webContentChanged(outline(), outline({ status: 'saved' })), true);
 assert.equal(webContentChanged(outline(), outline({ page: true })), true);
 assert.equal(webContentChanged(outline({ page: true }), outline()), true, 'a removed node is looked up in the old outline');
+// 只有焦点移到被按的元素上:AXPress 不管有没有效果都会把焦点放上去,所以焦点不算「这一下起了作用」
+const focusOn = (extra = {}) => { const o = outline({ page: true, status: extra.status }); o.nodes.find((n) => n.ref === '@e6').focused = extra.focused === true; return o; };
+assert.equal(webContentChanged(focusOn(), focusOn({ focused: true })), true, 'focus moving is a change in the page');
+assert.equal(webContentChanged(focusOn(), focusOn({ focused: true }), { ignoreFocus: true }), false, 'but not evidence that the press acted');
+assert.equal(webContentChanged(focusOn(), focusOn({ focused: true, status: 'saved' }), { ignoreFocus: true }), true, 'the content changed as well');
+assert.equal(webContentChanged(focusOn(), focusOn({ status: 'saved' }), { ignoreFocus: true }), true);
 console.log('✓ 只看网页区域的变化');
 
 // 两次各自读出来的树,编号各排各的:窗口边框里多一个 / 少一个节点,后面的编号整体错一位。

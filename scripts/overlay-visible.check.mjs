@@ -289,7 +289,7 @@ try {
   }
 
   // ── 第三段(协议 20):带 runId 的一轮里叠层整轮亮着,显式结束后散场。
-  // ⚠️这一段写下时没在真机上跑过(2026-11-14):第一次跑红了先看打印出来的时间线,再判断是产品还是这段断言。
+  // 真机上跑过(2026-11-14,四份演练包):红了先看打印出来的时间线,再判断是产品还是这段断言。
   // 前两段的 act 不带 runId,走的是旧时长(光效 2 s、光标 8 s);这里要证的是「带 runId 就不按旧时长熄」。
   await waitForCleanSlate(hpid, win.windowId)
   const look3 = await ask({ cmd: 'look', pid: calc.pid, windowId: win.windowId, includeImage: true })

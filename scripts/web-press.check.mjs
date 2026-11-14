@@ -13,7 +13,11 @@
  *   ⑦ 按完网页内容一点没变(这里用「按已经有焦点、点了没反应的按钮」造):提窗口、带截图、叫模型先看不要再按
  *   ⑧ 模型还是再按了同一个元素,窗口从那次按压到现在都没变:照常发真实点击
  *   ⑨ 按完没变、过几秒页面才变(慢页面),模型再按同一个元素:先比出页面变了,这一次什么都不发,告诉模型页面变了、先看
+ *   ⑨b 上一条说了「再按一次就是真实点击」:再按,发的确实是真实点击
  *   ⑩ 同一个元素换成右键:那是另一个动作,照常发
+ *   ⑪ 计数按钮(每按一下页面上的数字加一):连按三下都走 AXPress,前台不变,提示改成「再按是新的一下、还在后台」
+ *   ⑫ 慢按钮(按完 4 秒页面才变):等页面变了再按,还是 AXPress(那一下已经生效,这是新的一下)
+ *   ⑬ 已知的取舍:页面自己一直在变时,一个按了没反应的按钮再按一次不再是真实点击(分不清是它起的作用还是页面自己变的)
  *
  * 不动真鼠标、不抢前台:bridge 和 helper 之间夹一层代理,记下每个 act 的 policy 和激活请求,policy = foreground 的 act
  * 和激活都不转发、直接回一个假结果。所以 ③ ⑦ ⑧ 证明的是「决定这么做」,不是真实点击、也不是激活后的截图(那个看 web-covered.check.mjs)。
@@ -21,6 +25,7 @@
  *
  * 负对照(应该在 ① 和 ② 红):node scripts/web-press.check.mjs --root <没有这处改动的检出>
  * 负对照(应该只在 ⑨ 红):--root <把 bridge.ts 里 earlierPressTookEffect 那次调用去掉的副本>
+ * 负对照(应该只在 ⑪ ⑫ ⑬ 红):--root <「上一下生效了就不当重试」这处改动之前的检出>
  *
  * 需要:macOS、协议版本和 vendor 一致且已授权的 helper(PI_COMPUTER_USE_HELPER_APP_PATH,缺省用已安装的那份)、
  * Electron(CU_ELECTRON,缺省用 Forsion-Genesis/desktop 装的那份)。
@@ -53,7 +58,15 @@ process.env.PI_COMPUTER_USE_HELPER_APP_PATH = helperApp
 
 const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>CU Web Press</title></head><body>
 <button id="save">Probe Save</button> <button id="other">Probe Other</button> <button id="stale">Probe Stale</button> <button id="focus">Probe Focus</button> <button id="still">Probe Still</button> <button id="aim">Probe Aim</button> <button id="late">Probe Late</button><p id="lateStatus">Late: idle</p>
+<button id="count">Probe Count</button><p id="countStatus">Count: 0</p> <button id="slow">Probe Slow</button><p id="slowStatus">Slow: 0</p>
+<button id="tick">Probe Tick</button> <button id="dead">Probe Dead</button><p id="tickStatus">Tick: off</p>
 <script>
+// 计数按钮:每按一下马上变。慢按钮:按完 4 秒才变(动作结果回去时页面上只有焦点移了过去)。
+let counted = 0, slowed = 0, ticked = 0
+document.getElementById('count').addEventListener('click', () => { document.getElementById('countStatus').textContent = 'Count: ' + (++counted) })
+document.getElementById('slow').addEventListener('click', () => setTimeout(() => { document.getElementById('slowStatus').textContent = 'Slow: ' + (++slowed) }, 4000))
+// 按了 Tick 之后页面自己一直在变;Dead 什么都不做
+document.getElementById('tick').addEventListener('click', () => setInterval(() => { document.getElementById('tickStatus').textContent = 'Tick: ' + (++ticked) }, 250), { once: true })
 document.getElementById('focus').addEventListener('click', () => document.getElementById('still').focus())
 document.getElementById('aim').addEventListener('click', () => document.getElementById('late').focus())
 // 慢页面:按下去 7 秒后才有变化,动作结果回去的时候(提窗口再等 2 秒)页面还是老样子
@@ -68,6 +81,8 @@ app.setPath('userData', process.env.CU_FIXTURE_DATA)
 app.whenReady().then(() => {
   const area = screen.getPrimaryDisplay().workArea
   const win = new BrowserWindow({ width: 420, height: 240, x: area.x + area.width - 440, y: area.y + area.height - 260, show: false, title: 'CU Web Press' })
+  // 人切到别的桌面(Space)之后,helper 列不到只在原桌面上的窗口(root_not_found):让替身窗口在每个桌面上都在
+  win.setVisibleOnAllWorkspaces(true, { skipTransformProcessType: true })
   win.once('ready-to-show', () => win.showInactive())
   win.loadURL(process.env.CU_FIXTURE_URL)
 })`
@@ -189,6 +204,7 @@ try {
     assert.equal(pressed.details.execution.steps?.[0]?.delivery ?? pressed.details.execution.delivery, 'ax')
     assert.equal(pressed.details.execution.steps?.[0]?.accessibilityPress ?? pressed.details.execution.accessibilityPress, true)
     assert.match(bridge.executionNote(pressed.details), /press the same element again/, 'the model is not told what to do next')
+    assert.ok(!(pressed.details.execution.steps?.[0]?.pressConfirmed ?? pressed.details.execution.pressConfirmed), 'only focus moved onto the button: that is not the press acting')
     assert.deepEqual(activations, [], 'the tree changed, so nothing should have come forward')
   })
   check(`② 前台没变(${frontBefore.appName} → ${frontAfter.appName})`, () => { assert.equal(frontAfter.pid, frontBefore.pid); assert.notEqual(frontAfter.pid, child.pid) })
@@ -276,6 +292,10 @@ ${JSON.stringify(r.details?.execution ?? null, null, 2)}
     assert.match(bridge.executionNote(held.details), /most likely took effect late/)
     assert.match(bridge.executionNote(held.details), /Check the returned state/)
   })
+  policies.length = 0
+  await press('Probe Late')
+  const promisedPolicies = [...policies]
+  check(`⑨b 上一条许诺的「再按一次是真实点击」兑现了(${promisedPolicies.join(' → ') || '没有动作'})`, () => assert.deepEqual(promisedPolicies, ['foreground']))
 
   await press('Probe Aim')
   await sleep(500)
@@ -289,6 +309,61 @@ ${JSON.stringify(r.details?.execution ?? null, null, 2)}
     assert.equal(slowAgain.details.execution.pressUnconfirmed, 'current_screenshot', 'the slow press was not left unconfirmed, so this case tests nothing')
     assert.ok(rightPolicies.length > 0, 'the right click was held back')
     assert.ok(!rightClick.details.execution.earlierPressTookEffect)
+  })
+
+  const stepOf = (r) => r.details.execution.steps?.[0] ?? r.details.execution
+  // ── ⑪ 计数按钮:上一下在页面上看得到效果,再按同一个是新的一下,不是重试 ──
+  policies.length = 0
+  const activatedBefore = activations.length
+  const countFrontBefore = await askHelper('getFrontmost')
+  const counts = []
+  for (let i = 0; i < 3; i++) { counts.push(await press('Probe Count')); await sleep(400) }
+  const countFrontAfter = await askHelper('getFrontmost')
+  const countPolicies = [...policies]
+  check(`⑪ 计数按钮连按三下都走 AXPress,前台不变(${countPolicies.join(' → ')})`, () => {
+    assert.deepEqual(countPolicies, ['ax_only', 'ax_only', 'ax_only'])
+    assert.equal(clicks('count').length, 3, 'the page did not get three clicks')
+    assert.ok(clicks('count').every((c) => c.trusted))
+    assert.equal(activations.length, activatedBefore, 'a window was brought forward')
+    assert.equal(countFrontAfter.pid, countFrontBefore.pid); assert.notEqual(countFrontAfter.pid, child.pid)
+    for (const r of counts) {
+      assert.equal(stepOf(r).pressConfirmed, true, 'the press was not marked as having acted')
+      assert.match(bridge.executionNote(r.details), /is a new press/, 'the model is not told that a repeat stays in the background')
+      assert.doesNotMatch(bridge.executionNote(r.details).split('\n').find((l) => /This press went through accessibility/.test(l)) ?? '', /real click/, 'a real click is still promised')
+    }
+  })
+
+  // ── ⑫ 慢按钮:结果回去时只有焦点移了过去(没确认),页面 4 秒后才变;模型看到变了再按 → 新的一下 ──
+  policies.length = 0
+  const slowFirst = await press('Probe Slow')
+  const slowFirstPolicies = [...policies]
+  for (let i = 0; i < 100 && !/Slow: 1/.test(text(await observe())); i++) await sleep(200)
+  policies.length = 0
+  await press('Probe Slow')
+  await sleep(400)
+  const slowRepeatPolicies = [...policies]
+  check(`⑫ 页面慢一点才变:等它变了再按,还是 AXPress(${slowFirstPolicies.join(' → ')} 之后 ${slowRepeatPolicies.join(' → ') || '没有动作'})`, () => {
+    assert.deepEqual(slowFirstPolicies, ['ax_only'])
+    assert.ok(!stepOf(slowFirst).pressConfirmed, 'the slow press was confirmed at once, so this case tests nothing')
+    assert.ok(!stepOf(slowFirst).pressUnconfirmed, 'the slow press showed nothing at all (not even focus), so this case tests nothing')
+    assert.match(bridge.executionNote(slowFirst.details), /while the page still shows no change/)
+    assert.deepEqual(slowRepeatPolicies, ['ax_only'])
+    assert.equal(clicks('slow').length, 2)
+  })
+
+  // ── ⑬ 已知的取舍(放最后:按了 Tick 之后页面就一直在变) ──
+  // 页面自己在变时,「上一下之后页面变了」分不清是按钮起的作用还是页面自己变的,所以没反应的按钮再按一次也还是后台按下。
+  // 以后要是改成「按之前再读一次树、和它比」,这里会变成 ax_only → foreground,把断言一起改掉。
+  await press('Probe Tick')
+  await sleep(700)
+  policies.length = 0
+  await press('Probe Dead')
+  await sleep(400)
+  await press('Probe Dead')
+  const deadPolicies = [...policies]
+  check(`⑬ 已知的取舍:页面自己在变时,没反应的按钮再按一次不再是真实点击(${deadPolicies.join(' → ')})`, () => {
+    assert.deepEqual(deadPolicies, ['ax_only', 'ax_only'])
+    assert.equal(clicks('dead').length, 2)
   })
 } finally {
   child.kill()

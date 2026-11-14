@@ -138,14 +138,17 @@ export function changesBetween(base: Outline, next: Outline): OutlineDiff {
  * then reads as changed, and a press that should have gone out was held back as "the page has changed" (real machine
  * 11-14, web-press check ⑧, four runs of five). What is compared is each web area's subtree, walked branch by branch:
  * how deep each node sits and the same fields changesBetween looks at.
+ *
+ * `ignoreFocus` leaves out which node has focus. An AXPress moves focus onto the element it presses whether or not the
+ * element does anything, so focus alone says the press arrived, not that it acted (see lastAccessibilityPress).
  */
-export function webContentChanged(base: Outline, next: Outline): boolean {
-	const before = webContentSignature(base);
-	const after = webContentSignature(next);
+export function webContentChanged(base: Outline, next: Outline, options: { ignoreFocus?: boolean } = {}): boolean {
+	const before = webContentSignature(base, options.ignoreFocus === true);
+	const after = webContentSignature(next, options.ignoreFocus === true);
 	return before.length !== after.length || before.some((line, index) => line !== after[index]);
 }
 
-function webContentSignature(outline: Outline): string[] {
+function webContentSignature(outline: Outline, ignoreFocus = false): string[] {
 	// The tree is rebuilt from parent links and walked one branch at a time, so the result does not depend on how nodes
 	// is ordered: a fresh read lists it level by level (buildOutline, rebuildIndexes), a restored one branch by branch
 	// (restoreOutline). Siblings keep their order either way. One line per node inside a web area: how deep it sits there
@@ -162,7 +165,7 @@ function webContentSignature(outline: Outline): string[] {
 		const within = depth >= 0 ? depth : node.role === "AXWebArea" ? 0 : -1;
 		if (within >= 0) {
 			const { ref: _ref, wireRef: _wireRef, ...fields } = comparable(node);
-			lines.push(`${within}|${JSON.stringify(fields)}`);
+			lines.push(`${within}|${JSON.stringify(ignoreFocus ? { ...fields, focused: undefined } : fields)}`);
 		}
 		for (const child of children.get(node) ?? []) walk(child, within >= 0 ? within + 1 : -1);
 	};

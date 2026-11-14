@@ -180,6 +180,26 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
   anything, so a replay could submit twice. Instead `lastAccessibilityPress` notices the model pressing the same element again in the same
   window and sends that one down the original path, and `executionNote` tells the model so. It is recorded only once the helper answered:
   a `stale_ref` delivered nothing and must not count as the first press.
+- **A repeat is a retry only while the page shows nothing.** `lastAccessibilityPress` used to match on the element alone, so a
+  stepper, a "next page" or an "add" button took the foreground from its second press on (real machine 11-14, live `cudeskchain`
+  141708: two of five presses of one button went out as real clicks, raised the window and moved the pointer). The element is now
+  forgotten once the page shows its press acting, and pressing it again is a new AXPress:
+  - right after the press, when the result's own capture differs from the page before it (`pressConfirmed` on the trace; the model
+    is told the repeat is a new press and stays in the background, the sentence about a real click is left out);
+  - when the model presses the element again and the page it is looking at differs from the one before that press
+    (`pressBaseline`, `pressActedSince`): a page that answers after the result went back. Nothing is read for this, both pages are
+    states the model has seen.
+  "Differs" is `webContentChanged(..., { ignoreFocus: true })`, or a window appearing or closing. An AXPress puts focus on its
+  element whether or not the element does anything (`check:web-press` ②: a button with no handler still changes the tree), so
+  focus alone keeps the old rule and the repeat is the real click (③). A press that showed nothing at all stays with
+  `unconfirmedPress`, untouched: no baseline is kept for it, and after `earlierPressTookEffect` holds a press back the next one is
+  still the real click it promised (⑨b).
+  Known limit, pinned as `check:web-press` ⑬: on a page that changes by itself (a clock, a feed) an element whose AXPress does
+  nothing no longer gets the real click by being pressed again, because the change cannot be told from the press acting. Reading
+  the tree once more right before the press would tell them apart; it costs a read per press and is not done.
+  Only `act_ui` does this. `jev_ui` presses keep the old rule.
+  Negative control: `check:web-press --root <a checkout before this change>` is red in ⑪ ⑫ ⑬ only (⑪ reads
+  `ax_only → foreground → foreground`).
 - **A covered page.** A fully covered window goes `document.visibilityState === 'hidden'`. An AXPress still lands there, but the page stops
   sending its accessibility changes to the browser process and stops repainting, and nothing warns beforehand: the helper still reports
   `isOnscreen`. A press that landed then read as one that missed and the model pressed again, twice for one request (live `cuweb`, one run
