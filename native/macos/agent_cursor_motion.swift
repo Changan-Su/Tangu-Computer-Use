@@ -41,15 +41,36 @@ struct CursorFlight: Equatable {
         let distance = Double(hypot(to.point.x - from.point.x, to.point.y - from.point.y))
         let d = duration ?? Self.duration(distance: distance)
         self.duration = d
-        path = d > 0
-            ? planPath(
+        path = d > 0 ? Self.route(from: from, to: to, distance: distance) : nil
+    }
+
+    /// 路线:带转弯弧线(Dubins),转弯半径从 80 起逐档收小,收到路线不超过直线的 routeStretch 倍为止。
+    ///
+    /// 半径原来固定 80。箭头只能朝自己指的方向(左上)走,目标不在那个方向时要先掉头、到了再掉回来,
+    /// 两次掉头合起来正好多走一整圈(2π × 80 ≈ 503pt),和这一跳有多远无关:邻键 54pt 实际飞 557pt、探出连线 137pt。
+    /// 0.7.2 按 200–900 pt/s 慢慢飞(这一圈约 1 秒),看得清;协议 20 把飞行压到 0.18–0.45 s,时长按直线距离给,
+    /// 同一圈成了 3000 pt/s 以上的一闪(2026-11-14 真机取样到光标在窗口外面、离线量出上面的数)。
+    /// 时长不动(0.18–0.45 s 是定过的,先到再点等的也是它),收的是路线:半径最小到直线距离的 1/10,
+    /// 这时多出来的一圈是 2π × 0.1 = 0.63 倍,所以总能收到 routeStretch 以内。顺着箭头朝向的那一跳本来就是直线,不受影响。
+    private static func route(from: CursorPose, to: CursorPose, distance: Double) -> DubinsPlannedPath {
+        let smallest = max(0.5, distance * 0.1)
+        var radius = 80.0
+        while true {
+            let path = planPath(
                 x0: Double(from.point.x), y0: Double(from.point.y), th0: from.heading + .pi,
                 x1: Double(to.point.x), y1: Double(to.point.y), th1: to.heading + .pi,
-                R: 80, endVisualHeading: to.heading, targetPoint: to.point)
-            : nil
+                R: radius, endVisualHeading: to.heading, targetPoint: to.point)
+            if path.length <= distance * routeStretch || radius <= smallest { return path }
+            radius = max(smallest, radius * 0.7)
+        }
     }
 
     var arrival: Double { start + duration }
+
+    /// 路线总长(不飞时为 0)。测试用它核对路线没有绕远。
+    var routeLength: Double { path?.length ?? 0 }
+    /// 路线最多是直线距离的几倍。
+    static let routeStretch = 1.65
 
     func pose(at t: Double) -> CursorPose {
         guard let path, duration > 0, t < arrival else { return t < start && duration > 0 ? from : to }
