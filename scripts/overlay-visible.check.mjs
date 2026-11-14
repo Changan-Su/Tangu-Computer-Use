@@ -287,6 +287,50 @@ try {
   } finally {
     cover.kill()
   }
+
+  // ── 第三段(协议 20):带 runId 的一轮里叠层整轮亮着,显式结束后散场。
+  // ⚠️这一段写下时没在真机上跑过(2026-11-14):第一次跑红了先看打印出来的时间线,再判断是产品还是这段断言。
+  // 前两段的 act 不带 runId,走的是旧时长(光效 2 s、光标 8 s);这里要证的是「带 runId 就不按旧时长熄」。
+  await waitForCleanSlate(hpid, win.windowId)
+  const look3 = await ask({ cmd: 'look', pid: calc.pid, windowId: win.windowId, includeImage: true })
+  const five3 = findNode(look3.outline, (x) => x.role === 'AXButton' && (x.description === '5' || x.title === '5'))
+  assert.ok(five3, '第三段没找到数字键 5')
+  const runId = `overlay-check-${process.pid}`
+  const HOLD_MS = 4200 // 远超旧的 2 s 光效时长,又远不到 45 s 的空闲兜底
+  const GONE_MS = 2500 // 结束后停 1.0 s + 淡出 0.4 s,再留余量
+  const w3 = watch(11)
+  const t0 = Date.now()
+  await sleep(300)
+  await ask({
+    cmd: 'act', lookId: look3.lookId, pid: calc.pid, policy: 'background',
+    cursorOverlay: true, action: 'click', runId,
+    target: { x: five3.rect.x + five3.rect.w / 2, y: five3.rect.y + five3.rect.h / 2 },
+    params: { button: 'left', clickCount: 1 },
+  })
+  const actedAt = Date.now() - t0
+  await sleep(HOLD_MS)
+  const ended = await ask({ cmd: 'overlayTurn', phase: 'end', runId })
+  const endedAt = Date.now() - t0
+  await w3.done
+  assert.equal(ended?.ok, true, 'overlayTurn end 没被接受')
+  const rows3 = w3.frames.map((f) => {
+    const target = f.windows.find((x) => x.windowId === calcWinId)
+    return { t: f.t, ...overlaysIn(f.windows, hpid, target) }
+  })
+  const mark = (o) => (o ? '#' : '·')
+  console.log(`  整轮光标: ${rows3.map((r) => mark(r.cursor)).join('')}`)
+  console.log(`  整轮光效: ${rows3.map((r) => mark(r.glow)).join('')}`)
+  console.log(`             (# 在屏上 ｜ · 不在;act 返回于 ${actedAt}ms,发结束于 ${endedAt}ms,每格约 100ms)`)
+  // 旧时长下光效在 act 之后 2 s 就熄了:取「act 后 3 s 到发结束之前」这一段,必须还亮着。
+  const held = rows3.filter((r) => r.t >= actedAt + 3000 && r.t < endedAt - 100)
+  assert.ok(held.length >= 3, '第三段采样太少,测不出东西')
+  assert.ok(held.every((r) => r.glow), '带 runId 的一轮里边缘光效中途熄了 —— 还在按旧的 2 s 时长走')
+  assert.ok(held.every((r) => r.cursor), '带 runId 的一轮里示意光标中途没了')
+  const gone = rows3.filter((r) => r.t >= endedAt + GONE_MS)
+  assert.ok(gone.length >= 3, '第三段结束后的采样太少,测不出东西')
+  assert.ok(!gone.some((r) => r.cursor || r.glow), `发了结束 ${GONE_MS}ms 之后叠层还在屏上 —— 整轮结束没让它散场`)
+  console.log('✅ 整轮:带 runId 时两个叠层一直亮到显式结束,结束后散场')
+
   console.log('   (只验证窗口的创建/层级/z 序 —— 画布内容是否真画出了像素,本仪器不覆盖)')
 } finally {
   await killCalculator(ask).catch(() => {})
