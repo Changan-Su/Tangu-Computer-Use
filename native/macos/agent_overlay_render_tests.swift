@@ -221,7 +221,7 @@ struct AgentOverlayRenderTests {
         let arrival = scene.fly(toTip: CGPoint(x: 600, y: 420), at: 10)
         expect(near(arrival, 10 + CursorFlight.duration(distance: Double(hypot(to.point.x - from.point.x, to.point.y - from.point.y)))), "fly 返回的到达时刻 = 起飞 + 按距离算的时长")
         let tip = OverlayPaint.cursorTipPoint(scene.cursorFrame(at: arrival + 1))
-        expect(hypot(tip.x - 600, tip.y - 420) < 2, "停稳后箭尖对着落点(偏差 \(hypot(tip.x - 600, tip.y - 420))pt)")
+        expect(hypot(tip.x - 600, tip.y - 420) < 0.01, "停稳后箭尖对着落点(偏差 \(hypot(tip.x - 600, tip.y - 420))pt)")
         // 中途改目标:从当前位置接着飞,不跳。
         let before = scene.pose(at: 10.1)
         scene.fly(toTip: CGPoint(x: 200, y: 600), at: 10.1)
@@ -491,7 +491,7 @@ struct AgentOverlayRenderTests {
         expect(drag.rings.last!.start == release, "松手一圈环")
         expect(near(drag.trails[0].end, release + 0.4), "松手后线 0.4 s 淡掉")
         let tipEnd = OverlayPaint.cursorTipPoint(drag.cursorFrame(at: release + 1))
-        expect(hypot(tipEnd.x - 300, tipEnd.y - 250) < 2, "拖完箭尖停在终点")
+        expect(hypot(tipEnd.x - 300, tipEnd.y - 250) < 0.01, "拖完箭尖停在终点")
 
         var highlight = HighlightScene()
         highlight.level.set(1, at: 0, duration: 0.2)

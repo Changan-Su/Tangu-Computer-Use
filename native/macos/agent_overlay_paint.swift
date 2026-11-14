@@ -17,9 +17,9 @@ enum OverlayPaint {
     // MARK: 光标
 
     /// 箭头外形(形状坐标:箭尖在 (14, 0),朝 +x;画的时候旋转 heading + π)。形状不换(方案「我替你定的细节」)。
-    static let cursorTip = CGPoint(x: 14, y: 0)
+    static let cursorTip = CGPoint(x: CursorPose.tipReach, y: 0)
     static let cursorShape: CGPath = {
-        let points = [CGPoint(x: 14, y: 0), CGPoint(x: -8, y: -9), CGPoint(x: -3, y: 0), CGPoint(x: -8, y: 9)]
+        let points = [cursorTip, CGPoint(x: -8, y: -9), CGPoint(x: -3, y: 0), CGPoint(x: -8, y: 9)]
         let path = CGMutablePath()
         for index in points.indices {
             let previous = points[(index + points.count - 1) % points.count]

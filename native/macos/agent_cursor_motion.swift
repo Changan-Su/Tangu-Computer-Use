@@ -6,10 +6,14 @@ struct CursorPose: Equatable {
     var point: CGPoint
     var heading: Double
 
-    /// 落点(箭尖要对准的那一点)→ 光标停靠的位置。箭头是斜 45° 停的,本体中心在箭尖右下 16pt。
+    /// 外形里箭尖到本体中心的距离(OverlayPaint.cursorShape 的箭尖就画在这里)。
+    static let tipReach: Double = 14
+    /// 落点(箭尖要对准的那一点)→ 光标停靠的位置。箭头是斜 45° 停的,本体中心在箭尖右下 tipReach 处。
+    /// 这个距离必须和外形里的箭尖是同一个数:原来这里写死 16、外形的箭尖在 14,停稳后箭尖离落点差 2pt
+    /// (2026-11-14 真机上连圆角和投影量到约 4pt,箭尖没落在点击环的圆心上)。
     static let restHeading = Double.pi / 4
     static func resting(atTip tip: CGPoint) -> CursorPose {
-        CursorPose(point: CGPoint(x: tip.x + CGFloat(cos(restHeading) * 16), y: tip.y + CGFloat(sin(restHeading) * 16)), heading: restHeading)
+        CursorPose(point: CGPoint(x: tip.x + CGFloat(cos(restHeading) * tipReach), y: tip.y + CGFloat(sin(restHeading) * tipReach)), heading: restHeading)
     }
 }
 
