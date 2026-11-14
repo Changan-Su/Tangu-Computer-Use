@@ -1230,10 +1230,10 @@ const backgroundPointerMisses = new Map<string, number>();
  *   (pressBaseline), which covers a page that answers late and a call that could not read the page back.
  * "Changed" is webContentChanged(..., { effectOnly: true }), or a window appearing or closing. An AXPress puts focus on
  * its element whether or not anything happens, so focus alone keeps the old rule: the repeat is the real click.
- * Only a call whose one action is that press is judged this way. With more in the call, what the page
- * shows cannot be put down to the press, so nothing is confirmed and no baseline is kept: the old rule. The same goes
- * for pressing one element twice in one call (the second is the real click) and for a call that reaches the element
- * after other actions.
+ * Only a call whose actions are all presses of that one element is judged this way: a single press, or the same element
+ * pressed several times in a row, which all go the way the first went (`pressedInCall` at helperAct). With anything
+ * else in the call, what the page shows cannot be put down to the press, so nothing is confirmed and no baseline is
+ * kept: the old rule. The same goes for a call that reaches the element after other actions.
  * A press that showed nothing at all is not touched by this (unconfirmedPress has its own rule).
  * act_ui and jev_ui share it: Jev sends its actions through the same executor.
  * ponytail: a page that changes by itself (a clock, a live feed) reads as acting, so on such a page an element whose
@@ -1275,11 +1275,19 @@ function webFlushEnabled(): boolean {
 	return process.env.PI_COMPUTER_USE_WEB_FLUSH !== "0";
 }
 
+/**
+ * Forsion patch, see UPSTREAM.md. `pressedInCall` holds, for each element this call has pressed, the way its first press
+ * in the call went. The model put those presses in one call before it saw what any of them did, so a later one is not a
+ * retry of an earlier one: it goes the same way, whatever was pressed in between. An AXPress stays an AXPress (not the
+ * real click a repeat in a later call gets); a real click stays a real click (the element already showed that its
+ * AXPress does nothing, and another element pressed in between must not send it back to accessibility).
+ */
 async function helperAct(
 	target: ResolvedTarget,
 	action: NativePreparedAction,
 	headless: boolean,
 	signal?: AbortSignal,
+	pressedInCall?: Map<string, "accessibility" | "real">,
 ): Promise<ExecutionTrace> {
 	const checked = (candidate: HelperActResult): HelperActResult => {
 		if (!candidate || !["worked", "didnt", "unknown"].includes(candidate.outcome)) {
@@ -1294,12 +1302,14 @@ async function helperAct(
 	const pressKey = currentPlatformBackend.name === "macos" && (action.action === "press" || action.action === "click") && action.accessibilityPress !== undefined
 		? `${target.pid}:${target.windowId}:${action.accessibilityPress}`
 		: undefined;
-	const accessibilityPress = pressKey !== undefined && pressKey !== lastAccessibilityPress;
+	const inCall = pressKey !== undefined ? pressedInCall?.get(pressKey) : undefined;
+	const accessibilityPress = pressKey !== undefined && (inCall ? inCall === "accessibility" : pressKey !== lastAccessibilityPress);
 	// The repeat is the real click the result promised. Through background first it can land as a hover-less pid click and then be replayed.
 	const repeatedPress = pressKey !== undefined && !accessibilityPress;
 	if ((action.usesCurrentFocus || action.needsForeground || repeatedPress || (pointer && (backgroundPointerMisses.get(pointerKey) ?? 0) >= 2)) && !headless) {
 		const sent = await wheelAction(target, action, signal);
 		const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, sent, "foreground"), { signal, timeoutMs }));
+		if (repeatedPress && !inCall) pressedInCall?.set(pressKey!, "real");
 		const trace = executionTraceFromAct(foreground, "foreground");
 		trace.backgroundFirst = false;
 		return trace;
@@ -1308,7 +1318,10 @@ async function helperAct(
 		const initialPolicy = headless || accessibilityPress ? "ax_only" : "background";
 		const sent = pointer ? await wheelAction(target, action, signal, initialPolicy) : action;
 		const result = checked(await currentPlatformBackend.act(helperActRequest(target, sent, initialPolicy), { signal, timeoutMs }));
-		if (accessibilityPress) lastAccessibilityPress = pressKey; // only once the helper answered: a stale ref sent nothing
+		if (accessibilityPress) { // only once the helper answered: a stale ref sent nothing
+			lastAccessibilityPress = pressKey;
+			if (!inCall) pressedInCall?.set(pressKey!, "accessibility");
+		}
 		if (pointer) backgroundPointerMisses.set(pointerKey, pointerMissesAfter(backgroundPointerMisses.get(pointerKey) ?? 0, result.outcome));
 		if (canRetryInForeground(action, result.outcome, headless)) {
 			const retry = pointer ? await wheelAction(target, action, signal) : action;
@@ -1940,14 +1953,14 @@ function scrollInPoints(action: NativePreparedAction, target: ResolvedTarget, lo
 	return { ...action, params: { scrollX: convert(action.params.scrollX), scrollY: convert(action.params.scrollY) } };
 }
 
-async function dispatchUiAction(action: UiAction, target: ResolvedTarget, look: LookResponse, headless: boolean, state: ActionState, signal?: AbortSignal): Promise<ExecutionTrace> {
+async function dispatchUiAction(action: UiAction, target: ResolvedTarget, look: LookResponse, headless: boolean, state: ActionState, signal?: AbortSignal, pressedInCall?: Map<string, "accessibility" | "real">): Promise<ExecutionTrace> {
 	const requested = prepareUiAction(action, state, look, headless);
 	const prepared = requested.action === "wait" ? requested : scrollInPoints(requested, target, look);
 	if (prepared.action === "wait") {
 		await sleep(prepared.params.ms, signal);
 		return executionTrace("wait", "stealth", { outcome: "worked" });
 	}
-	const trace = await helperAct(target, prepared, headless, signal);
+	const trace = await helperAct(target, prepared, headless, signal, pressedInCall);
 	if (!headless && (prepared.establishesFocus || (prepared.action === "click" && "x" in prepared.target))) {
 		state.currentFocus = true;
 	}
@@ -1989,9 +2002,10 @@ async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget
 	// the target window is frontmost. Probed live, never remembered: the user can switch apps between calls.
 	const frontmost = !headless && needsFrontmostProbe(actions) && await targetHoldsFocus(target, signal);
 	const actionState: ActionState = { currentFocus: false, frontmost };
+	const pressedInCall = new Map<string, "accessibility" | "real">(); // Forsion patch, see helperAct
 	for (const [index, action] of actions.entries()) {
 		actionState.keysFollow = keysFollow(actions, index);
-		const step = await dispatchUiAction(action, target, look, headless, actionState, signal);
+		const step = await dispatchUiAction(action, target, look, headless, actionState, signal, pressedInCall);
 		steps.push(step);
 		// A partially delivered gesture can remain unknown while its release
 		// failed. Its error must halt the sequence before any later input.
@@ -2177,14 +2191,20 @@ function pressActedSince(actions: UiAction[], target: ResolvedTarget, look: Look
 }
 
 /**
- * The identity of the AXPress this call sent, when that press is the one action the call carried out. Only then can
- * what the page shows afterwards be put down to it.
+ * The identity of the element this call sent its AXPress to, when every action the call carried out was an AXPress of
+ * that one element (once, or several times in a row: see `pressedInCall` at helperAct). Only then can what the page
+ * shows afterwards be put down to it.
  */
 function solePressKey(actions: UiAction[], execution: ExecutionTrace, target: ResolvedTarget, look: LookResponse): string | undefined {
-	const step = execution.steps?.length ? execution.steps[0] : execution;
-	const ref = actions.length === 1 && step.accessibilityPress ? actions[0].ref?.trim() : undefined;
-	const node = ref ? nodeByRef(look.parsedOutline!, ref) : undefined;
-	return node ? pressKeyFor(target, node) : undefined;
+	const steps = execution.steps?.length ? execution.steps : [execution];
+	if (actions.length === 0 || steps.length !== actions.length || !steps.every((step) => step.accessibilityPress)) return undefined;
+	const keys = new Set(actions.map((action) => {
+		const ref = action.ref?.trim();
+		const node = ref ? nodeByRef(look.parsedOutline!, ref) : undefined;
+		return node ? pressKeyFor(target, node) : undefined;
+	}));
+	const [key] = keys;
+	return keys.size === 1 ? key : undefined;
 }
 
 async function performDesktopTransaction(params: ActParams, actions: UiAction[], signal?: AbortSignal): Promise<AgentToolResult<ComputerUseDetails | TerminalDesktopActionDetails>> {
@@ -2276,7 +2296,7 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 			}
 			// Forsion patch, see UPSTREAM.md. The page shows the press acting: forget which element it was, so the model
 			// pressing it again is a new background press and not the real click a retry gets (lastAccessibilityPress).
-			// Only for a call that sent this one press and still holds the slot (ownPress). Only focus moved: the baseline
+			// Only for a call whose actions were all presses of this element and that still holds the slot (ownPress). Only focus moved: the baseline
 			// stored above stays for pressActedSince. Nothing moved at all: that is unconfirmedPress's case, set above.
 			if (ownPress && lastAccessibilityPress === ownPress) {
 				const acted = !execution.error && (

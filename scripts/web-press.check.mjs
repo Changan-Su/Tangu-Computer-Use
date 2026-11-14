@@ -23,6 +23,10 @@
  *   ⑮ 只认真实点击的按钮:AXPress 没反应 → 再按是真实点击 → 页面变了 → 再按还得是真实点击,不能又退回 AXPress
  *   ⑯ 没反应的按钮,中间换一种方式重读页面(semantic / fused),再按还是真实点击(页面没变,读法不同不算变)
  *   ⑰ 一次调用里按了两个不同的按钮,前一个改了页面、后一个没反应:后一个再按还是真实点击(变化不能算到它头上)
+ *   ⑱ 一次调用里把计数按钮连按三下:三下都走 AXPress(模型一次排好的几下不是重试),前台不变;页面变了,下一次调用再按也是 AXPress
+ *   ⑲ 一次调用里把没反应的按钮按两下:两下都走 AXPress(跟第一下走);下一次调用再按是真实点击(没反应时「再按 = 真实点击」照旧)
+ *   ⑳ 反过来:这个按钮这时该走真实点击(上一下没反应),一次调用里按两下,两下都是真实点击(也是跟第一下走)
+ *   ㉑ 同上,但中间夹一个别的按钮(A、B、A):第二个 A 还是真实点击,不因为中间按了 B 就退回 AXPress(Codex 评审 11-14 指出)
  *
  * 不动真鼠标、不抢前台:bridge 和 helper 之间夹一层代理,记下每个 act 的 policy 和激活请求,policy = foreground 的 act
  * 和激活都不转发、直接回一个假结果。所以 ③ ⑦ ⑧ 证明的是「决定这么做」,不是真实点击、也不是激活后的截图(那个看 web-covered.check.mjs)。
@@ -32,6 +36,7 @@
  * 负对照(应该只在 ⑨ 红):--root <把 bridge.ts 里 earlierPressTookEffect 那次调用去掉的副本>
  * 负对照(应该只在 ⑪ ⑫ ⑬ ⑭ 红):--root <「上一下生效了就不当重试」这处改动之前的检出>
  * 负对照(应该只在 ⑭ ⑮ ⑯ ⑰ 红):--root <提交 24921ea 的检出(第一版:结果回来才记「按之前的页面」、不看是不是只按了这一个、连 rect 一起比)>
+ * 负对照(应该只在 ⑱ ⑲ ㉑ 红):--root <提交 0fcc6b8 的检出(一次调用里同一个元素的第二下起还是真实点击)>
  *
  * 需要:macOS、协议版本和 vendor 一致且已授权的 helper(PI_COMPUTER_USE_HELPER_APP_PATH,缺省用已安装的那份)、
  * Electron(CU_ELECTRON,缺省用 Forsion-Genesis/desktop 装的那份)。
@@ -67,7 +72,7 @@ const PAGE = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>
 <button id="count">Probe Count</button><p id="countStatus">Count: 0</p> <button id="slow">Probe Slow</button><p id="slowStatus">Slow: 0</p>
 <button id="tick">Probe Tick</button> <button id="dead">Probe Dead</button><p id="tickStatus">Tick: off</p>
 <button id="swap">Probe Swap</button><div id="swapBox" role="group" aria-label="Swap box">Swap: 0</div>
-<button id="real">Probe Real</button><p id="realStatus">Real: 0</p> <button id="idle">Probe Idle</button> <button id="rest">Probe Rest</button>
+<button id="real">Probe Real</button><p id="realStatus">Real: 0</p> <button id="idle">Probe Idle</button> <button id="rest">Probe Rest</button> <button id="mute">Probe Mute</button>
 <script>
 // 计数按钮:每按一下马上变。慢按钮:按完 4 秒才变(动作结果回去时页面上只有焦点移了过去)。
 let counted = 0, slowed = 0, ticked = 0
@@ -81,7 +86,7 @@ document.getElementById('aim').addEventListener('click', () => document.getEleme
 let lateDone = 0
 document.getElementById('late').addEventListener('click', () => setTimeout(() => { document.getElementById('lateStatus').textContent = 'Late: done ' + (++lateDone) }, 7000))
 const post = (o) => fetch('/log', { method: 'POST', body: JSON.stringify(o), keepalive: true })
-// Swap:每按一下把那块内容整个换成新元素(老元素的引用就此失效)。Real / Idle / Rest:AXPress 上什么都不做。
+// Swap:每按一下把那块内容整个换成新元素(老元素的引用就此失效)。Real / Idle / Rest / Mute:AXPress 上什么都不做。
 let swapped = 0
 document.getElementById('swap').addEventListener('click', () => {
   const box = document.createElement('div'); box.id = 'swapBox'; box.setAttribute('role', 'group'); box.setAttribute('aria-label', 'Swap box'); box.textContent = 'Swap: ' + (++swapped)
@@ -96,7 +101,7 @@ const MAIN = `const { app, BrowserWindow, screen } = require('electron')
 app.setPath('userData', process.env.CU_FIXTURE_DATA)
 app.whenReady().then(() => {
   const area = screen.getPrimaryDisplay().workArea
-  const win = new BrowserWindow({ width: 420, height: 340, x: area.x + area.width - 440, y: area.y + area.height - 360, show: false, title: 'CU Web Press' })
+  const win = new BrowserWindow({ width: 420, height: 380, x: area.x + area.width - 440, y: area.y + area.height - 400, show: false, title: 'CU Web Press' })
   // 人切到别的桌面(Space)之后,helper 列不到只在原桌面上的窗口(root_not_found):让替身窗口在每个桌面上都在
   win.setVisibleOnAllWorkspaces(true, { skipTransformProcessType: true })
   win.once('ready-to-show', () => win.showInactive())
@@ -454,6 +459,75 @@ ${JSON.stringify(r.details?.execution ?? null, null, 2)}
   check(`⑰ 一次按两个不同的按钮,后一个没反应:它再按还是真实点击(${pairPolicies.join(' → ')})`, () => {
     assert.deepEqual(pairPolicies, ['ax_only', 'ax_only', 'foreground'])
     assert.ok(!(pair.details.execution.steps ?? []).some((step) => step.pressConfirmed), 'a press in a two-press call was marked as having acted')
+  })
+
+  // ── ⑱ 一次调用里把同一个按钮按三下:模型一次排好的几下不是重试,后两下跟第一下走 AXPress ──
+  // 进来时槽里是 Probe Other(⑰ 最后那下),所以第一下是新的一下。
+  const pressTimes = (state, label, n) => bridge.executeAct('', { stateId: state.details.capture.stateId, actions: Array.from({ length: n }, () => ({ action: 'click', ref: refOf(text(state), label) })) }, undefined, undefined, pctx)
+  policies.length = 0
+  const countBeforeTriple = clicks('count').length
+  const activatedBeforeTriple = activations.length
+  const tripleState = await observe()
+  const tripleFrontBefore = await askHelper('getFrontmost')
+  const triple = await pressTimes(tripleState, 'Probe Count', 3)
+  const tripleFrontAfter = await askHelper('getFrontmost')
+  await sleep(400)
+  const triplePolicies = [...policies]
+  policies.length = 0
+  await press('Probe Count')
+  await sleep(400)
+  const afterTriplePolicies = [...policies]
+  check(`⑱ 一次调用里同一个按钮按三下:都走 AXPress,前台不变;下一次调用再按也是 AXPress(${triplePolicies.join(' → ')} 之后 ${afterTriplePolicies.join(' → ') || '没有动作'})`, () => {
+    assert.deepEqual(triplePolicies, ['ax_only', 'ax_only', 'ax_only'])
+    assert.equal(clicks('count').length - countBeforeTriple, 4, 'the page did not get three clicks and then one more')
+    assert.ok(clicks('count').slice(countBeforeTriple).every((c) => c.trusted))
+    assert.equal(activations.length, activatedBeforeTriple, 'a window was brought forward')
+    assert.equal(tripleFrontAfter.pid, tripleFrontBefore.pid); assert.notEqual(tripleFrontAfter.pid, child.pid)
+    const steps = triple.details.execution.steps ?? []
+    assert.equal(steps.length, 3)
+    assert.ok(steps.every((step) => step.accessibilityPress && step.pressConfirmed), 'the three presses were not all marked as having acted')
+    assert.match(bridge.executionNote(triple.details), /is a new press/, 'the model is not told that a repeat stays in the background')
+    assert.deepEqual(afterTriplePolicies, ['ax_only'])
+  })
+
+  // ── ⑲ 一次调用里把没反应的按钮按两下:两下都走 AXPress;下一次调用再按,「没反应 → 再按是真实点击」照旧 ──
+  policies.length = 0
+  const mute = await pressTimes(await observe(), 'Probe Mute', 2)
+  await sleep(400)
+  const mutePolicies = [...policies]
+  policies.length = 0
+  await press('Probe Mute')
+  await sleep(400)
+  const muteAfterPolicies = [...policies]
+  check(`⑲ 一次调用里没反应的按钮按两下:都走 AXPress;下一次调用再按是真实点击(${mutePolicies.join(' → ')} 之后 ${muteAfterPolicies.join(' → ') || '没有动作'})`, () => {
+    assert.deepEqual(mutePolicies, ['ax_only', 'ax_only'])
+    assert.equal(clicks('mute').length, 2, 'the page did not get both presses')
+    const steps = mute.details.execution.steps ?? []
+    assert.ok(steps.length === 2 && steps.every((step) => step.accessibilityPress && !step.pressConfirmed && !step.pressUnconfirmed), 'the two presses did not come back as "only focus moved", so this case tests nothing')
+    assert.deepEqual(muteAfterPolicies, ['foreground'])
+  })
+
+  // ── ⑳ 这时 Probe Mute 该走真实点击(上一下没反应):一次调用里按两下,两下都是真实点击 ──
+  policies.length = 0
+  const muteClicksBeforeReal = clicks('mute').length
+  await pressTimes(await observe(), 'Probe Mute', 2)
+  await sleep(400)
+  const muteRealPolicies = [...policies]
+  check(`⑳ 该走真实点击的按钮一次按两下:两下都是真实点击(${muteRealPolicies.join(' → ')})`, () => {
+    assert.deepEqual(muteRealPolicies, ['foreground', 'foreground'])
+    assert.equal(clicks('mute').length, muteClicksBeforeReal, 'an AXPress reached the page')
+  })
+
+  // ── ㉑ Probe Mute 还是该走真实点击:一次调用里 Mute、Other、Mute,中间那个 Other 不能把第二个 Mute 带回 AXPress ──
+  policies.length = 0
+  const muteClicksBeforeInterleaved = clicks('mute').length
+  const interleaved = await observe()
+  await bridge.executeAct('', { stateId: interleaved.details.capture.stateId, actions: ['Probe Mute', 'Probe Other', 'Probe Mute'].map((label) => ({ action: 'click', ref: refOf(text(interleaved), label) })) }, undefined, undefined, pctx)
+  await sleep(400)
+  const interleavedPolicies = [...policies]
+  check(`㉑ 一次调用里 A、B、A,A 的第一下是真实点击:第二个 A 还是真实点击(${interleavedPolicies.join(' → ')})`, () => {
+    assert.deepEqual(interleavedPolicies, ['foreground', 'ax_only', 'foreground'])
+    assert.equal(clicks('mute').length, muteClicksBeforeInterleaved, 'an AXPress reached Probe Mute')
   })
 
   // ── ⑬ 已知的取舍(放最后:按了 Tick 之后页面就一直在变) ──

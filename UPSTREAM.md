@@ -201,10 +201,22 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
     nodes, `truncated`. The model's state and an action's result are often read differently, and with `rect` compared every
     semantic state read as "changed" against a fused one: a button whose AXPress does nothing was then never sent the real click
     (⑯, found before release).
-  Only a call whose one action is that press is judged. With more actions in the call the change cannot be put down to the press
-  (`[press(counter), press(dead)]` confirmed the dead one: ⑰), so nothing is confirmed, no baseline is kept, and the old rule
-  applies. That includes pressing one element twice in one call (the second is the real click) and a call that reaches the element
-  after other actions. A call only clears or confirms the slot while its own press still holds it: the slot is one for all windows.
+  Only a call whose actions are all presses of that one element is judged: one press, or the element pressed several times in a row
+  (next point). With anything else in the call the change cannot be put down to the press (`[press(counter), press(dead)]`
+  confirmed the dead one: ⑰), so nothing is confirmed, no baseline is kept, and the old rule applies; the same for a call that
+  reaches the element after other actions. A call only clears or confirms the slot while its own press still holds it: the slot is
+  one for all windows.
+- **Presses of one element in one call follow the first.** The model writes a call's actions before it sees what any of them does,
+  so a second press of an element in the same call is not a retry. Until 11-14 it went out as the real click a retry gets (read from
+  the code and pinned by `check:web-press` ⑱; no live run had batched presses, every one was told to press once per call).
+  `dispatchUiTransaction` keeps, for each element the call has pressed, the way its first press went (`pressedInCall`), and
+  `helperAct` sends every later press of that element in the call the same way, whatever was pressed in between: AXPress stays
+  AXPress, and an element whose first press in the call was the real click gets real clicks for the rest (⑳; `[A, B, A]` ㉑ — with
+  only the slot to go by, B took it and the second A went back to an AXPress, which the element had just shown does nothing:
+  found by the Codex review, it was so before this change too). The judging above covers the whole run of presses: the page changed → the element is
+  forgotten and every press is marked `pressConfirmed` (⑱); only focus moved → the baseline is the page before the call and the
+  next call's press of the element is the real click (⑲). So a button whose AXPress does nothing, pressed N times in one call,
+  gets N AXPresses and its real click in the next call, not N − 1 real clicks in this one.
   A press that showed nothing at all stays with `unconfirmedPress`, untouched: no baseline is kept for it, and after
   `earlierPressTookEffect` holds a press back the next one is still the real click it promised (⑨b).
   Known limit, pinned as `check:web-press` ⑬: on a page that changes by itself (a clock, a feed) an element whose AXPress does
@@ -220,7 +232,8 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
   Not changed here, noticed on the way: the plain `webContentChanged` (used by `unconfirmedPress` and `earlierPressTookEffect`)
   still compares `rect`, so from a semantic state a press that changed nothing reads as "changed" there and is not escalated.
   Negative controls: `check:web-press --root <a checkout before this change>` is red in ⑪ ⑫ ⑬ ⑭ only (⑪ reads
-  `ax_only → foreground → foreground`); `--root <commit 24921ea, the first version>` is red in ⑭ ⑮ ⑯ ⑰ only.
+  `ax_only → foreground → foreground`); `--root <commit 24921ea, the first version>` is red in ⑭ ⑮ ⑯ ⑰ only;
+  `--root <commit 0fcc6b8, before presses in one call followed the first>` is red in ⑱ ⑲ ㉑ only.
 - **A covered page.** A fully covered window goes `document.visibilityState === 'hidden'`. An AXPress still lands there, but the page stops
   sending its accessibility changes to the browser process and stops repainting, and nothing warns beforehand: the helper still reports
   `isOnscreen`. A press that landed then read as one that missed and the model pressed again, twice for one request (live `cuweb`, one run
