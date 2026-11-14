@@ -118,3 +118,26 @@ assert.equal(webContentChanged(outline(), outline({ status: 'saved' })), true);
 assert.equal(webContentChanged(outline(), outline({ page: true })), true);
 assert.equal(webContentChanged(outline({ page: true }), outline()), true, 'a removed node is looked up in the old outline');
 console.log('✓ 只看网页区域的变化');
+
+// 两次各自读出来的树,编号各排各的:窗口边框里多一个 / 少一个节点,后面的编号整体错一位。
+// 真机 2026-11-14(web-press ⑧):全屏按钮下面那个分组时有时无,按编号一对,整页都成了「变了」,该发出去的点击被拦下。
+const renumbered = (extra = {}) => {
+  const node = (role, parent, more = {}) => ({ ref: '', role, parent, subrole: '', value: '', text: [], actions: [], children: [], ...more });
+  const window = node('AXWindow');
+  const fullscreen = node('AXButton', window);
+  const nodes = [window, fullscreen];
+  if (extra.chrome) nodes.push(node('AXGroup', fullscreen));
+  const web = node('AXWebArea', window);
+  const first = node('AXButton', web, { title: 'Save' });
+  const second = node('AXButton', web, { title: extra.title ?? 'Still' });
+  nodes.push(web, ...(extra.swapped ? [second, first] : [first, second]), node('AXStaticText', extra.moved ? first : web, { value: extra.status ?? 'pending' }));
+  nodes.forEach((entry, index) => { entry.ref = `@e${index + 1}`; });
+  return { root: window, nodes };
+};
+assert.equal(webContentChanged(renumbered({ chrome: true }), renumbered()), false, 'chrome lost a node between two reads: the page is numbered one lower and did not change');
+assert.equal(webContentChanged(renumbered(), renumbered({ chrome: true })), false, 'chrome grew a node between two reads');
+assert.equal(webContentChanged(renumbered({ chrome: true }), renumbered({ status: 'saved' })), true, 'renumbered and the page did change');
+assert.equal(webContentChanged(renumbered({ chrome: true }), renumbered({ title: 'Other' })), true, 'renumbered and an element was renamed');
+assert.equal(webContentChanged(renumbered(), renumbered({ swapped: true })), true, 'two elements changed places');
+assert.equal(webContentChanged(renumbered(), renumbered({ moved: true })), true, 'an element moved under another parent');
+console.log('✓ 两次读出来的编号对不上时,仍按内容比');

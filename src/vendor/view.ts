@@ -132,15 +132,33 @@ export function changesBetween(base: Outline, next: Outline): OutlineDiff {
 /**
  * Forsion patch, see UPSTREAM.md. Whether anything inside web content changed. Window chrome changes by itself (a covered
  * Electron window grew a group under its fullscreen button on the press, live 10-31), so it says nothing about the page.
+ *
+ * Compared by content and not by ref. The two outlines can come from two separate reads, each numbered on its own in
+ * reading order, so that same chrome group coming or going shifts every number after it; matched by ref the whole page
+ * then reads as changed, and a press that should have gone out was held back as "the page has changed" (real machine
+ * 11-14, web-press check ⑧, four runs of five). What is compared is each web area's subtree: the nodes in order, where
+ * each hangs, and the same fields changesBetween looks at.
  */
 export function webContentChanged(base: Outline, next: Outline): boolean {
-	const inWebContent = (outline: Outline, ref: string): boolean => {
-		for (let node = outline.nodes.find((candidate) => candidate.ref === ref); node; node = node.parent) {
-			if (node.role === "AXWebArea") return true;
-		}
-		return false;
-	};
-	return changesBetween(base, next).changes.some((change) => inWebContent(change.type === "removed" ? base : next, change.ref));
+	const before = webContentSignature(base);
+	const after = webContentSignature(next);
+	return before.length !== after.length || before.some((line, index) => line !== after[index]);
+}
+
+function webContentSignature(outline: Outline): string[] {
+	const position = new Map<OutlineNode, number>();
+	const inside: OutlineNode[] = [];
+	for (const node of outline.nodes) {
+		// Parents come before their children in nodes, so one pass is enough to know whether a node sits in a web area.
+		if (node.role !== "AXWebArea" && !(node.parent && position.has(node.parent))) continue;
+		position.set(node, inside.length);
+		inside.push(node);
+	}
+	return inside.map((node) => {
+		const { ref: _ref, wireRef: _wireRef, ...fields } = comparable(node);
+		const parent = node.parent ? position.get(node.parent) : undefined;
+		return `${parent ?? -1}|${JSON.stringify(fields)}`;
+	});
 }
 
 /**

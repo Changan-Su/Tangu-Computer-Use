@@ -216,6 +216,13 @@ size is what makes that work. A short-side cap of 768 was tried and removed.
     moved does the real click go out at once. A right or double click on that element is another gesture and is not held back.
     `unconfirmedPress` is forgotten before the next action is dispatched, whatever that action is. Nothing is ever replayed by the
     adapter itself.
+  - **The page's tree is compared by content, not by ref.** The tree from before the press and the one read for the repeat come from
+    two separate reads, each numbered on its own in reading order. The group under the fullscreen button comes and goes between reads
+    (the same chrome node as above), and when it does every ref after it shifts by one; matched by ref the whole page then read as
+    changed and the repeat was held back although nothing had moved (real machine 11-14: `check:web-press` ⑧ red in four runs of five).
+    `webContentChanged` now walks each `AXWebArea` subtree and compares the nodes in order, where each hangs and the same fields
+    `changesBetween` looks at; refs take no part. `check:web-content` has the renumbered cases, and `CU_WEB_PRESS_DUMP=<dir>` makes
+    `check:web-press` write the trees it read around ⑦ ⑧ for the next time one of them is red.
   - `npm run check:web-covered` proves both halves on a real cover (no window raise when the page changes; raise, current screenshot and
     the hold-off note when it only repaints), `npm run check:web-press` ⑦ ⑧ ⑨ the fallback and the repeat guard, `check:web-content` the
     wording and the picture comparison.

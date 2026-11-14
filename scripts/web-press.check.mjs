@@ -168,8 +168,10 @@ try {
   if (!refOf(firstBody, 'Probe Save')) await sleep(3000)
   const observe = () => bridge.executeObserve('', { root: rootRef }, undefined, undefined, pctx)
   // 动作结果只带变化,没有完整大纲,所以每次按之前都重新观察(ref 也每次都换)
+  const observed = [] // 排查用:每次按之前那次观察的全文(CU_WEB_PRESS_DUMP 时落盘)
   const press = async (label) => {
     const state = await observe()
+    observed.push({ label, body: text(state) })
     return bridge.executeAct('', { stateId: state.details.capture.stateId, actions: [{ action: 'click', ref: refOf(text(state), label) }] }, undefined, undefined, pctx)
   }
   policies.length = 0
@@ -215,7 +217,7 @@ try {
   const againMs = Date.now() - again
   check(`⑥ 之后的观察不再等(${againMs} ms)`, () => assert.ok(againMs < 1500))
 
-  await press('Probe Focus')
+  const focused = await press('Probe Focus')
   await sleep(500)
   policies.length = 0
   activations.length = 0
@@ -236,7 +238,21 @@ try {
   policies.length = 0
   const repeated = await press('Probe Still')
   const repeatedPolicies = [...policies]
-  check(`⑧ 再按、窗口一直没变:照常发真实点击(${repeatedPolicies.join(' → ')})`, () => {
+  // 排查用:CU_WEB_PRESS_DUMP=<目录> 时把 ⑦ 之前、⑦ 之后、⑧ 这三次返回的状态文字落盘,红了能直接比树里哪一行变了
+  if (process.env.CU_WEB_PRESS_DUMP) {
+    fs.mkdirSync(process.env.CU_WEB_PRESS_DUMP, { recursive: true })
+    for (const [name, r] of [['1-after-focus', focused], ['2-after-still', unchanged], ['3-repeat-still', repeated]]) {
+      fs.writeFileSync(path.join(process.env.CU_WEB_PRESS_DUMP, `${name}.txt`), `${text(r)}
+
+--- execution
+${JSON.stringify(r.details?.execution ?? null, null, 2)}
+`)
+    }
+    // 按之前各次观察的整棵树(最后三次 = ⑦ 之前那次聚焦、⑦、⑧),加上 ⑧ 之后再看一眼:多出来的节点在这里找
+    observed.slice(-3).forEach((o, i) => fs.writeFileSync(path.join(process.env.CU_WEB_PRESS_DUMP, `0-observe-${i + 1}-before-${o.label.replace(/\s+/g, '-')}.txt`), o.body))
+    fs.writeFileSync(path.join(process.env.CU_WEB_PRESS_DUMP, '4-observe-after-repeat.txt'), text(await observe()))
+  }
+  check(`⑧ 再按、窗口一直没变:照常发真实点击(${repeatedPolicies.join(' → ') || '没有动作'}${repeated.details?.execution?.earlierPressTookEffect ? `,被拦下的依据:${repeated.details.execution.earlierPressTookEffect}` : ''})`, () => {
     assert.deepEqual(repeatedPolicies, ['foreground'])
     assert.ok(!repeated.details.execution.earlierPressTookEffect, 'nothing moved, yet the click was held back')
   })
