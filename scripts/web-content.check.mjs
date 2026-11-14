@@ -140,4 +140,22 @@ assert.equal(webContentChanged(renumbered({ chrome: true }), renumbered({ status
 assert.equal(webContentChanged(renumbered({ chrome: true }), renumbered({ title: 'Other' })), true, 'renumbered and an element was renamed');
 assert.equal(webContentChanged(renumbered(), renumbered({ swapped: true })), true, 'two elements changed places');
 assert.equal(webContentChanged(renumbered(), renumbered({ moved: true })), true, 'an element moved under another parent');
-console.log('✓ 两次读出来的编号对不上时,仍按内容比');
+// 节点列表有两种排法:现读的是一层一层排(buildOutline / rebuildIndexes),从存档还原的是一条枝走到底(restoreOutline)。
+// 同一棵树两种排法不能算变了,否则没确认的按压会被当成「页面动了 = 已确认」。
+const listed = (order, extra = {}) => {
+  const node = (role, parent, more = {}) => ({ ref: '', role, parent, subrole: '', value: '', text: [], actions: [], children: [], ...more });
+  const window = node('AXWindow');
+  const web = node('AXWebArea', window);
+  const left = node('AXGroup', web);
+  const right = node('AXGroup', web);
+  const a = node('AXButton', left, { title: 'A' });
+  const b = node('AXButton', extra.regrouped ? left : right, { title: 'B' });
+  const other = node('AXWebArea', node('AXGroup', window));
+  const nodes = order === 'breadth' ? [window, web, other.parent, left, right, other, a, b] : [window, web, left, a, ...(extra.regrouped ? [b, right] : [right, b]), other.parent, other];
+  nodes.forEach((entry, index) => { entry.ref = `@e${index + 1}`; });
+  return { root: window, nodes };
+};
+assert.equal(webContentChanged(listed('breadth'), listed('depth')), false, 'the same page listed breadth first and depth first');
+assert.equal(webContentChanged(listed('depth'), listed('breadth')), false, 'and the other way round');
+assert.equal(webContentChanged(listed('breadth'), listed('depth', { regrouped: true })), true, 'listed differently and an element did move to another group');
+console.log('✓ 两次读出来的编号对不上、节点排法不同时,仍按内容比');

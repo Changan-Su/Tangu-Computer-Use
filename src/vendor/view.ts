@@ -136,8 +136,8 @@ export function changesBetween(base: Outline, next: Outline): OutlineDiff {
  * Compared by content and not by ref. The two outlines can come from two separate reads, each numbered on its own in
  * reading order, so that same chrome group coming or going shifts every number after it; matched by ref the whole page
  * then reads as changed, and a press that should have gone out was held back as "the page has changed" (real machine
- * 11-14, web-press check ⑧, four runs of five). What is compared is each web area's subtree: the nodes in order, where
- * each hangs, and the same fields changesBetween looks at.
+ * 11-14, web-press check ⑧, four runs of five). What is compared is each web area's subtree, walked branch by branch:
+ * how deep each node sits and the same fields changesBetween looks at.
  */
 export function webContentChanged(base: Outline, next: Outline): boolean {
 	const before = webContentSignature(base);
@@ -146,19 +146,28 @@ export function webContentChanged(base: Outline, next: Outline): boolean {
 }
 
 function webContentSignature(outline: Outline): string[] {
-	const position = new Map<OutlineNode, number>();
-	const inside: OutlineNode[] = [];
+	// The tree is rebuilt from parent links and walked one branch at a time, so the result does not depend on how nodes
+	// is ordered: a fresh read lists it level by level (buildOutline, rebuildIndexes), a restored one branch by branch
+	// (restoreOutline). Siblings keep their order either way. One line per node inside a web area: how deep it sits there
+	// and its fields, which in this order pins down the subtree.
+	const children = new Map<OutlineNode, OutlineNode[]>();
 	for (const node of outline.nodes) {
-		// Parents come before their children in nodes, so one pass is enough to know whether a node sits in a web area.
-		if (node.role !== "AXWebArea" && !(node.parent && position.has(node.parent))) continue;
-		position.set(node, inside.length);
-		inside.push(node);
+		if (!node.parent) continue;
+		const siblings = children.get(node.parent);
+		if (siblings) siblings.push(node);
+		else children.set(node.parent, [node]);
 	}
-	return inside.map((node) => {
-		const { ref: _ref, wireRef: _wireRef, ...fields } = comparable(node);
-		const parent = node.parent ? position.get(node.parent) : undefined;
-		return `${parent ?? -1}|${JSON.stringify(fields)}`;
-	});
+	const lines: string[] = [];
+	const walk = (node: OutlineNode, depth: number): void => {
+		const within = depth >= 0 ? depth : node.role === "AXWebArea" ? 0 : -1;
+		if (within >= 0) {
+			const { ref: _ref, wireRef: _wireRef, ...fields } = comparable(node);
+			lines.push(`${within}|${JSON.stringify(fields)}`);
+		}
+		for (const child of children.get(node) ?? []) walk(child, within >= 0 ? within + 1 : -1);
+	};
+	walk(outline.root, -1);
+	return lines;
 }
 
 /**
