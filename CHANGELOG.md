@@ -1,6 +1,6 @@
 # 更新日志
 
-## 0.7.2 — 2026-10-31
+## 0.7.2 — 2026-11-17
 
 - 这是 0.7.1 之后的第一个正式版，下面 0.7.2-jev.1 到 jev.6 的内容都随这一版发布。macOS 的 helper 协议号从 16 升到 19，插件更新后会重启还在运行的旧 helper。
 - Windows：严格后台模式下不再改变前台窗口；按住拖动时按节奏投递移动事件，松手结果不确定时停止后面的输入。
@@ -17,6 +17,9 @@
 - A repeat press on the same element now goes straight to a real click instead of trying the background first, where it could land and then be replayed.
 - The first read of an Electron or Chrome-family app now waits for web content to reach the accessibility tree (about 2.5 s, once per process). It used to return an empty shell.
 - 安装 helper 时核对发布证书（`certificate root = H"dab3a30e…"`），签名不对就拒装、已装的那份原样不动。原来只核对 bundle id：同 id 的 ad-hoc / 开发证书 helper 能盖掉发布版，macOS 里那条授权记录还是旧签名的，开关开着、helper 却读到「未授权」，只能在系统设置里删掉再重新加。开发构建要装就设 `PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1`，装完重新授权。只往临时位置解压、不登记 LaunchServices 的那种（`register: false`）不受影响。`check:installer` 加了这一段。
+- Installing the helper now checks the release certificate (`certificate root = H"dab3a30e…"`): a helper with the wrong signature is refused and the installed one stays as it is. It used to check only the bundle id, so an ad-hoc or development-signed helper with the same id could replace the release build; macOS kept the permission entry for the old signature, the switch showed as on while the helper read "not authorized", and the only fix was to remove and re-add it in System Settings. To install a development build, set `PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1` and grant permission again afterwards. Builds unpacked only to a temporary location without LaunchServices registration (`register: false`) are not affected. `check:installer` covers this.
+- 已知问题：一扇还没读过的网页窗口（Electron、Chrome 这类），如果在第一次读完之前就被别的窗口完全盖住，第一次读到的只有窗口外壳，盖着期间都读不到网页内容；盖住它的窗口挪开后约 0.7 秒就能读到。只是失去前台、没有被完全盖住时不受影响。会在后续版本修复。
+- Known issue: if a web window (Electron, Chrome and similar) that has not been read yet is fully covered by another window before its first read finishes, that read returns only the window frame, and the web content stays unreadable while the window is covered. It reads normally about 0.7 s after the covering window moves away. A window that only loses the foreground is not affected. A fix is planned for a later release.
 
 ## 0.7.2-jev.6 — 2026-10-17（开发实验 / development experiment）
 
