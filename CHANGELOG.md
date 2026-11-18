@@ -1,6 +1,6 @@
 # 更新日志
 
-## 未发布
+## 0.7.3 — 2026-11-18
 
 - macOS helper 改用 Developer ID 签名（带加固运行时和安全时间戳），Forsion Desktop 整包才能通过苹果公证。原来那张自签名证书不被公证接受，带着它的 Desktop 公证会被退回。代价：从旧版升上来时，每位 macOS 用户要重新授权一次辅助功能和屏幕录制。安装器发现已装 helper 的签名变了，会清掉它的旧授权记录，系统重新弹框；不清的话，开关看着开着、helper 却读到未授权。以后续期证书不会再掉授权，因为授权认的是团队，不是某一张证书。发版需要新的仓库 secret `DEVELOPER_ID_P12` / `DEVELOPER_ID_P12_PASSWORD`。
 - The macOS helper is now signed with a Developer ID (hardened runtime, secure timestamp), so the Forsion Desktop app passes Apple notarization; the old self-signed certificate made Apple reject the whole app. Upgrading costs each macOS user one new Accessibility and Screen Recording grant: when the installed helper's signature changes, the installer clears its stale grant rows so macOS asks again, instead of showing a switch that is on while the helper reads "not granted". Certificate renewals no longer drop grants, since they are tied to the team, not one certificate. Releases need the new repository secrets `DEVELOPER_ID_P12` / `DEVELOPER_ID_P12_PASSWORD`.
