@@ -1,5 +1,18 @@
 # 更新日志
 
+## 0.7.3 — 未发版 / unreleased
+
+- 操控电脑时的显示效果改版。macOS 的 helper 协议号从 19 升到 20，插件更新后会换上新 helper。要配合桌面 2.14.2 起的版本才看得到实时画面卡和对话里的新写法；老桌面上照常能用，只是看不到这几处。
+- 屏幕上：Agent 的光标换成尖头朝左上的飞镖形，颜色跟 Forsion 的主题色走（经典、墨色两套用柔蓝）。点击处放一圈环，双击两圈；被操控的窗口四周有一圈同色的边光。一轮开始到结束光标一直在，模型思考时变淡并轻轻摆动，结束后约 1 秒淡出；45 秒没有动作自己收场。光标沿直线飞到目标、箭头不转圈，飞到之后再点。开了系统的「减少动态效果」时不摆、不飞，直接到位。会动真实指针的点击只在落点画一圈环。
+- 实时画面卡：画面上叠着 Agent 的光标和点击环；头部一句话说这一步在做什么，旁边是停止按钮；一轮结束后标「已完成 · N 步」。卡上多一个「移到悬浮窗」，可以把画面放进一扇置顶的小窗。
+- 对话里的过程行：每次操作写成一句话，比如「正在 Chatter 中点击「发送」」。「已点击」表示已经送达，不代表确认生效；没确认的写「没能…」。
+- 再按同一个网页元素时，判断「页面是不是已经变了」改成比网页内容本身，不再按节点编号比。以前页面里有个元素时有时无，编号整体错一位，会把没变的页面当成变了，多走一步。
+- On-screen feedback while the agent operates the computer has been redesigned. The macOS helper protocol goes from 19 to 20, and the plugin installs the new helper after it updates. The live view card and the new chat wording need desktop 2.14.2 or later; on older desktops the plugin works as before without them.
+- On screen: the agent's cursor is now a dart pointing up-left, colored with your Forsion theme color (soft blue for the Classic and Ink themes). A click shows one ring, a double click two, and the operated window gets a glow around its edge in the same color. The cursor stays for the whole turn, fades and sways gently while the model is thinking, and fades out about 1 s after the turn ends; it clears itself after 45 s without actions. It flies to the target in a straight line without spinning, and the click is sent once it arrives. With Reduce motion turned on in the system, it does not sway or fly and simply appears in place. Clicks that move the real pointer only show a ring where they land.
+- Live view card: the agent's cursor and click rings are drawn over the picture, a line at the top says what the current step is doing, with a stop button next to it, and the card reads "Done · N steps" when the turn ends. A new "Move to floating window" button puts the picture in a small window that stays on top.
+- Process rows in the chat: each action reads as a sentence, such as "Clicking "Send" in Chatter". "Clicked" means the click was delivered, not confirmed; an action that was not confirmed reads "Could not …".
+- When the same web element is pressed again, deciding whether the page has already changed now compares the web content itself instead of node numbers. Before, an element that came and went shifted every number by one, so an unchanged page could be taken as changed and cost the model an extra step.
+
 ## 0.7.2 — 2026-11-17
 
 - 这是 0.7.1 之后的第一个正式版，下面 0.7.2-jev.1 到 jev.6 的内容都随这一版发布。macOS 的 helper 协议号从 16 升到 19，插件更新后会重启还在运行的旧 helper。
