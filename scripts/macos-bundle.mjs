@@ -8,13 +8,22 @@ import path from 'node:path';
 
 export const appName = 'tangu-computer-use.app';
 export const bundleId = 'com.forsion.tangu-computer-use';
-// Release helpers are signed with one fixed self-signed certificate (SHA-1 below). macOS files the
-// Accessibility and Screen Recording grants under the designated requirement = bundle id + this
-// certificate's hash, so helper updates keep the grants for as long as neither changes. Never replace
-// the certificate or change the bundle id: every user would have to grant access again. The private key
-// lives only in the GitHub secrets CU_SIGNING_P12 / CU_SIGNING_P12_PASSWORD (backup kept by the owner);
-// the release workflow signs with it and scripts/verify-package.mjs refuses a helper signed by anything else.
-export const releaseCertSha1 = 'dab3a30e7568c7e2c021660b49398356a205a191';
+// Release helpers are signed with the project's Developer ID Application certificate (Apple team below), with
+// the hardened runtime and a secure timestamp, so they pass Apple notarization inside the Forsion Desktop app.
+// macOS files the Accessibility and Screen Recording grants under the designated requirement, which for Developer
+// ID code names the bundle id and the team, not one certificate: renewing the certificate keeps every grant.
+// Never change the bundle id or the team. Releases up to 0.7.x used a self-signed certificate
+// (legacyReleaseCertSha1); moving off it costs every macOS user one new grant, and installMacosApp clears the
+// stale grant rows so macOS asks again instead of showing a switch that is on but does nothing. The private key
+// lives only in the GitHub secrets DEVELOPER_ID_P12 / DEVELOPER_ID_P12_PASSWORD; the release workflow signs with
+// it and scripts/verify-package.mjs refuses a helper signed by anything else.
+export const releaseTeamId = 'F3DBC75233';
+export const legacyReleaseCertSha1 = 'dab3a30e7568c7e2c021660b49398356a205a191';
+// The requirement codesign derives for Developer ID code (verify-package compares it word for word).
+export const releaseDesignatedRequirement = `identifier "${bundleId}" and anchor apple generic`
+  + ' and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */'
+  + ' and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */'
+  + ` and certificate leaf[subject.OU] = ${releaseTeamId}`;
 export const sealedFiles = ['Contents/MacOS/bridge', 'Contents/Info.plist', 'Contents/_CodeSignature/CodeResources'];
 export const sha256 = data => createHash('sha256').update(data).digest('hex');
 
@@ -42,9 +51,9 @@ export function verifyMacosApp(app) {
 
 // The grant row keeps the requirement of the binary the user approved. Installing a differently signed
 // helper under the same bundle id leaves the switch on while the helper reads "not granted" until the user
-// removes and re-adds it, so a real install takes only the release certificate. Development builds
+// removes and re-adds it, so a real install takes only the release signature. Development builds
 // (ad-hoc or a dev certificate) opt in explicitly and accept granting access again.
-export const releaseRequirement = `=identifier "${bundleId}" and certificate root = H"${releaseCertSha1}"`;
+export const releaseRequirement = `=${releaseDesignatedRequirement}`;
 export const allowUnpinnedHelper = env => env.PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE === '1';
 
 export function isReleaseSigned(app) {
@@ -52,6 +61,28 @@ export function isReleaseSigned(app) {
     execFileSync('/usr/bin/codesign', ['--verify', '--strict', '-R', releaseRequirement, app], { stdio: 'pipe', timeout: 15_000 });
     return true;
   } catch { return false; }
+}
+
+// Display only (no private key): the requirement macOS filed the grants under. null when it cannot be read.
+export function designatedRequirement(app) {
+  try {
+    const shown = execFileSync('/usr/bin/codesign', ['-d', '-r-', app], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15_000 });
+    return shown.match(/^(?:# )?designated => (.*)$/m)?.[1]?.trim() ?? null;
+  } catch (error) {
+    const text = `${error.stdout ?? ''}${error.stderr ?? ''}`;
+    return text.match(/^(?:# )?designated => (.*)$/m)?.[1]?.trim() ?? null;
+  }
+}
+
+// The grant rows of the previous helper name its requirement; the new one never matches them, and macOS shows the
+// switch on while the helper reads "not granted". Clearing them makes the next request a normal prompt.
+function resetStaleGrants() {
+  try {
+    execFileSync('/usr/bin/tccutil', ['reset', 'All', bundleId], { stdio: 'pipe', timeout: 10_000 });
+    console.log('[tangu-computer-use] the helper signature changed; cleared its old privacy grants so macOS asks again');
+  } catch (error) {
+    console.error(`[tangu-computer-use] the helper signature changed but its old privacy grants could not be cleared: ${error.message}`);
+  }
 }
 
 export function macosAppMatches(app, metadata) {
@@ -107,7 +138,7 @@ export async function installMacosApp(root, app, { register = true } = {}) {
   return withInstallLock(app, async () => {
     const { archive, metadata } = bundledMacosApp(root);
     if (sha256(await fs.readFile(archive)) !== metadata.archiveSha256) throw new Error('The bundled Computer Use helper archive is damaged. Reinstall the plugin.');
-    let changed = false;
+    let changed = false, resetGrants = false;
     if (!macosAppMatches(app, metadata)) {
       const staging = await fs.mkdtemp(path.join(parent, '.tangu-computer-use-install-'));
       const next = path.join(staging, appName), old = path.join(staging, 'previous.app');
@@ -117,12 +148,14 @@ export async function installMacosApp(root, app, { register = true } = {}) {
         if (!macosAppMatches(next, metadata)) throw new Error('The bundled Computer Use helper signature or contents are invalid.');
         // A disposable copy that LaunchServices never sees (register: false) cannot touch the grant row.
         if (register && !allowUnpinnedHelper(process.env) && !isReleaseSigned(next)) {
-          throw new Error('The bundled Computer Use helper is not signed with the release certificate. Installing it would make macOS ignore the existing Accessibility and Screen Recording grants. For a development build, set PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1 and grant access again afterwards.');
+          throw new Error('The bundled Computer Use helper is not signed with the release certificate (Developer ID, team ' + releaseTeamId + '). Installing it would make macOS ignore the existing Accessibility and Screen Recording grants. For a development build, set PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1 and grant access again afterwards.');
         }
+        const previousRequirement = register && existsSync(app) ? designatedRequirement(app) : null;
         if (existsSync(app)) { await fs.rename(app, old); movedOld = true; }
         try { await fs.rename(next, app); }
         catch (error) { if (movedOld) await fs.rename(old, app); throw error; }
         changed = true;
+        if (previousRequirement && previousRequirement !== designatedRequirement(app)) resetGrants = true;
       } finally {
         // If rollback itself failed, preserve the previous app for recovery.
         if (!movedOld || existsSync(app)) await fs.rm(staging, { recursive: true, force: true });
@@ -131,6 +164,7 @@ export async function installMacosApp(root, app, { register = true } = {}) {
     if (register) {
       const command = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
       try { execFileSync(command, ['-f', app], { stdio: 'pipe', timeout: 10_000 }); } catch { /* open will register it as well */ }
+      if (resetGrants) resetStaleGrants();
     }
     return changed;
   });

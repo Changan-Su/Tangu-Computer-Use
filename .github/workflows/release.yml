@@ -5,16 +5,17 @@
 # 首个版本必须人工发一次 —— npm 规定包存在后才能登记 trusted publisher(步骤见 README「发布」)。
 # 包还不存在时 publish 步骤只告警、不变红;Release 上附的 .tgz 就是要人工发的那一份。
 #
-# macOS helper 用固定证书签名(指纹钉在 scripts/macos-bundle.mjs 的 releaseCertSha1):macOS 把辅助功能 / 屏幕录制
-# 授权绑在「bundle id + 证书指纹」上,证书不变,helper 更新就不用重新授权。需要仓库 secret:
-# CU_SIGNING_P12(.p12 的 base64)与 CU_SIGNING_P12_PASSWORD。私钥只在本 job 的临时钥匙串里,
-# 用户机器上的安装器只校验、复制,从不签名、不碰钥匙串。
+# macOS helper 用项目的 Developer ID Application 证书签名(团队钉在 scripts/macos-bundle.mjs 的 releaseTeamId),
+# 带加固运行时和安全时间戳 —— 随 Forsion Desktop 一起提交苹果公证时才过得去。macOS 把辅助功能 / 屏幕录制授权
+# 绑在「bundle id + 团队」上,续期换证书不掉授权。需要仓库 secret:DEVELOPER_ID_P12(.p12 的 base64)与
+# DEVELOPER_ID_P12_PASSWORD。私钥只在本 job 的临时钥匙串里,用户机器上的安装器只校验、复制,从不签名、不碰钥匙串。
+# 旧的 CU_SIGNING_P12* 是 0.7.x 及以前的自签名证书,只留作备份,本流程不再用。
 #
 # ⚠️ 0.2.0 起本仓是 **Forsion 捆绑包**:npm 包 = 捆绑包的分发载体(市场/离线安装解包到 plugins/<id>/),
 # **不再是能被 `tangu install` 直接装的独立引擎插件** —— 仓根已没有 tangu-plugin.json,
 # 引擎侧内容在 tangu-plugins/computer-use/。
 #
-# ⚠️ 升级永不换 bundle id(com.forsion.tangu-computer-use)与签名身份 —— macOS 把辅助功能/录屏(TCC)
+# ⚠️ 升级永不换 bundle id(com.forsion.tangu-computer-use)与签名团队 —— macOS 把辅助功能/录屏(TCC)
 # 授权绑到它们,一换全体用户要重授权。
 name: release
 
@@ -89,31 +90,37 @@ jobs:
       # 临时钥匙串 + 分区列表放行 codesign:CI 上没人能点钥匙串授权框,不放行就会卡死在签名上。
       - name: Import release signing certificate
         env:
-          CU_SIGNING_P12: ${{ secrets.CU_SIGNING_P12 }}
-          CU_SIGNING_P12_PASSWORD: ${{ secrets.CU_SIGNING_P12_PASSWORD }}
+          DEVELOPER_ID_P12: ${{ secrets.DEVELOPER_ID_P12 }}
+          DEVELOPER_ID_P12_PASSWORD: ${{ secrets.DEVELOPER_ID_P12_PASSWORD }}
         run: |
-          if [ -z "$CU_SIGNING_P12" ] || [ -z "$CU_SIGNING_P12_PASSWORD" ]; then
-            echo "::error::Missing CU_SIGNING_P12 / CU_SIGNING_P12_PASSWORD. An ad-hoc helper would cost every macOS user a new permission grant."
+          if [ -z "$DEVELOPER_ID_P12" ] || [ -z "$DEVELOPER_ID_P12_PASSWORD" ]; then
+            echo "::error::Missing DEVELOPER_ID_P12 / DEVELOPER_ID_P12_PASSWORD. An ad-hoc helper would cost every macOS user a new permission grant and fail Forsion Desktop notarization."
             exit 1
           fi
           keychain="$RUNNER_TEMP/cu-signing.keychain-db"
           keychain_password="$(openssl rand -hex 24)"
+          echo "::add-mask::$keychain_password"
           security create-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
-          printf '%s' "$CU_SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/cu-signing.p12"
-          security import "$RUNNER_TEMP/cu-signing.p12" -k "$keychain" -P "$CU_SIGNING_P12_PASSWORD" -T /usr/bin/codesign
+          printf '%s' "$DEVELOPER_ID_P12" | base64 --decode > "$RUNNER_TEMP/cu-signing.p12"
+          security import "$RUNNER_TEMP/cu-signing.p12" -k "$keychain" -P "$DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
           rm -f "$RUNNER_TEMP/cu-signing.p12"
+          # The runner may lack the Developer ID G2 intermediate; without it codesign cannot build the chain.
+          curl -fsSL https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer -o "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain" || true
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
-          identity="$(node --input-type=module -e "const m = await import('./scripts/macos-bundle.mjs'); console.log(m.releaseCertSha1.toUpperCase())")"
-          security find-identity -p codesigning "$keychain" | grep -q "$identity" || { echo "::error::The imported key is not certificate $identity"; exit 1; }
+          team="$(node --input-type=module -e "const m = await import('./scripts/macos-bundle.mjs'); console.log(m.releaseTeamId)")"
+          identity="$(security find-identity -v -p codesigning "$keychain" | awk -v t="($team)" 'index($0, "Developer ID Application:") && index($0, t) { print $2; exit }')"
+          [ -n "$identity" ] || { echo "::error::The imported key is not a Developer ID Application identity of team $team"; exit 1; }
           echo "PI_COMPUTER_USE_CODESIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
 
       # native macOS helper(Swift)→ prebuilt/macos/{arm64,x64}/bridge
-      # 两个架构均构建完整 App 并封入 ZIP;用上一步的固定证书签名(PI_COMPUTER_USE_CODESIGN_IDENTITY),安装器不接触用户钥匙串。
+      # 两个架构均构建完整 App 并封入 ZIP;用上一步的 Developer ID 签名(PI_COMPUTER_USE_CODESIGN_IDENTITY),
+      # 加固运行时 + 安全时间戳(公证的硬要求),安装器不接触用户钥匙串。
       - name: Build macOS helper (both architectures)
-        run: npm run build:native -- --arch all
+        run: npm run build:native -- --arch all --hardened-runtime --timestamp
 
       # 发版前把「两个架构都在」变成硬门槛 —— 缺哪个都不该发出去
       - name: Verify macOS prebuilts

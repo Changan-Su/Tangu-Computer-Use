@@ -2,12 +2,11 @@
 // Release gate for the npm package. npm versions are immutable: a version that ships without its
 // engine bundle or a platform helper can only be deprecated, never fixed. The release workflow runs
 // this after all helpers are in place; a local run reports the Windows/Linux helpers as missing.
-import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { appName, bundleId, releaseCertSha1 } from './macos-bundle.mjs';
+import { appName, releaseDesignatedRequirement, releaseTeamId } from './macos-bundle.mjs';
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
@@ -44,23 +43,26 @@ if (existsSync(windowsHelper)) {
   if (vcRuntime) errors.push(`${windowsHelper} imports ${vcRuntime[0]} (build it with scripts/build-native.mjs, which links +crt-static)`);
 }
 
-// A helper signed by anything but the release certificate (ad-hoc, a regenerated key) has a different
-// designated requirement, and every macOS user would lose the Accessibility / Screen Recording grants.
+// A helper signed by anything but the project's Developer ID (ad-hoc, another team) has a different designated
+// requirement, and every macOS user would lose the Accessibility / Screen Recording grants. Without the hardened
+// runtime or a secure timestamp Apple notarization rejects the helper, and with it the whole Forsion Desktop app.
 if (process.platform !== 'darwin') errors.push('the macOS helper signature can only be verified on macOS');
 else for (const arch of ['arm64', 'x64']) {
   const temp = mkdtempSync(path.join(os.tmpdir(), 'cu-verify-signing-'));
   try {
     execFileSync('/usr/bin/ditto', ['-x', '-k', `prebuilt/macos/${arch}/${appName}.zip`, temp]);
-    // Check the real signer (leaf certificate extracted from the signature) and the exact requirement text:
-    // a substring match would pass a crafted requirement such as `... leaf = H"<pin>" or leaf = H"<other>"`.
-    const prefix = path.join(temp, 'signer');
-    const shown = spawnSync('/usr/bin/codesign', ['-d', '-r-', `--extract-certificates=${prefix}`, path.join(temp, appName)], { encoding: 'utf8' });
-    const designated = `${shown.stdout}${shown.stderr}`.match(/^(?:# )?designated => (.*)$/m)?.[1]?.trim() ?? '(none)';
-    const signer = existsSync(`${prefix}0`) ? createHash('sha1').update(readFileSync(`${prefix}0`)).digest('hex') : 'ad-hoc';
-    const expected = ['leaf', 'root'].map((kind) => `identifier "${bundleId}" and certificate ${kind} = H"${releaseCertSha1}"`);
-    if (signer !== releaseCertSha1 || !expected.includes(designated)) {
-      errors.push(`macOS ${arch} helper is not signed with the release certificate ${releaseCertSha1} (signer ${signer}; designated => ${designated})`);
+    const app = path.join(temp, appName);
+    // Compare the exact requirement text: a substring match would pass a crafted requirement with an `or` branch.
+    const shown = spawnSync('/usr/bin/codesign', ['-d', '-vv', '-r-', app], { encoding: 'utf8' });
+    const out = `${shown.stdout}${shown.stderr}`;
+    const designated = out.match(/^(?:# )?designated => (.*)$/m)?.[1]?.trim() ?? '(none)';
+    const team = out.match(/^TeamIdentifier=(.*)$/m)?.[1]?.trim() ?? '(none)';
+    const flags = out.match(/^CodeDirectory .*flags=(\S+)/m)?.[1] ?? '(none)';
+    if (team !== releaseTeamId || designated !== releaseDesignatedRequirement) {
+      errors.push(`macOS ${arch} helper is not signed with the Developer ID of team ${releaseTeamId} (team ${team}; designated => ${designated})`);
     }
+    if (!/runtime/.test(flags)) errors.push(`macOS ${arch} helper lacks the hardened runtime (flags ${flags}); notarization would reject it`);
+    if (!/^Timestamp=/m.test(out)) errors.push(`macOS ${arch} helper has no secure timestamp; notarization would reject it`);
   } catch (error) {
     errors.push(`macOS ${arch} helper archive could not be inspected: ${error.message}`);
   } finally {
