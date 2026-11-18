@@ -183,6 +183,13 @@ try {
     assert.equal(run(['--runtime'], root, { PI_COMPUTER_USE_HELPER_APP_PATH: fresh }).status, 0);
     assert.ok((await fs.readFile(trace, 'utf8')).split('\n').filter(Boolean).every(line => path.basename(JSON.parse(line).command) !== 'tccutil'),
       'repairing a release helper must keep its grants');
+    // A failed reset is retried by the next install, even though the helper is already current.
+    await fs.writeFile(`${fresh}.grant-reset-pending`, '1');
+    await fs.writeFile(trace, '');
+    assert.equal(run(['--runtime'], root, { PI_COMPUTER_USE_HELPER_APP_PATH: fresh }).status, 0);
+    assert.equal((await fs.readFile(trace, 'utf8')).split('\n').filter(Boolean).filter(line => path.basename(JSON.parse(line).command) === 'tccutil').length, 1,
+      'a pending reset must be retried');
+    assert.equal(await fs.access(`${fresh}.grant-reset-pending`).then(() => true, () => false), false, 'a successful retry clears the marker');
   }
   console.log(`PASS ad-hoc helper refused unless PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1${rootReleaseSigned ? '; release helper accepted above; stale grants cleared on a signature change, kept on repair' : ' (release-signed acceptance and grant reset not covered: this package is a local ad-hoc build)'}`);
 } finally {

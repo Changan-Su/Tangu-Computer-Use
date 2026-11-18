@@ -6,7 +6,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { appName, releaseDesignatedRequirement, releaseTeamId } from './macos-bundle.mjs';
+import { appName, isReleaseSigned, releaseDesignatedRequirement, releaseTeamId } from './macos-bundle.mjs';
 
 const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
 const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
@@ -58,7 +58,9 @@ else for (const arch of ['arm64', 'x64']) {
     const designated = out.match(/^(?:# )?designated => (.*)$/m)?.[1]?.trim() ?? '(none)';
     const team = out.match(/^TeamIdentifier=(.*)$/m)?.[1]?.trim() ?? '(none)';
     const flags = out.match(/^CodeDirectory .*flags=(\S+)/m)?.[1] ?? '(none)';
-    if (team !== releaseTeamId || designated !== releaseDesignatedRequirement) {
+    // `codesign -d` only displays; isReleaseSigned verifies the signature against the pinned requirement (an Apple
+    // chain), so a self-signed certificate dressed up with the team OU and a copied requirement text fails here.
+    if (team !== releaseTeamId || designated !== releaseDesignatedRequirement || !isReleaseSigned(app)) {
       errors.push(`macOS ${arch} helper is not signed with the Developer ID of team ${releaseTeamId} (team ${team}; designated => ${designated})`);
     }
     if (!/runtime/.test(flags)) errors.push(`macOS ${arch} helper lacks the hardened runtime (flags ${flags}); notarization would reject it`);

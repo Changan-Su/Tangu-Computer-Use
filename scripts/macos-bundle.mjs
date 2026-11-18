@@ -75,13 +75,17 @@ export function designatedRequirement(app) {
 }
 
 // The grant rows of the previous helper name its requirement; the new one never matches them, and macOS shows the
-// switch on while the helper reads "not granted". Clearing them makes the next request a normal prompt.
-function resetStaleGrants() {
+// switch on while the helper reads "not granted". Clearing them makes the next request a normal prompt. A failed
+// reset leaves a marker next to the app so the next install (even of a current helper) tries again.
+const resetMarker = app => `${app}.grant-reset-pending`;
+async function resetStaleGrants(app) {
   try {
     execFileSync('/usr/bin/tccutil', ['reset', 'All', bundleId], { stdio: 'pipe', timeout: 10_000 });
+    await fs.rm(resetMarker(app), { force: true });
     console.log('[tangu-computer-use] the helper signature changed; cleared its old privacy grants so macOS asks again');
   } catch (error) {
-    console.error(`[tangu-computer-use] the helper signature changed but its old privacy grants could not be cleared: ${error.message}`);
+    await fs.writeFile(resetMarker(app), String(Date.now())).catch(() => {});
+    console.error(`[tangu-computer-use] the helper signature changed but its old privacy grants could not be cleared (will retry): ${error.message}`);
   }
 }
 
@@ -155,7 +159,10 @@ export async function installMacosApp(root, app, { register = true } = {}) {
         try { await fs.rename(next, app); }
         catch (error) { if (movedOld) await fs.rename(old, app); throw error; }
         changed = true;
-        if (previousRequirement && previousRequirement !== designatedRequirement(app)) resetGrants = true;
+        // Only two successfully read, different requirements prove the grant rows are stale; an unreadable one never
+        // erases working grants.
+        const currentRequirement = previousRequirement ? designatedRequirement(app) : null;
+        if (previousRequirement && currentRequirement && previousRequirement !== currentRequirement) resetGrants = true;
       } finally {
         // If rollback itself failed, preserve the previous app for recovery.
         if (!movedOld || existsSync(app)) await fs.rm(staging, { recursive: true, force: true });
@@ -164,7 +171,7 @@ export async function installMacosApp(root, app, { register = true } = {}) {
     if (register) {
       const command = '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister';
       try { execFileSync(command, ['-f', app], { stdio: 'pipe', timeout: 10_000 }); } catch { /* open will register it as well */ }
-      if (resetGrants) resetStaleGrants();
+      if (resetGrants || existsSync(resetMarker(app))) await resetStaleGrants(app);
     }
     return changed;
   });
