@@ -157,6 +157,26 @@ export interface PlatformActRequestBase {
 	pid?: number;
 	target: PlatformActTarget;
 	policy: PlatformDeliveryPolicy;
+	/** Tangu (macOS helper protocol 20): on-screen overlay colour. Defaults to soft blue #2c5f9e; `edge` defaults by the fill's WCAG relative luminance (< 0.28 → #ffffff, else #1c1b1f). */
+	overlayStyle?: PlatformOverlayStyle;
+	/** Tangu (protocol 20): the host's reduce-motion setting. The helper also reads the system setting; either one reduces motion. */
+	reduceMotion?: boolean;
+	/** Tangu (protocol 20): the engine run this action belongs to (`tcx.runId`). Starts / continues the overlay turn. */
+	runId?: string;
+	/** Tangu (protocol 20): default true. false = deliver immediately without waiting for the cursor to arrive. */
+	clickAfterArrival?: boolean;
+}
+
+/** Tangu (protocol 20): `#rrggbb` colours for the macOS overlay (cursor, click rings, edge glow). */
+export interface PlatformOverlayStyle {
+	fill: string;
+	edge?: string;
+}
+
+/** Tangu (protocol 20): helper command that ends an overlay turn. Ignored when `runId` does not match the current turn. */
+export interface HelperOverlayTurnRequest {
+	phase: "end";
+	runId?: string;
 }
 
 export type PlatformActRequest = PlatformActRequestBase & (

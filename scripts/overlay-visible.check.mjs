@@ -287,7 +287,79 @@ try {
   } finally {
     cover.kill()
   }
-  console.log('   (只验证窗口的创建/层级/z 序 —— 画布内容是否真画出了像素,本仪器不覆盖)')
+
+  // ── 第三段(协议 20):带 runId 的一轮里叠层整轮亮着,显式结束后散场。
+  // 真机上跑过(2026-11-14,四份演练包):红了先看打印出来的时间线,再判断是产品还是这段断言。
+  // 前两段的 act 不带 runId,走的是旧时长(光效 2 s、光标 8 s);这里要证的是「带 runId 就不按旧时长熄」。
+  await waitForCleanSlate(hpid, win.windowId)
+  const look3 = await ask({ cmd: 'look', pid: calc.pid, windowId: win.windowId, includeImage: true })
+  const five3 = findNode(look3.outline, (x) => x.role === 'AXButton' && (x.description === '5' || x.title === '5'))
+  assert.ok(five3, '第三段没找到数字键 5')
+  const runId = `overlay-check-${process.pid}`
+  const HOLD_MS = 4200 // 远超旧的 2 s 光效时长,又远不到 45 s 的空闲兜底
+  const GONE_MS = 2500 // 结束后停 1.0 s + 淡出 0.4 s,再留余量
+  const w3 = watch(11)
+  const t0 = Date.now()
+  await sleep(300)
+  // 帧数(diagnostics.overlayFrames):两扇叠层的画布各重画了多少次。窗口在屏上不等于动画在放 ——
+  // 2026-11-14 真机上量到过渡只画了起点那一帧(画布没用到 TimelineView 的时刻,SwiftUI 不逐帧重画)。
+  const frames = async () => (await ask({ cmd: 'diagnostics' })).overlayFrames ?? null
+  const f0 = await frames()
+  await ask({
+    cmd: 'act', lookId: look3.lookId, pid: calc.pid, policy: 'background',
+    cursorOverlay: true, action: 'click', runId,
+    target: { x: five3.rect.x + five3.rect.w / 2, y: five3.rect.y + five3.rect.h / 2 },
+    params: { button: 'left', clickCount: 1 },
+  })
+  const actedAt = Date.now() - t0
+  await sleep(1000) // 出场 / 飞行 / 点击环 / 0.3 s 后退到「在想」的 0.4 s 过渡,都落在这一秒里
+  const f1 = await frames()
+  await sleep(2000) // 这两秒只剩「在想」时的轻摆(30 fps)
+  const f2 = await frames()
+  await sleep(Math.max(0, HOLD_MS - (Date.now() - t0 - actedAt)))
+  const ended = await ask({ cmd: 'overlayTurn', phase: 'end', runId })
+  const endedAt = Date.now() - t0
+  await w3.done
+  assert.equal(ended?.ok, true, 'overlayTurn end 没被接受')
+  const rows3 = w3.frames.map((f) => {
+    const target = f.windows.find((x) => x.windowId === calcWinId)
+    return { t: f.t, ...overlaysIn(f.windows, hpid, target) }
+  })
+  const mark = (o) => (o ? '#' : '·')
+  console.log(`  整轮光标: ${rows3.map((r) => mark(r.cursor)).join('')}`)
+  console.log(`  整轮光效: ${rows3.map((r) => mark(r.glow)).join('')}`)
+  console.log(`             (# 在屏上 ｜ · 不在;act 返回于 ${actedAt}ms,发结束于 ${endedAt}ms,每格约 100ms)`)
+  // 旧时长下光效在 act 之后 2 s 就熄了:取「act 后 3 s 到发结束之前」这一段,必须还亮着。
+  const held = rows3.filter((r) => r.t >= actedAt + 3000 && r.t < endedAt - 100)
+  assert.ok(held.length >= 3, '第三段采样太少,测不出东西')
+  assert.ok(held.every((r) => r.glow), '带 runId 的一轮里边缘光效中途熄了 —— 还在按旧的 2 s 时长走')
+  assert.ok(held.every((r) => r.cursor), '带 runId 的一轮里示意光标中途没了')
+  const gone = rows3.filter((r) => r.t >= endedAt + GONE_MS)
+  assert.ok(gone.length >= 3, '第三段结束后的采样太少,测不出东西')
+  assert.ok(!gone.some((r) => r.cursor || r.glow), `发了结束 ${GONE_MS}ms 之后叠层还在屏上 —— 整轮结束没让它散场`)
+  console.log('✅ 整轮:带 runId 时两个叠层一直亮到显式结束,结束后散场')
+
+  // ── 逐帧重画:过渡期间画布的重画次数要跟得上帧率,不是每次状态变化只画一帧。
+  if (!f0 || !f1 || !f2) {
+    console.log('   (这份 helper 的 diagnostics 没有 overlayFrames,逐帧重画这一条跳过)')
+  } else {
+    const reduce = await execFileP('defaults', ['read', 'com.apple.universalaccess', 'reduceMotion']).then((r) => r.stdout.trim() === '1', () => false)
+    const d = { glowEnter: f1.highlight - f0.highlight, cursorEnter: f1.cursor - f0.cursor, cursorThink: f2.cursor - f1.cursor, glowThink: f2.highlight - f1.highlight }
+    console.log(`  重画次数: 动手后 1 s 内 光效 ${d.glowEnter} / 光标 ${d.cursorEnter};之后在想的 2 s 光标 ${d.cursorThink} / 光效 ${d.glowThink}${reduce ? '(系统开了减少动态效果)' : ''}`)
+    // 光效:亮起 + 0.3 s 后退到在想那一档的 0.4 s 过渡,60 fps 下三十帧上下;不逐帧重画时只有两三帧。
+    assert.ok(d.glowEnter >= 12, `边缘光效的过渡没有逐帧重画(1 s 内只画了 ${d.glowEnter} 帧)—— 屏上看到的会是过渡的起点值`)
+    if (reduce) {
+      console.log('   (系统开了「减少动态效果」:光标不飞行、不摆动,光标的两条跳过)')
+    } else {
+      assert.ok(d.cursorEnter >= 12, `示意光标的出场 / 飞行 / 点击环没有逐帧重画(1 s 内只画了 ${d.cursorEnter} 帧)`)
+      assert.ok(d.cursorThink >= 20, `在想时示意光标没有轻摆(2 s 里只画了 ${d.cursorThink} 帧,30 fps 应当六十帧上下)`)
+    }
+    // 光效退到在想那一档之后就停表,不留常驻重绘。
+    assert.ok(d.glowThink <= 6, `边缘光效静止时还在重画(2 s 里 ${d.glowThink} 帧)—— 过渡放完没有停表`)
+    console.log('✅ 逐帧重画:过渡在按帧率画,静止时停表')
+  }
+
+  console.log('   (只验证窗口的创建/层级/z 序与重画次数 —— 画布内容是否真画出了像素,本仪器不覆盖)')
 } finally {
   await killCalculator(ask).catch(() => {})
   fs.rmSync(probeBin, { force: true })

@@ -24,6 +24,7 @@ import { isSupportedPlatform } from './helperState.ts';
 import { autoInstallFailed, ensureHelperCurrent, guideMissingPermissions } from './onboarding.ts';
 import { executionNote, expectNote, foregroundNote, goneHint, imageNote, noRootsHint, scrollNote, selfWindowNote } from './foregroundNote.ts';
 import { runJev, parseJevArgs } from './jevRun.ts';
+import { watchRunAbort, withOverlayRun } from './overlayState.ts';
 
 const execFileP = promisify(execFile);
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -359,7 +360,11 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
     isEnabledFor: gate(spec),
     capabilities: { sideEffect: spec.sideEffect, parallel: false, concurrencyKey: 'computer-use', defaultTimeoutMs: spec.timeoutMs, approval: spec.approval },
     definition: { type: 'function', function: { name: spec.name, description: spec.description, parameters: spec.parameters } },
-    execute: async (args: Record<string, any>, tcx: ToolContext): Promise<string> => {
+    // 叠层(helper 协议 20):这次调用里发出的每条 act / actBatch 都带这一轮的 runId(AsyncLocalStorage,见 overlayState.ts);
+    // 这一轮被中止时尽力发一次 overlayTurn end(工具自己超时不算;返回时摘掉监听)。工具说明和结果文字不受影响。
+    execute: (args: Record<string, any>, tcx: ToolContext): Promise<string> => withOverlayRun(tcx.runId, async (): Promise<string> => {
+      const unwatch = watchRunAbort(tcx.runId, tcx.signal, undefined, undefined, { timeoutMs: spec.timeoutMs });
+      try { return await (async (): Promise<string> => {
       if (spec.jevOnly) {
         if (!gate(spec)({ capabilities: { hostExec: tcx.execMode !== 'sandbox' } } as AppProfile)) return 'Jev is disabled or unavailable on this platform.';
         parseJevArgs(args);
@@ -394,7 +399,8 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
         throw e;
       }
       return prefix + presentLiveViewOnce(spec.name, tcx, render(result, tcx, args));
-    },
+      })(); } finally { unwatch(); }
+    }),
   });
 
   return { id: 'plugin:computer-use', tools: () => SPECS.map(toTool) };

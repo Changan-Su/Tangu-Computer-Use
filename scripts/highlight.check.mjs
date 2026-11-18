@@ -22,6 +22,10 @@ try {
     '-module-cache-path', path.join(os.tmpdir(), `tangu-cu-highlight-test-cache-${process.arch}`),
     '-framework', 'AppKit',
     '-framework', 'SwiftUI',
+    // agent_highlight.swift 的配色 / 不透明度 / 画法在这三个纯文件里(协议 20)。
+    'native/macos/agent_cursor_motion.swift',
+    'native/macos/agent_overlay_model.swift',
+    'native/macos/agent_overlay_paint.swift',
     'native/macos/agent_highlight.swift',
     'native/macos/agent_highlight_tests.swift',
     '-o', binary,

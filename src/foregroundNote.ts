@@ -22,6 +22,7 @@ interface ExecStep {
   performed?: { delivery?: string; grounding?: string; verification?: string };
   accessibilityPress?: boolean;
   pressUnconfirmed?: string;
+  pressConfirmed?: boolean;
   earlierPressTookEffect?: string;
   escalatedToForeground?: boolean;
   escalationReason?: string;
@@ -43,6 +44,7 @@ export function executionSummary(details: unknown) {
     policy: s.deliveryPolicy ?? 'unknown',
     accessibilityPress: s.accessibilityPress || undefined,
     pressUnconfirmed: s.pressUnconfirmed || undefined,
+    pressConfirmed: s.pressConfirmed || undefined,
     grounding: s.performed?.grounding,
     verification: s.performed?.verification,
     error: s.error ? { code: s.error.code, message: s.error.message?.slice(0, 384) } : undefined,
@@ -52,9 +54,13 @@ export function executionSummary(details: unknown) {
     error: exec.error ? { code: exec.error.code, message: exec.error.message?.slice(0, 384) } : undefined };
 }
 
-function accessibilityPressNote(steps: Array<{ accessibilityPress?: boolean; pressUnconfirmed?: string }>): string {
+function accessibilityPressNote(steps: Array<{ accessibilityPress?: boolean; pressUnconfirmed?: string; pressConfirmed?: boolean }>): string {
   const unconfirmed = steps.find((s) => s.pressUnconfirmed)?.pressUnconfirmed;
-  if (!unconfirmed) return steps.some((s) => s.accessibilityPress) ? 'This press went through accessibility, in the background. If the returned state shows it changed nothing, press the same element again: the repeat goes out as a real click and takes the foreground.\n' : '';
+  // 页面上看得到这一下起了作用(不只是焦点移过去):bridge 已经不把「再按同一个」当重试,下一下还是后台按下。
+  // 这时不能再说「再按一次就是真实点击」——那句只在没看到效果时成立。
+  if (!unconfirmed && steps.some((s) => s.pressConfirmed)) return 'This press went through accessibility, in the background, and the page changed after it. Pressing the same element again is a new press: it also goes through accessibility and stays in the background.\n';
+  // 没看到效果(只有焦点移过去):再按同一个就是真实点击——前提是到那时页面还是没变;变了说明上一下已经生效(只是慢),再按算新的一下。
+  if (!unconfirmed) return steps.some((s) => s.accessibilityPress) ? 'This press went through accessibility, in the background. If the returned state shows it changed nothing, press the same element again: while the page still shows no change, the repeat goes out as a real click and takes the foreground.\n' : '';
   // 页面读之前已经问过(helper 的 webFlush),窗口也提上来过:到这里还没变化,是没生效还是界面没刷新分不出来。
   // 只叫模型看,不叫它再按;它真要再按同一个元素,bridge 会先比窗口变没变(earlierPressTookEffect)。
   const sent = 'This press was sent through accessibility and nothing in the page has changed yet. That does NOT mean it failed: the interface may not have refreshed. Do not press again now.';

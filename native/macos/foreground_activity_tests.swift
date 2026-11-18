@@ -27,5 +27,17 @@ import Foundation
         activity.enter(); activity.leave()
         check(try snapshot()["expiresAt"] as? Double == 1550, "later background action never renews it")
         check(try snapshot()["helperPid"] as? Int == Int(ProcessInfo.processInfo.processIdentifier), "reader can detect dead helper")
+        now = 3000
+        activity.tookForeground()
+        check(try snapshot()["active"] as? Bool == true && snapshot()["expiresAt"] as? Double == 4000 && snapshot()["updatedAt"] as? Double == 3000, "raising an app without input leaves a one-second lease")
+        activity.enter(); activity.leave()
+        check(try snapshot()["expiresAt"] as? Double == 4000, "a later background action neither renews nor cuts it")
+        now = 3500
+        activity.enter(); activity.physicalInput()
+        now = 3600
+        activity.tookForeground()
+        check(try snapshot()["active"] as? Bool == true && snapshot()["expiresAt"] as? Double == 6000, "a raise during input does not shorten the input lease")
+        activity.leave()
+        check(try snapshot()["active"] as? Bool == false && snapshot()["expiresAt"] as? Double == 3950, "input after a raise ends the usual way")
     }
 }

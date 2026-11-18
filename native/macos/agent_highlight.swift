@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 
 /// 被操控窗口的边缘光效(Tangu 新增,非上游)。
@@ -9,8 +10,9 @@ import SwiftUI
 /// 三条纪律:
 ///  1. **绝不抢焦点、绝不吃事件** —— canBecomeKey=false + ignoresMouseEvents,与 AgentCursor 同款。
 ///     否则「后台操控」这个前提就没了。
-///  2. **静态绘制,不做动画** —— 上游刚修过「光标空闲期一直重绘」(c089b30/5943c16)。呼吸灯要 120fps
-///     的 TimelineView 常驻跑,代价是操控期间一直烧 GPU。这里只画一圈静态辉光,只有几何真变了才重绘。
+///  2. **不做常驻动画** —— 上游刚修过「光标空闲期一直重绘」(c089b30/5943c16)。不做呼吸灯;只有亮起 0.2 s、
+///     在想时降到 0.45(0.4 s)、淡出 0.4 s 这几段过渡期间才重绘,放完就停(协议 20)。不透明度画在内容上、
+///     不动窗口的 alphaValue:check:overlay 只把 alpha > 0.5 的窗口算可见,0.45 那档用窗口 alpha 会被判成没光效。
 ///  3. **跟随窗口**:可见期间自己跑一个 8Hz 的 timer 拉 CGWindowList 的矩形(同步、便宜),几何没变
 ///     就什么都不做。窗口没了(拿不到矩形)直接熄灯。
 
@@ -51,8 +53,13 @@ final class AgentHighlight {
     /// 光效外扩多少点(辉光要向外晕开,覆盖层比目标窗口大一圈)。
     private static let pad: CGFloat = 12
 
+    /// 画法的状态(配色 + 不透明度过渡),SwiftUI 那边读它。
+    let model = AgentHighlightModel()
+
     /// 点亮 / 续期(每次 act 调一次)。窗口矩形现查现用,调用方不必提供。
-    func show(windowId: UInt32, linger: TimeInterval = highlightLingerSeconds) {
+    /// turn = true(整轮模式):不按 linger 熄,亮度由 AgentOverlayTurn 按「动手 / 在想 / 结束」来定。
+    /// turn = false(旧调用方,没有 runId):亮起 0.2 s,最后一次动作后 linger 秒淡出 0.4 s(以前是硬切)。
+    func show(windowId: UInt32, turn: Bool = false, linger: TimeInterval = highlightLingerSeconds, now: Double = OverlayClock.now()) {
         guard let cgFrame = cgWindowBounds(windowId: windowId) else {
             // 新目标定位不到(窗口刚关、或是没有 CG 窗口的菜单根)。**不能默默返回** ——
             // 那会把光效留在上一个窗口上直到它自己的 linger 到期,等于指着错的窗口说"正在操作这里"。
@@ -60,16 +67,41 @@ final class AgentHighlight {
             return
         }
         place(windowId: windowId, cgFrame: cgFrame)
+        setLevel(HighlightScene.actingLevel, duration: HighlightScene.riseDuration, now: now)
 
         generation &+= 1
         let mine = generation
         hideTask?.cancel()
+        hideTask = nil
+        if !turn {
+            hideTask = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(linger))
+                guard !Task.isCancelled, mine == self.generation else { return }
+                self.fadeOut()
+            }
+        }
+        startFollowing()
+    }
+
+    /// 动手 1.0 / 在想 0.45。只在光效亮着时有意义。
+    func setLevel(_ level: Double, duration: Double, now: Double = OverlayClock.now()) {
+        guard overlay != nil else { return }
+        model.update(now: now) { $0.level.set(level, at: now, duration: duration) }
+    }
+
+    /// 淡出 0.4 s,放完再收窗口(期间又来一次 show 就接着亮)。
+    func fadeOut(now: Double = OverlayClock.now()) {
+        guard overlay != nil else { return }
+        generation &+= 1
+        let mine = generation
+        hideTask?.cancel()
+        model.update(now: now) { $0.level.set(0, at: now, duration: HighlightScene.fadeDuration) }
+        let delay = max(0, model.scene.level.end - now) + 0.05
         hideTask = Task { @MainActor in
-            try? await Task.sleep(for: .seconds(linger))
+            try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, mine == self.generation else { return }
             self.hide()
         }
-        startFollowing()
     }
 
     func hide() {
@@ -80,6 +112,7 @@ final class AgentHighlight {
         generation &+= 1
         currentWindowId = 0
         currentFrame = .zero
+        model.reset()
         guard let window = overlay else { return }
         window.orderOut(nil)
         window.contentView = nil
@@ -136,7 +169,7 @@ final class AgentHighlight {
             backing: .buffered,
             defer: false
         )
-        window.contentView = NSHostingView(rootView: HighlightView(inset: AgentHighlight.pad))
+        window.contentView = NSHostingView(rootView: HighlightView(inset: AgentHighlight.pad, model: model))
         overlay = window
         return window
     }
@@ -222,30 +255,64 @@ private final class HighlightOverlayWindow: NSWindow {
     }
 }
 
-/// 静态辉光边框:由外到内几道圆角描边,越外越淡 —— 一次绘制,不动画。
-/// 颜色与 AgentCursor 同源(#FF7818),视觉上是同一个"agent 正在动手"的信号。
+/// 边缘光的状态(主线程):配色 + 不透明度过渡。过渡期间才让 TimelineView 跑,放完就停。
+@Observable
+@MainActor
+final class AgentHighlightModel {
+    private(set) var scene = HighlightScene()
+    var palette = OverlayPalette.standard
+    private(set) var isAnimating = false
+
+    @ObservationIgnored private var settleTask: Task<Void, Never>?
+    @ObservationIgnored private var settleGeneration: UInt = 0
+
+    func update(now: Double = OverlayClock.now(), _ change: (inout HighlightScene) -> Void) {
+        var next = scene
+        change(&next)
+        scene = next
+        let end = scene.level.end
+        isAnimating = end > now
+        settleGeneration &+= 1
+        settleTask?.cancel()
+        settleTask = nil
+        guard end > now else { return }
+        let generation = settleGeneration
+        settleTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(end - now + 0.02))
+            guard !Task.isCancelled, let self, generation == self.settleGeneration else { return }
+            self.isAnimating = false
+        }
+    }
+
+    func reset() {
+        settleGeneration &+= 1
+        settleTask?.cancel()
+        settleTask = nil
+        scene = HighlightScene()
+        isAnimating = false
+    }
+}
+
+/// 辉光边框:由外到内几道圆角描边,越外越淡(画法在 OverlayPaint.drawHighlight,和离屏测试同一份)。
+/// 颜色跟配色走(缺省柔蓝),和示意光标同源,视觉上是同一个"agent 正在动手"的信号。
 private struct HighlightView: View {
     let inset: CGFloat
-
-    private static let accent = Color(red: 1, green: 0x78 / 255, blue: 0x18 / 255)
-    /// (相对边框中心线的外扩量, 线宽, 不透明度)
-    private static let rings: [(CGFloat, CGFloat, Double)] = [
-        (7, 10, 0.10),
-        (3.5, 7, 0.22),
-        (0, 3, 0.85),
-    ]
+    let model: AgentHighlightModel
 
     var body: some View {
-        Canvas { graphics, size in
-            let base = CGRect(x: inset, y: inset, width: max(0, size.width - inset * 2), height: max(0, size.height - inset * 2))
-            guard base.width > 2, base.height > 2 else { return }
-            for (spread, width, opacity) in HighlightView.rings {
-                let rect = base.insetBy(dx: -spread, dy: -spread)
-                let path = Path(roundedRect: rect, cornerRadius: 12 + spread)
-                graphics.stroke(path, with: .color(HighlightView.accent.opacity(opacity)), lineWidth: width)
+        let scene = model.scene
+        let palette = model.palette
+        // ⚠️Canvas 里必须用到 timeline 的时刻(OverlayFrameBeat.mark),否则 SwiftUI 不逐帧重画,见 OverlayFrameBeat。
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: !model.isAnimating)) { timeline in
+            Canvas { graphics, size in
+                OverlayFrameBeat.highlight.mark(timeline.date)
+                let opacity = scene.opacity(at: OverlayClock.now())
+                graphics.withCGContext { ctx in
+                    OverlayPaint.drawHighlight(ctx, size: size, inset: inset, palette: palette, opacity: opacity)
+                }
             }
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
         }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
     }
 }

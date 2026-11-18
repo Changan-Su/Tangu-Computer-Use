@@ -1,0 +1,373 @@
+{
+  "_note": "过程行句子的全量快照:fixtures/tool-calls.json 的每条调用 × running / done / error × zh / en(null = 返回空,宿主照旧显示)。改了句式就重新生成并逐行看一遍差异。图标见 check.mjs。",
+  "labels": {
+    "find": {
+      "running.zh": "正在查找 Chatter 的窗口",
+      "running.en": "Finding Chatter windows",
+      "done.zh": "已找到 Chatter 的窗口",
+      "done.en": "Found Chatter windows",
+      "error.zh": "没能找到 Chatter 的窗口",
+      "error.en": "Couldn't find Chatter windows"
+    },
+    "observe": {
+      "running.zh": "正在查看 Chatter",
+      "running.en": "Looking at Chatter",
+      "done.zh": "已查看 Chatter",
+      "done.en": "Looked at Chatter",
+      "error.zh": "没能查看 Chatter",
+      "error.en": "Couldn't look at Chatter"
+    },
+    "clickRow": {
+      "running.zh": "正在 Chatter 中点击「Zhang San」",
+      "running.en": "Clicking “Zhang San” in Chatter",
+      "done.zh": "已在 Chatter 中点击「Zhang San」",
+      "done.en": "Clicked “Zhang San” in Chatter",
+      "error.zh": "没能在 Chatter 中点击「Zhang San」",
+      "error.en": "Couldn't click “Zhang San” in Chatter"
+    },
+    "setText": {
+      "running.zh": "正在 Chatter 中输入「See you tomorrow」",
+      "running.en": "Typing “See you tomorrow” in Chatter",
+      "done.zh": "已在 Chatter 中输入「See you tomorrow」",
+      "done.en": "Typed “See you tomorrow” in Chatter",
+      "error.zh": "没能在 Chatter 中输入「See you tomorrow」",
+      "error.en": "Couldn't type “See you tomorrow” in Chatter"
+    },
+    "pressSend": {
+      "running.zh": "正在 Chatter 中点击「Send」",
+      "running.en": "Clicking “Send” in Chatter",
+      "done.zh": "已在 Chatter 中点击「Send」",
+      "done.en": "Clicked “Send” in Chatter",
+      "error.zh": "没能在 Chatter 中点击「Send」",
+      "error.en": "Couldn't click “Send” in Chatter"
+    },
+    "batch": {
+      "running.zh": "正在 Chatter 中点击「Message」",
+      "running.en": "Clicking “Message” in Chatter",
+      "done.zh": "已在 Chatter 中按下 Return(共 3 步)",
+      "done.en": "Pressed Return in Chatter (3 steps)",
+      "error.zh": "没能在 Chatter 中完成这些操作",
+      "error.en": "Couldn't finish the actions in Chatter"
+    },
+    "stopped": {
+      "running.zh": "正在 Chatter 中点击「Send」",
+      "running.en": "Clicking “Send” in Chatter",
+      "done.zh": "没能在 Chatter 中点击(第 2 步,共 2 步)",
+      "done.en": "Couldn't click in Chatter (step 2 of 2)",
+      "error.zh": "没能在 Chatter 中完成这些操作",
+      "error.en": "Couldn't finish the actions in Chatter"
+    },
+    "lost": {
+      "running.zh": "正在 Chatter 中点击「Send」",
+      "running.en": "Clicking “Send” in Chatter",
+      "done.zh": "没能在 Chatter 中点击「Send」",
+      "done.en": "Couldn't click “Send” in Chatter",
+      "error.zh": "没能在 Chatter 中点击「Send」",
+      "error.en": "Couldn't click “Send” in Chatter"
+    },
+    "delivered": {
+      "running.zh": "正在 Chatter 中点击「Zhang San」",
+      "running.en": "Clicking “Zhang San” in Chatter",
+      "done.zh": "已在 Chatter 中按下 Cmd+W(共 2 步)",
+      "done.en": "Pressed Cmd+W in Chatter (2 steps)",
+      "error.zh": "没能在 Chatter 中完成这些操作",
+      "error.en": "Couldn't finish the actions in Chatter"
+    },
+    "unknownDone": {
+      "running.zh": "正在 Chatter 中点击「Send」",
+      "running.en": "Clicking “Send” in Chatter",
+      "done.zh": null,
+      "done.en": null,
+      "error.zh": "没能在 Chatter 中点击「Send」",
+      "error.en": "Couldn't click “Send” in Chatter"
+    },
+    "search": {
+      "running.zh": "正在 Chatter 中查找「Send」",
+      "running.en": "Searching for “Send” in Chatter",
+      "done.zh": "已在 Chatter 中查找「Send」",
+      "done.en": "Searched for “Send” in Chatter",
+      "error.zh": "没能在 Chatter 中查找「Send」",
+      "error.en": "Couldn't search for “Send” in Chatter"
+    },
+    "inspect": {
+      "running.zh": "正在 Chatter 中查看「Send」",
+      "running.en": "Looking at “Send” in Chatter",
+      "done.zh": "已在 Chatter 中查看「Send」",
+      "done.en": "Looked at “Send” in Chatter",
+      "error.zh": "没能在 Chatter 中查看「Send」",
+      "error.en": "Couldn't look at “Send” in Chatter"
+    },
+    "scroll": {
+      "running.zh": "正在 Chatter 中滚动「Conversation」",
+      "running.en": "Scrolling “Conversation” in Chatter",
+      "done.zh": "已在 Chatter 中滚动「Conversation」",
+      "done.en": "Scrolled “Conversation” in Chatter",
+      "error.zh": "没能在 Chatter 中滚动「Conversation」",
+      "error.en": "Couldn't scroll “Conversation” in Chatter"
+    },
+    "keys": {
+      "running.zh": "正在 Chatter 中按下 Cmd+A",
+      "running.en": "Pressing Cmd+A in Chatter",
+      "done.zh": "已在 Chatter 中按下 Cmd+A",
+      "done.en": "Pressed Cmd+A in Chatter",
+      "error.zh": "没能在 Chatter 中按下 Cmd+A",
+      "error.en": "Couldn't press Cmd+A in Chatter"
+    },
+    "rightClickXY": {
+      "running.zh": "正在 Chatter 中右键点击",
+      "running.en": "Right-clicking in Chatter",
+      "done.zh": "已在 Chatter 中右键点击",
+      "done.en": "Right-clicked in Chatter",
+      "error.zh": "没能在 Chatter 中右键点击",
+      "error.en": "Couldn't right-click in Chatter"
+    },
+    "doubleClick": {
+      "running.zh": "正在 Chatter 中双击「Zhang San」",
+      "running.en": "Double-clicking “Zhang San” in Chatter",
+      "done.zh": "已在 Chatter 中双击「Zhang San」",
+      "done.en": "Double-clicked “Zhang San” in Chatter",
+      "error.zh": "没能在 Chatter 中双击「Zhang San」",
+      "error.en": "Couldn't double-click “Zhang San” in Chatter"
+    },
+    "drag": {
+      "running.zh": "正在 Chatter 中拖动",
+      "running.en": "Dragging in Chatter",
+      "done.zh": "已在 Chatter 中拖动",
+      "done.en": "Dragged in Chatter",
+      "error.zh": "没能在 Chatter 中拖动",
+      "error.en": "Couldn't drag in Chatter"
+    },
+    "move": {
+      "running.zh": "正在 Chatter 中移动指针",
+      "running.en": "Moving the pointer in Chatter",
+      "done.zh": "已在 Chatter 中移动指针",
+      "done.en": "Moved the pointer in Chatter",
+      "error.zh": "没能在 Chatter 中移动指针",
+      "error.en": "Couldn't move the pointer in Chatter"
+    },
+    "clear": {
+      "running.zh": "正在 Chatter 中清空「Message」",
+      "running.en": "Clearing “Message” in Chatter",
+      "done.zh": "已在 Chatter 中清空「Message」",
+      "done.en": "Cleared “Message” in Chatter",
+      "error.zh": "没能在 Chatter 中清空「Message」",
+      "error.en": "Couldn't clear “Message” in Chatter"
+    },
+    "waitFor": {
+      "running.zh": "正在 Chatter 中等待「Delivered」",
+      "running.en": "Waiting for “Delivered” in Chatter",
+      "done.zh": "已在 Chatter 中等到「Delivered」",
+      "done.en": "Waited for “Delivered” in Chatter",
+      "error.zh": "没能在 Chatter 中等到「Delivered」",
+      "error.en": "Couldn't wait for “Delivered” in Chatter"
+    },
+    "waitGone": {
+      "running.zh": "正在 Chatter 中等待「See you tomorrow」消失",
+      "running.en": "Waiting for “See you tomorrow” to disappear in Chatter",
+      "done.zh": "已在 Chatter 中等到「See you tomorrow」消失",
+      "done.en": "Waited for “See you tomorrow” to disappear in Chatter",
+      "error.zh": "没能在 Chatter 中等到「See you tomorrow」消失",
+      "error.en": "Couldn't wait for “See you tomorrow” to disappear in Chatter"
+    },
+    "waitTimeout": {
+      "running.zh": "正在 Chatter 中等待「Read」",
+      "running.en": "Waiting for “Read” in Chatter",
+      "done.zh": "没能在 Chatter 中等到「Read」",
+      "done.en": "Couldn't wait for “Read” in Chatter",
+      "error.zh": "没能在 Chatter 中等到「Read」",
+      "error.en": "Couldn't wait for “Read” in Chatter"
+    },
+    "readText": {
+      "running.zh": "正在 Chatter 中读取「See you tomorrow」",
+      "running.en": "Reading “See you tomorrow” in Chatter",
+      "done.zh": "已在 Chatter 中读取「See you tomorrow」",
+      "done.en": "Read “See you tomorrow” in Chatter",
+      "error.zh": "没能在 Chatter 中读取「See you tomorrow」",
+      "error.en": "Couldn't read “See you tomorrow” in Chatter"
+    },
+    "readMore": {
+      "running.zh": "正在读取后续输出",
+      "running.en": "Reading more of the output",
+      "done.zh": "已读取后续输出",
+      "done.en": "Read more of the output",
+      "error.zh": "没能读取后续输出",
+      "error.en": "Couldn't read more of the output"
+    },
+    "expand": {
+      "running.zh": "正在 Chatter 中查看界面元素",
+      "running.en": "Looking at an element in Chatter",
+      "done.zh": "已在 Chatter 中查看界面元素",
+      "done.en": "Looked at an element in Chatter",
+      "error.zh": "没能在 Chatter 中查看界面元素",
+      "error.en": "Couldn't look at an element in Chatter"
+    },
+    "jev": {
+      "running.zh": "正在 Chatter 中点击「Zhang San」",
+      "running.en": "Clicking “Zhang San” in Chatter",
+      "done.zh": "已在 Chatter 中点击「Send」(共 3 步)",
+      "done.en": "Clicked “Send” in Chatter (3 steps)",
+      "error.zh": "没能在 Chatter 中完成这些操作",
+      "error.en": "Couldn't finish the actions in Chatter"
+    },
+    "jevStopped": {
+      "running.zh": "正在 Chatter 中点击「Zhang San」",
+      "running.en": "Clicking “Zhang San” in Chatter",
+      "done.zh": "没能在 Chatter 中点击「Pinned files」(第 2 步,共 2 步)",
+      "done.en": "Couldn't click “Pinned files” in Chatter (step 2 of 2)",
+      "error.zh": "没能在 Chatter 中完成这些操作",
+      "error.en": "Couldn't finish the actions in Chatter"
+    },
+    "jevPreview": {
+      "running.zh": "正在 Chatter 中定位「Send」",
+      "running.en": "Locating “Send” in Chatter",
+      "done.zh": "已在 Chatter 中定位「Send」",
+      "done.en": "Located “Send” in Chatter",
+      "error.zh": "没能在 Chatter 中定位「Send」",
+      "error.en": "Couldn't locate “Send” in Chatter"
+    },
+    "ensure": {
+      "running.zh": "正在打开 Notes",
+      "running.en": "Opening Notes",
+      "done.zh": "已打开 Notes",
+      "done.en": "Opened Notes",
+      "error.zh": "没能打开 Notes",
+      "error.en": "Couldn't open Notes"
+    },
+    "observeFront": {
+      "running.zh": "正在查看屏幕",
+      "running.en": "Looking at the screen",
+      "done.zh": "已查看微信",
+      "done.en": "Looked at 微信",
+      "error.zh": "没能查看屏幕",
+      "error.en": "Couldn't look at the screen"
+    },
+    "wechatSend": {
+      "running.zh": "正在微信中点击「发送」",
+      "running.en": "Clicking “发送” in 微信",
+      "done.zh": "已在微信中点击「发送」",
+      "done.en": "Clicked “发送” in 微信",
+      "error.zh": "没能在微信中点击「发送」",
+      "error.en": "Couldn't click “发送” in 微信"
+    },
+    "findNone": {
+      "running.zh": "正在查找 Calculator 的窗口",
+      "running.en": "Finding Calculator windows",
+      "done.zh": "没有找到 Calculator 的窗口",
+      "done.en": "Found no Calculator windows",
+      "error.zh": "没能找到 Calculator 的窗口",
+      "error.en": "Couldn't find Calculator windows"
+    },
+    "launch": {
+      "running.zh": "正在打开 example.com",
+      "running.en": "Opening example.com",
+      "done.zh": "已打开 example.com",
+      "done.en": "Opened example.com",
+      "error.zh": "没能打开 example.com",
+      "error.en": "Couldn't open example.com"
+    },
+    "browserAct": {
+      "running.zh": "正在点击「Sign in」",
+      "running.en": "Clicking “Sign in”",
+      "done.zh": "已点击「Sign in」",
+      "done.en": "Clicked “Sign in”",
+      "error.zh": "没能点击「Sign in」",
+      "error.en": "Couldn't click “Sign in”"
+    },
+    "navigate": {
+      "running.zh": "正在打开 forum.example.org",
+      "running.en": "Opening forum.example.org",
+      "done.zh": "已打开 forum.example.org",
+      "done.en": "Opened forum.example.org",
+      "error.zh": "没能打开 forum.example.org",
+      "error.en": "Couldn't open forum.example.org"
+    },
+    "evaluate": {
+      "running.zh": "正在读取网页内容",
+      "running.en": "Reading the page",
+      "done.zh": "已读取网页内容",
+      "done.en": "Read the page",
+      "error.zh": "没能读取网页内容",
+      "error.en": "Couldn't read the page"
+    },
+    "postcondition": {
+      "running.zh": "正在 Chatter 中点击「Send」",
+      "running.en": "Clicking “Send” in Chatter",
+      "done.zh": "没能在 Chatter 中点击「Send」",
+      "done.en": "Couldn't click “Send” in Chatter",
+      "error.zh": "没能在 Chatter 中点击「Send」",
+      "error.en": "Couldn't click “Send” in Chatter"
+    },
+    "stepError": {
+      "running.zh": "正在 Chatter 中点击「Zhang San」",
+      "running.en": "Clicking “Zhang San” in Chatter",
+      "done.zh": "没能在 Chatter 中点击「Send」(第 2 步,共 2 步)",
+      "done.en": "Couldn't click “Send” in Chatter (step 2 of 2)",
+      "error.zh": "没能在 Chatter 中完成这些操作",
+      "error.en": "Couldn't finish the actions in Chatter"
+    },
+    "didnt": {
+      "running.zh": "正在 Chatter 中点击「Send」",
+      "running.en": "Clicking “Send” in Chatter",
+      "done.zh": "已在 Chatter 中点击「Send」",
+      "done.en": "Clicked “Send” in Chatter",
+      "error.zh": "没能在 Chatter 中点击「Send」",
+      "error.en": "Couldn't click “Send” in Chatter"
+    },
+    "earlierPress": {
+      "running.zh": "正在 Chatter 中点击「Send」",
+      "running.en": "Clicking “Send” in Chatter",
+      "done.zh": null,
+      "done.en": null,
+      "error.zh": "没能在 Chatter 中点击「Send」",
+      "error.en": "Couldn't click “Send” in Chatter"
+    },
+    "renamed": {
+      "running.zh": "正在 Chatter 中点击「Zhang San」",
+      "running.en": "Clicking “Zhang San” in Chatter",
+      "done.zh": "已在 Chatter 中点击「Zhang San」",
+      "done.en": "Clicked “Zhang San” in Chatter",
+      "error.zh": "没能在 Chatter 中点击「Zhang San」",
+      "error.en": "Couldn't click “Zhang San” in Chatter"
+    },
+    "pressRenamed": {
+      "running.zh": "正在 Chatter 中点击「Pause」",
+      "running.en": "Clicking “Pause” in Chatter",
+      "done.zh": "已在 Chatter 中点击「Pause」",
+      "done.en": "Clicked “Pause” in Chatter",
+      "error.zh": "没能在 Chatter 中点击「Pause」",
+      "error.en": "Couldn't click “Pause” in Chatter"
+    },
+    "notReadyObserve": {
+      "running.zh": "正在查看屏幕",
+      "running.en": "Looking at the screen",
+      "done.zh": "没能查看屏幕",
+      "done.en": "Couldn't look at the screen",
+      "error.zh": "没能查看屏幕",
+      "error.en": "Couldn't look at the screen"
+    },
+    "notReadyAct": {
+      "running.zh": "正在 Chatter 中点击「Send」",
+      "running.en": "Clicking “Send” in Chatter",
+      "done.zh": "没能在 Chatter 中点击「Send」",
+      "done.en": "Couldn't click “Send” in Chatter",
+      "error.zh": "没能在 Chatter 中点击「Send」",
+      "error.en": "Couldn't click “Send” in Chatter"
+    },
+    "notReadyRead": {
+      "running.zh": "正在 Chatter 中读取「See you tomorrow」",
+      "running.en": "Reading “See you tomorrow” in Chatter",
+      "done.zh": "没能在 Chatter 中读取「See you tomorrow」",
+      "done.en": "Couldn't read “See you tomorrow” in Chatter",
+      "error.zh": "没能在 Chatter 中读取「See you tomorrow」",
+      "error.en": "Couldn't read “See you tomorrow” in Chatter"
+    },
+    "ensureNoWindow": {
+      "running.zh": "正在打开 Notes",
+      "running.en": "Opening Notes",
+      "done.zh": null,
+      "done.en": null,
+      "error.zh": "没能打开 Notes",
+      "error.en": "Couldn't open Notes"
+    }
+  }
+}

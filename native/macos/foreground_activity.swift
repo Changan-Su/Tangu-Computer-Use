@@ -33,6 +33,16 @@ final class ForegroundActivity {
         active = true
         publish(active: true, until: now() + 2500)
     }
+    /// The helper is about to put another app in front without physical input (bringing a covered web page forward so
+    /// it reports and repaints). Desktop has to know the screen was taken, the same as for a real click: it shows the
+    /// conversation while the run goes on and hands Forsion back when it ends. One second and not the 350ms a finished
+    /// click leaves: activation is asynchronous, and Desktop only acts on a lease it reads after its own window lost
+    /// focus. Not renewed by the heartbeat; while input is in progress the longer lease already says so.
+    func tookForeground() {
+        lock.lock(); defer { lock.unlock() }
+        guard !active else { return }
+        publish(active: true, until: now() + 1000)
+    }
     func leave() {
         lock.lock(); defer { lock.unlock() }
         depth = max(0, depth - 1)

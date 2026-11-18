@@ -60,6 +60,8 @@ interface ExecutionTrace {
 	accessibilityPress?: boolean;
 	/** Forsion patch. This press showed no change in the page: "current_screenshot" after its window was brought forward, "no_screenshot" when it could not be. */
 	pressUnconfirmed?: "current_screenshot" | "no_screenshot";
+	/** Forsion patch. The page showed this press acting (more than focus moving onto the element), so pressing the element again is a new press and stays in the background. */
+	pressConfirmed?: boolean;
 	/** Forsion patch. Nothing was sent, once: this element's earlier press showed no change, and the window has moved since (the page's tree, or the picture around the element). */
 	earlierPressTookEffect?: "tree" | "picture";
 	escalatedToForeground?: boolean;
@@ -1219,10 +1221,43 @@ const backgroundPointerMisses = new Map<string, number>();
  * that did nothing, and replaying it could submit twice, so nothing is retried here: the press stays one press, and the
  * model pressing the same element again is what sends a real click. That click stays the route for the element until
  * another one is pressed.
- * ponytail: "same element" does not look at whether the screen changed, so a stepper pressed repeatedly goes to the
- * foreground from its second press, as every web click did before this. Compare outlines if that matters.
+ * Forgotten again once the page shows the press acting: then the same element pressed again is a new press, not a
+ * retry, and goes out through accessibility like the first. Without that a stepper, a "next page" or an "add" button
+ * took the foreground from its second press on (real machine 11-14: presses of one button moved the real pointer and
+ * raised the window). Two places forget it, both in performDesktopTransaction:
+ * - right after the press, when its own result shows the page changed (pressConfirmed);
+ * - when the model presses the element again and the page it is looking at differs from the one before that press
+ *   (pressBaseline), which covers a page that answers late and a call that could not read the page back.
+ * "Changed" is webContentChanged(..., { effectOnly: true }), or a window appearing or closing. An AXPress puts focus on
+ * its element whether or not anything happens, so focus alone keeps the old rule: the repeat is the real click.
+ * Only a call whose actions are all presses of that one element is judged this way: a single press, or the same element
+ * pressed several times in a row, which all go the way the first went (`pressedInCall` at helperAct). With anything
+ * else in the call, what the page shows cannot be put down to the press, so nothing is confirmed and no baseline is
+ * kept: the old rule. The same goes for a call that reaches the element after other actions.
+ * A press that showed nothing at all is not touched by this (unconfirmedPress has its own rule).
+ * act_ui and jev_ui share it: Jev sends its actions through the same executor.
+ * ponytail: a page that changes by itself (a clock, a live feed) reads as acting, so on such a page an element whose
+ * AXPress does nothing no longer gets the real click by being pressed again. Read the tree once more right before the
+ * press and compare against that if it matters.
+ * ponytail: one slot for all windows, as before. Calls on two apps at once can take the slot from each other; a call
+ * only clears or confirms what its own press put there, so the loser falls back to the old rule.
  */
 let lastAccessibilityPress: string | undefined;
+
+/**
+ * Forsion patch, see UPSTREAM.md. The page as the model saw it before the press in lastAccessibilityPress. Stored as soon
+ * as that press is sent, not when its result is read: a call that cannot read the page back leaves through the error
+ * path, and without a baseline the next press of the element went out as a real click although the first had acted
+ * (live cudeskrepeat 155037, 2026-11-14: `expect` was scoped to the text node the press replaced). Dropped when the
+ * result shows the press acting, or showing nothing at all (unconfirmedPress takes over), and spent by the one repeat
+ * it answers (pressActedSince).
+ */
+let pressBaseline: { key: string; outline: Outline } | undefined;
+
+/** The identity lastAccessibilityPress holds for a node: the same string prepareAction puts in `accessibilityPress`. */
+function pressKeyFor(target: ResolvedTarget, node: OutlineNode): string {
+	return `${target.pid}:${target.windowId}:${[node.role, node.title, node.description].join("\u0000")}`;
+}
 
 /**
  * Forsion patch, see UPSTREAM.md. The AXPress whose result showed nothing changing, kept until the next action. The page
@@ -1240,11 +1275,19 @@ function webFlushEnabled(): boolean {
 	return process.env.PI_COMPUTER_USE_WEB_FLUSH !== "0";
 }
 
+/**
+ * Forsion patch, see UPSTREAM.md. `pressedInCall` holds, for each element this call has pressed, the way its first press
+ * in the call went. The model put those presses in one call before it saw what any of them did, so a later one is not a
+ * retry of an earlier one: it goes the same way, whatever was pressed in between. An AXPress stays an AXPress (not the
+ * real click a repeat in a later call gets); a real click stays a real click (the element already showed that its
+ * AXPress does nothing, and another element pressed in between must not send it back to accessibility).
+ */
 async function helperAct(
 	target: ResolvedTarget,
 	action: NativePreparedAction,
 	headless: boolean,
 	signal?: AbortSignal,
+	pressedInCall?: Map<string, "accessibility" | "real">,
 ): Promise<ExecutionTrace> {
 	const checked = (candidate: HelperActResult): HelperActResult => {
 		if (!candidate || !["worked", "didnt", "unknown"].includes(candidate.outcome)) {
@@ -1259,12 +1302,14 @@ async function helperAct(
 	const pressKey = currentPlatformBackend.name === "macos" && (action.action === "press" || action.action === "click") && action.accessibilityPress !== undefined
 		? `${target.pid}:${target.windowId}:${action.accessibilityPress}`
 		: undefined;
-	const accessibilityPress = pressKey !== undefined && pressKey !== lastAccessibilityPress;
+	const inCall = pressKey !== undefined ? pressedInCall?.get(pressKey) : undefined;
+	const accessibilityPress = pressKey !== undefined && (inCall ? inCall === "accessibility" : pressKey !== lastAccessibilityPress);
 	// The repeat is the real click the result promised. Through background first it can land as a hover-less pid click and then be replayed.
 	const repeatedPress = pressKey !== undefined && !accessibilityPress;
 	if ((action.usesCurrentFocus || action.needsForeground || repeatedPress || (pointer && (backgroundPointerMisses.get(pointerKey) ?? 0) >= 2)) && !headless) {
 		const sent = await wheelAction(target, action, signal);
 		const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, sent, "foreground"), { signal, timeoutMs }));
+		if (repeatedPress && !inCall) pressedInCall?.set(pressKey!, "real");
 		const trace = executionTraceFromAct(foreground, "foreground");
 		trace.backgroundFirst = false;
 		return trace;
@@ -1273,7 +1318,10 @@ async function helperAct(
 		const initialPolicy = headless || accessibilityPress ? "ax_only" : "background";
 		const sent = pointer ? await wheelAction(target, action, signal, initialPolicy) : action;
 		const result = checked(await currentPlatformBackend.act(helperActRequest(target, sent, initialPolicy), { signal, timeoutMs }));
-		if (accessibilityPress) lastAccessibilityPress = pressKey; // only once the helper answered: a stale ref sent nothing
+		if (accessibilityPress) { // only once the helper answered: a stale ref sent nothing
+			lastAccessibilityPress = pressKey;
+			if (!inCall) pressedInCall?.set(pressKey!, "accessibility");
+		}
 		if (pointer) backgroundPointerMisses.set(pointerKey, pointerMissesAfter(backgroundPointerMisses.get(pointerKey) ?? 0, result.outcome));
 		if (canRetryInForeground(action, result.outcome, headless)) {
 			const retry = pointer ? await wheelAction(target, action, signal) : action;
@@ -1905,14 +1953,14 @@ function scrollInPoints(action: NativePreparedAction, target: ResolvedTarget, lo
 	return { ...action, params: { scrollX: convert(action.params.scrollX), scrollY: convert(action.params.scrollY) } };
 }
 
-async function dispatchUiAction(action: UiAction, target: ResolvedTarget, look: LookResponse, headless: boolean, state: ActionState, signal?: AbortSignal): Promise<ExecutionTrace> {
+async function dispatchUiAction(action: UiAction, target: ResolvedTarget, look: LookResponse, headless: boolean, state: ActionState, signal?: AbortSignal, pressedInCall?: Map<string, "accessibility" | "real">): Promise<ExecutionTrace> {
 	const requested = prepareUiAction(action, state, look, headless);
 	const prepared = requested.action === "wait" ? requested : scrollInPoints(requested, target, look);
 	if (prepared.action === "wait") {
 		await sleep(prepared.params.ms, signal);
 		return executionTrace("wait", "stealth", { outcome: "worked" });
 	}
-	const trace = await helperAct(target, prepared, headless, signal);
+	const trace = await helperAct(target, prepared, headless, signal, pressedInCall);
 	if (!headless && (prepared.establishesFocus || (prepared.action === "click" && "x" in prepared.target))) {
 		state.currentFocus = true;
 	}
@@ -1954,9 +2002,10 @@ async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget
 	// the target window is frontmost. Probed live, never remembered: the user can switch apps between calls.
 	const frontmost = !headless && needsFrontmostProbe(actions) && await targetHoldsFocus(target, signal);
 	const actionState: ActionState = { currentFocus: false, frontmost };
+	const pressedInCall = new Map<string, "accessibility" | "real">(); // Forsion patch, see helperAct
 	for (const [index, action] of actions.entries()) {
 		actionState.keysFollow = keysFollow(actions, index);
-		const step = await dispatchUiAction(action, target, look, headless, actionState, signal);
+		const step = await dispatchUiAction(action, target, look, headless, actionState, signal, pressedInCall);
 		steps.push(step);
 		// A partially delivered gesture can remain unknown while its release
 		// failed. Its error must halt the sequence before any later input.
@@ -2103,7 +2152,7 @@ async function earlierPressTookEffect(
 	// A right or double click on that element is another gesture, which the earlier press cannot have performed.
 	if ((first.button ?? "left") !== "left" || (first.clickCount ?? 1) !== 1) return undefined;
 	const node = nodeByRef(look.parsedOutline!, first.ref.trim());
-	if (!node || `${target.pid}:${target.windowId}:${[node.role, node.title, node.description].join("\u0000")}` !== pending.key) return undefined;
+	if (!node || pressKeyFor(target, node) !== pending.key) return undefined;
 	const state = operationState();
 	const held = { currentCapture: state.currentCapture, currentLook: state.currentLook, currentOutline: state.currentOutline, currentNote: state.currentNote, currentStateTarget: state.currentStateTarget };
 	const capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);
@@ -2115,8 +2164,47 @@ async function earlierPressTookEffect(
 		return undefined;
 	}
 	unconfirmedPress = undefined;
+	pressBaseline = undefined; // the result promises that the next press of this element is the real click
 	const execution: ExecutionTrace = { strategy: "act", outcome: "worked", actionCount: 0, earlierPressTookEffect: moved };
 	return await buildToolResult("act_ui", `Nothing was sent to ${target.appName} — ${target.windowTitle}: the page has changed since this element was last pressed. Returned state ${capture.capture.stateId}.`, capture, execution, signal, state.currentImageMode, baseView);
+}
+
+/**
+ * Forsion patch, see UPSTREAM.md. The model is pressing again the element of lastAccessibilityPress, whose press showed
+ * nothing but focus moving in its own result. If the page the model is looking at now differs from the one before that
+ * press, the press acted (late) and this one is a new press: forget the element, so it goes out through accessibility
+ * and not as the real click a retry gets. Nothing is read here; both pages are ones the model has seen.
+ */
+function pressActedSince(actions: UiAction[], target: ResolvedTarget, look: LookResponse, baseView: { outline: Outline }): void {
+	const kept = pressBaseline;
+	if (!kept || kept.key !== lastAccessibilityPress) return;
+	const first = actions[0];
+	if (!first?.ref || (first.action !== "click" && first.action !== "press")) return;
+	if ((first.button ?? "left") !== "left" || (first.clickCount ?? 1) !== 1) return;
+	const node = nodeByRef(look.parsedOutline!, first.ref.trim());
+	if (!node || pressKeyFor(target, node) !== kept.key) return;
+	// Spent either way: it answers this one repeat. Kept past a repeat that goes out as the real click, the page that
+	// click changes would read as the first press having acted, and an element that only takes real clicks would be sent
+	// an AXPress again every other time.
+	pressBaseline = undefined;
+	if (webContentChanged(kept.outline, baseView.outline, { effectOnly: true })) lastAccessibilityPress = undefined;
+}
+
+/**
+ * The identity of the element this call sent its AXPress to, when every action the call carried out was an AXPress of
+ * that one element (once, or several times in a row: see `pressedInCall` at helperAct). Only then can what the page
+ * shows afterwards be put down to it.
+ */
+function solePressKey(actions: UiAction[], execution: ExecutionTrace, target: ResolvedTarget, look: LookResponse): string | undefined {
+	const steps = execution.steps?.length ? execution.steps : [execution];
+	if (actions.length === 0 || steps.length !== actions.length || !steps.every((step) => step.accessibilityPress)) return undefined;
+	const keys = new Set(actions.map((action) => {
+		const ref = action.ref?.trim();
+		const node = ref ? nodeByRef(look.parsedOutline!, ref) : undefined;
+		return node ? pressKeyFor(target, node) : undefined;
+	}));
+	const [key] = keys;
+	return keys.size === 1 ? key : undefined;
 }
 
 async function performDesktopTransaction(params: ActParams, actions: UiAction[], signal?: AbortSignal): Promise<AgentToolResult<ComputerUseDetails | TerminalDesktopActionDetails>> {
@@ -2139,8 +2227,14 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 		// Kept for the next action only, and that is this one: forget it before anything is sent, so a failure further
 		// down cannot leave it standing while this action changes the page.
 		unconfirmedPress = undefined;
+		pressActedSince(actions, target, look, baseView);
 		const execution = await dispatchUiTransaction(actions, target, look, headless, signal);
 		const executedActions = actions.slice(0, execution.actionCount ?? actions.length);
+		// Forsion patch, see UPSTREAM.md (pressBaseline). Before anything below can throw: the page as it was before the
+		// press this call just sent. A call that pressed something else among other actions leaves no baseline behind.
+		const ownPress = solePressKey(executedActions, execution, target, look);
+		if (ownPress && lastAccessibilityPress === ownPress) pressBaseline = { key: ownPress, outline: baseView.outline };
+		else if (pressBaseline && pressBaseline.key !== lastAccessibilityPress) pressBaseline = undefined;
 		try {
 			if (condition && !execution.error) {
 				const { text: expectedText, role: expectedRole, value: expectedValue, scopeExact, gone, timeoutMs } = condition;
@@ -2199,6 +2293,21 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 				if (!confirmed && lastAccessibilityPress) {
 					unconfirmedPress = { key: lastAccessibilityPress, outline: baseView.outline, picture: capture.look.image?.grid, rect: ref ? (nodeByRef(capture.outline, ref) ?? nodeByRef(baseView.outline, ref))?.rect : undefined };
 				}
+			}
+			// Forsion patch, see UPSTREAM.md. The page shows the press acting: forget which element it was, so the model
+			// pressing it again is a new background press and not the real click a retry gets (lastAccessibilityPress).
+			// Only for a call whose actions were all presses of this element and that still holds the slot (ownPress). Only focus moved: the baseline
+			// stored above stays for pressActedSince. Nothing moved at all: that is unconfirmedPress's case, set above.
+			if (ownPress && lastAccessibilityPress === ownPress) {
+				const acted = !execution.error && (
+					(execution.rootDelta ?? []).some((delta) => delta.change !== "focused")
+					|| webContentChanged(baseView.outline, capture.outline, { effectOnly: true })
+				);
+				if (acted) {
+					lastAccessibilityPress = undefined;
+					for (const trace of pressed) trace.pressConfirmed = true;
+				}
+				if ((acted || pressed.some((trace) => trace.pressUnconfirmed)) && pressBaseline?.key === ownPress) pressBaseline = undefined;
 			}
 			if (!execution.error) execution.outcome = outcomeAfterObservedValues(execution.outcome ?? "unknown", executedActions, (ref) => nodeByRef(capture.outline, ref)?.value);
 			for (const action of executedActions) {
