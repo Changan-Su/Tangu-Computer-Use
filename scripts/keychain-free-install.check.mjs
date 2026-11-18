@@ -31,10 +31,10 @@ try {
         const name = path.basename(command);
         appendFileSync(process.env.CU_TEST_TRACE, JSON.stringify({method,command,args})+'\\n');
         if (['security','openssl','xcrun'].includes(name) || method === 'exec' || method === 'execSync'
-          || (name === 'codesign' && (!Array.isArray(args) || args[0] !== '--verify'))) {
+          || (name === 'codesign' && (!Array.isArray(args) || !['--verify', '-d'].includes(args[0])))) {
           throw Error('Forbidden runtime signing/keychain command: '+command);
         }
-        if (name === 'lsregister') return Buffer.alloc(0);
+        if (name === 'lsregister' || name === 'tccutil') return Buffer.alloc(0);
         return original.call(this, command, args, ...rest);
       };
     }
@@ -144,7 +144,8 @@ try {
   const commands = (await fs.readFile(trace, 'utf8')).trim().split('\n').map(line => JSON.parse(line));
   assert.ok(commands.some(cmd => path.basename(cmd.command) === 'codesign'));
   assert.ok(commands.every(cmd => !['security','openssl','xcrun'].includes(path.basename(cmd.command))
-    && (path.basename(cmd.command) !== 'codesign' || cmd.args[0] === '--verify')));
+    && (path.basename(cmd.command) !== 'codesign' || ['--verify', '-d'].includes(cmd.args[0]))));
+  assert.ok(commands.every(cmd => path.basename(cmd.command) !== 'tccutil'), 'same-signature installs and repairs must keep the privacy grants');
   console.log('PASS concurrent repair / stale-lock recovery / no runtime signing or keychain commands');
 
   // Pin: an ad-hoc helper with the same bundle id must not replace anything unless development opts in.
@@ -168,7 +169,29 @@ try {
     assert.notEqual(refused.status, 0);
     assert.equal(await image(), before, 'a refused helper must leave the release one in place');
   }
-  console.log(`PASS ad-hoc helper refused unless PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1${rootReleaseSigned ? '; release helper accepted above' : ' (release-signed acceptance not covered: this package is a local ad-hoc build)'}`);
+  // Moving to a differently signed helper (here ad-hoc → release; in the field self-signed → Developer ID) leaves
+  // grant rows that no longer match: the installer clears them so macOS asks again. Same signature: never.
+  if (rootReleaseSigned) {
+    await fs.writeFile(trace, '');
+    const moved = run(['--runtime'], root, { PI_COMPUTER_USE_HELPER_APP_PATH: fresh });
+    assert.equal(moved.status, 0, moved.stderr);
+    const resets = (await fs.readFile(trace, 'utf8')).trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+      .filter(cmd => path.basename(cmd.command) === 'tccutil');
+    assert.deepEqual(resets.map(cmd => cmd.args), [['reset', 'All', bundleId]], 'a signature change must clear the stale grants once');
+    await fs.writeFile(trace, '');
+    await fs.rm(path.join(fresh, 'Contents/_CodeSignature'), { recursive: true });
+    assert.equal(run(['--runtime'], root, { PI_COMPUTER_USE_HELPER_APP_PATH: fresh }).status, 0);
+    assert.ok((await fs.readFile(trace, 'utf8')).split('\n').filter(Boolean).every(line => path.basename(JSON.parse(line).command) !== 'tccutil'),
+      'repairing a release helper must keep its grants');
+    // A failed reset is retried by the next install, even though the helper is already current.
+    await fs.writeFile(`${fresh}.grant-reset-pending`, '1');
+    await fs.writeFile(trace, '');
+    assert.equal(run(['--runtime'], root, { PI_COMPUTER_USE_HELPER_APP_PATH: fresh }).status, 0);
+    assert.equal((await fs.readFile(trace, 'utf8')).split('\n').filter(Boolean).filter(line => path.basename(JSON.parse(line).command) === 'tccutil').length, 1,
+      'a pending reset must be retried');
+    assert.equal(await fs.access(`${fresh}.grant-reset-pending`).then(() => true, () => false), false, 'a successful retry clears the marker');
+  }
+  console.log(`PASS ad-hoc helper refused unless PI_COMPUTER_USE_ALLOW_ADHOC_UPDATE=1${rootReleaseSigned ? '; release helper accepted above; stale grants cleared on a signature change, kept on repair' : ' (release-signed acceptance and grant reset not covered: this package is a local ad-hoc build)'}`);
 } finally {
   await fs.rm(temp, { recursive: true, force: true });
 }
