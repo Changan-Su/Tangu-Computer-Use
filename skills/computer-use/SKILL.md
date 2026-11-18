@@ -162,6 +162,10 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
 - A left click by `ref` on a web button, link or other control that lists `AXPress` stays in the
   background too. The result says so. If the returned state shows nothing changed, press the same
   element again: the repeat is a real click and takes the foreground. Do not retry it any other way.
+- If the tree did not change right after such a press, the press has probably landed anyway: a covered
+  web page takes it but stops updating its tree, sometimes until the page next changes. The result
+  says so, brings the window forward and attaches a current screenshot. Go by that screenshot and press
+  again only if it shows the press did nothing.
 
 ## Show the user what you are doing
 

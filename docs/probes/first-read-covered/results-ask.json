@@ -1,0 +1,268 @@
+{
+  "at": "2026-11-13T19:08:48.015Z",
+  "webFlush": true,
+  "roundsPerVariant": 3,
+  "rows": [
+    {
+      "n": 1,
+      "variant": "control",
+      "loadMs": 321,
+      "loadVis": "visible",
+      "visBeforeContact": "visible",
+      "grabberInFrontBeforeContact": false,
+      "contactAt": 1131,
+      "firstMs": 3017,
+      "firstHasButton": true,
+      "firstLines": 25,
+      "visAfterFirst": "visible",
+      "grabberInFrontAfterFirst": false,
+      "seenWhileGrabbedMs": 3084,
+      "pollsWhileGrabbed": 0,
+      "vis": [
+        "299ms load=visible"
+      ]
+    },
+    {
+      "n": 2,
+      "variant": "front",
+      "loadMs": 413,
+      "loadVis": "visible",
+      "visBeforeContact": "visible",
+      "grabberInFrontBeforeContact": true,
+      "contactAt": 1880,
+      "firstMs": 3119,
+      "firstHasButton": true,
+      "firstLines": 25,
+      "visAfterFirst": "visible",
+      "grabberInFrontAfterFirst": true,
+      "seenWhileGrabbedMs": 3186,
+      "pollsWhileGrabbed": 0,
+      "vis": [
+        "320ms load=visible",
+        "5165ms vis=hidden"
+      ]
+    },
+    {
+      "n": 3,
+      "variant": "coverBefore",
+      "loadMs": 560,
+      "loadVis": "visible",
+      "visBeforeContact": "hidden",
+      "grabberInFrontBeforeContact": true,
+      "contactAt": 2014,
+      "firstMs": 3203,
+      "firstHasButton": false,
+      "firstLines": 16,
+      "visAfterFirst": "hidden",
+      "grabberInFrontAfterFirst": true,
+      "seenWhileGrabbedMs": null,
+      "pollsWhileGrabbed": 11,
+      "seenAfterUncoverMs": 728,
+      "visAfterUncover": "hidden",
+      "vis": [
+        "487ms load=visible",
+        "1611ms vis=hidden",
+        "13871ms vis=visible",
+        "13973ms vis=hidden"
+      ]
+    },
+    {
+      "n": 4,
+      "variant": "coverDuring",
+      "loadMs": 434,
+      "loadVis": "visible",
+      "visBeforeContact": "visible",
+      "grabberInFrontBeforeContact": false,
+      "contactAt": 1252,
+      "firstMs": 3268,
+      "firstHasButton": false,
+      "firstLines": 16,
+      "visAfterFirst": "hidden",
+      "grabberInFrontAfterFirst": true,
+      "seenWhileGrabbedMs": null,
+      "pollsWhileGrabbed": 12,
+      "seenAfterUncoverMs": 719,
+      "visAfterUncover": "hidden",
+      "vis": [
+        "383ms load=visible",
+        "1910ms vis=hidden",
+        "13174ms vis=visible",
+        "13193ms vis=hidden"
+      ]
+    },
+    {
+      "n": 5,
+      "variant": "control",
+      "loadMs": 415,
+      "loadVis": "visible",
+      "visBeforeContact": "visible",
+      "grabberInFrontBeforeContact": false,
+      "contactAt": 1235,
+      "firstMs": 3144,
+      "firstHasButton": true,
+      "firstLines": 25,
+      "visAfterFirst": "visible",
+      "grabberInFrontAfterFirst": false,
+      "seenWhileGrabbedMs": 3238,
+      "pollsWhileGrabbed": 0,
+      "vis": [
+        "357ms load=visible"
+      ]
+    },
+    {
+      "n": 6,
+      "variant": "front",
+      "loadMs": 416,
+      "loadVis": "visible",
+      "visBeforeContact": "visible",
+      "grabberInFrontBeforeContact": true,
+      "contactAt": 1793,
+      "firstMs": 3311,
+      "firstHasButton": true,
+      "firstLines": 25,
+      "visAfterFirst": "visible",
+      "grabberInFrontAfterFirst": true,
+      "seenWhileGrabbedMs": 3392,
+      "pollsWhileGrabbed": 0,
+      "vis": [
+        "390ms load=visible",
+        "5246ms vis=hidden"
+      ]
+    },
+    {
+      "n": 7,
+      "variant": "coverBefore",
+      "loadMs": 461,
+      "loadVis": "visible",
+      "visBeforeContact": "hidden",
+      "grabberInFrontBeforeContact": true,
+      "contactAt": 1954,
+      "firstMs": 3170,
+      "firstHasButton": false,
+      "firstLines": 16,
+      "visAfterFirst": "hidden",
+      "grabberInFrontAfterFirst": true,
+      "seenWhileGrabbedMs": null,
+      "pollsWhileGrabbed": 12,
+      "seenAfterUncoverMs": 842,
+      "visAfterUncover": "hidden",
+      "vis": [
+        "392ms load=visible",
+        "1542ms vis=hidden",
+        "13883ms vis=visible",
+        "13940ms vis=hidden"
+      ]
+    },
+    {
+      "n": 8,
+      "variant": "coverDuring",
+      "loadMs": 415,
+      "loadVis": "visible",
+      "visBeforeContact": "visible",
+      "grabberInFrontBeforeContact": false,
+      "contactAt": 1226,
+      "firstMs": 3346,
+      "firstHasButton": false,
+      "firstLines": 16,
+      "visAfterFirst": "hidden",
+      "grabberInFrontAfterFirst": true,
+      "seenWhileGrabbedMs": null,
+      "pollsWhileGrabbed": 11,
+      "seenAfterUncoverMs": 703,
+      "visAfterUncover": "hidden",
+      "vis": [
+        "347ms load=visible",
+        "1863ms vis=hidden",
+        "12710ms vis=visible",
+        "12757ms vis=hidden"
+      ]
+    },
+    {
+      "n": 9,
+      "variant": "control",
+      "loadMs": 416,
+      "loadVis": "visible",
+      "visBeforeContact": "visible",
+      "grabberInFrontBeforeContact": false,
+      "contactAt": 1234,
+      "firstMs": 2922,
+      "firstHasButton": true,
+      "firstLines": 25,
+      "visAfterFirst": "visible",
+      "grabberInFrontAfterFirst": false,
+      "seenWhileGrabbedMs": 2994,
+      "pollsWhileGrabbed": 0,
+      "vis": [
+        "331ms load=visible"
+      ]
+    },
+    {
+      "n": 10,
+      "variant": "front",
+      "loadMs": 414,
+      "loadVis": "visible",
+      "visBeforeContact": "visible",
+      "grabberInFrontBeforeContact": true,
+      "contactAt": 1775,
+      "firstMs": 2925,
+      "firstHasButton": true,
+      "firstLines": 25,
+      "visAfterFirst": "visible",
+      "grabberInFrontAfterFirst": true,
+      "seenWhileGrabbedMs": 3001,
+      "pollsWhileGrabbed": 0,
+      "vis": [
+        "320ms load=visible",
+        "4836ms vis=hidden"
+      ]
+    },
+    {
+      "n": 11,
+      "variant": "coverBefore",
+      "loadMs": 365,
+      "loadVis": "visible",
+      "visBeforeContact": "hidden",
+      "grabberInFrontBeforeContact": true,
+      "contactAt": 1746,
+      "firstMs": 2969,
+      "firstHasButton": false,
+      "firstLines": 16,
+      "visAfterFirst": "hidden",
+      "grabberInFrontAfterFirst": true,
+      "seenWhileGrabbedMs": null,
+      "pollsWhileGrabbed": 12,
+      "seenAfterUncoverMs": 739,
+      "visAfterUncover": "hidden",
+      "vis": [
+        "315ms load=visible",
+        "1405ms vis=hidden",
+        "13461ms vis=visible",
+        "13480ms vis=hidden"
+      ]
+    },
+    {
+      "n": 12,
+      "variant": "coverDuring",
+      "loadMs": 420,
+      "loadVis": "visible",
+      "visBeforeContact": "visible",
+      "grabberInFrontBeforeContact": false,
+      "contactAt": 1231,
+      "firstMs": 3039,
+      "firstHasButton": false,
+      "firstLines": 16,
+      "visAfterFirst": "hidden",
+      "grabberInFrontAfterFirst": true,
+      "seenWhileGrabbedMs": null,
+      "pollsWhileGrabbed": 11,
+      "seenAfterUncoverMs": 710,
+      "visAfterUncover": "hidden",
+      "vis": [
+        "357ms load=visible",
+        "1633ms vis=hidden",
+        "12464ms vis=visible",
+        "12506ms vis=hidden"
+      ]
+    }
+  ]
+}

@@ -69,7 +69,7 @@ function helperAction(request: PlatformActRequest): Record<string, unknown> {
 	return { ...request, target: request.target.focus, params: { ...request.params, preserveFocus: true } };
 }
 
-export const macosBackend: Pick<ComputerUsePlatformBackend, "listApps" | "listRoots" | "getFrontmost" | "focusWindow" | "observe" | "act" | "actBatch" | "readText" | "waitFor"> = {
+export const macosBackend: Pick<ComputerUsePlatformBackend, "listApps" | "listRoots" | "getFrontmost" | "focusWindow" | "activateWindow" | "observe" | "act" | "actBatch" | "readText" | "waitFor"> = {
 	async listApps(signal?: AbortSignal): Promise<PlatformApp[]> {
 		return parseApps(await macosHelper.command<unknown>("listApps", {}, { signal }));
 	},
@@ -100,6 +100,12 @@ export const macosBackend: Pick<ComputerUsePlatformBackend, "listApps" | "listRo
 		return await macosHelper.command<PlatformFocusWindowResult>("focusWindow", { ...target }, { signal });
 	},
 
+	async activateWindow(target: { pid: number; windowId: number; windowRef?: string }, signal?: AbortSignal): Promise<boolean> {
+		const activated = await macosHelper.command<{ appRestored?: boolean }>("restoreUserFocus", { pid: target.pid }, { signal });
+		await macosHelper.command("focusWindow", { ...target }, { signal });
+		return activated.appRestored === true;
+	},
+
 	async observe(request: PlatformObserveRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<LookResponse> {
 		return parseLookResponse(await macosHelper.command("look", {
 			baseLookId: request.baseLookId,
@@ -109,6 +115,7 @@ export const macosBackend: Pick<ComputerUsePlatformBackend, "listApps" | "listRo
 			readText: request.readText,
 			scopeRef: request.scopeRef,
 			includeImage: request.includeImage,
+			flushWeb: request.flushWeb,
 		}, options));
 	},
 

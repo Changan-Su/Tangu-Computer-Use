@@ -142,6 +142,8 @@ export interface PlatformObserveRequest {
 	scopeRef?: string;
 	maxDimension?: number;
 	includeImage?: boolean;
+	/** macOS: false reads a web window without asking the page first (see WebFlush). Leave unset otherwise. */
+	flushWeb?: false;
 }
 
 export type PlatformActTarget = { ref: string } | { x: number; y: number } | { focus: PlatformPoint };
@@ -192,6 +194,8 @@ export interface PlatformWaitForRequest extends PlatformTarget {
 	scopeExact?: boolean;
 	gone: boolean;
 	timeoutMs: number;
+	/** macOS: false waits without asking the page before each read (see WebFlush). Leave unset otherwise. */
+	flushWeb?: false;
 }
 
 export interface PlatformWaitForResponse {
@@ -210,6 +214,8 @@ export interface ComputerUsePlatformBackend {
 	listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]>;
 	getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult>;
 	focusWindow(target: PlatformTarget, signal?: AbortSignal): Promise<PlatformFocusWindowResult>;
+	/** Forsion patch, see UPSTREAM.md. Activates the app and raises this window; false if the app could not be activated. focusWindow alone leaves a covered page hidden. */
+	activateWindow?(target: { pid: number; windowId: number; windowRef?: string }, signal?: AbortSignal): Promise<boolean>;
 	observe(request: PlatformObserveRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<LookResponse>;
 	act(request: PlatformActRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<HelperActResult>;
 	/** Execute one-resource actions with one root baseline and one final settle. */
