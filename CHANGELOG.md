@@ -1,6 +1,6 @@
 # 更新日志
 
-## 0.7.3 — 未发版 / unreleased
+## 0.7.4 — 未发版 / unreleased
 
 - 操控电脑时的显示效果改版。macOS 的 helper 协议号从 19 升到 20，插件更新后会换上新 helper。要配合桌面 2.14.2 起的版本才看得到实时画面卡和对话里的新写法；老桌面上照常能用，只是看不到这几处。
 - 屏幕上：Agent 的光标换成尖头朝左上的飞镖形，颜色跟 Forsion 的主题色走（经典、墨色两套用柔蓝）。点击处放一圈环，双击两圈；被操控的窗口四周有一圈同色的边光。一轮开始到结束光标一直在，模型思考时变淡并轻轻摆动，结束后约 1 秒淡出；45 秒没有动作自己收场。光标沿直线飞到目标、箭头不转圈，飞到之后再点。开了系统的「减少动态效果」时不摆、不飞，直接到位。会动真实指针的点击只在落点画一圈环。
@@ -12,6 +12,11 @@
 - Live view card: the agent's cursor and click rings are drawn over the picture, a line at the top says what the current step is doing, with a stop button next to it, and the card reads "Done · N steps" when the turn ends. A new "Move to floating window" button puts the picture in a small window that stays on top.
 - Process rows in the chat: each action reads as a sentence, such as "Clicking "Send" in Chatter". "Clicked" means the click was delivered, not confirmed; an action that was not confirmed reads "Could not …".
 - When the same web element is pressed again, deciding whether the page has already changed now compares the web content itself instead of node numbers. Before, an element that came and went shifted every number by one, so an unchanged page could be taken as changed and cost the model an extra step.
+
+## 0.7.3 — 2026-11-18
+
+- macOS helper 改用 Developer ID 签名（带加固运行时和安全时间戳），Forsion Desktop 整包才能通过苹果公证。原来那张自签名证书不被公证接受，带着它的 Desktop 公证会被退回。代价：从旧版升上来时，每位 macOS 用户要重新授权一次辅助功能和屏幕录制。安装器发现已装 helper 的签名变了，会清掉它的旧授权记录，系统重新弹框；不清的话，开关看着开着、helper 却读到未授权。以后续期证书不会再掉授权，因为授权认的是团队，不是某一张证书。发版需要新的仓库 secret `DEVELOPER_ID_P12` / `DEVELOPER_ID_P12_PASSWORD`。
+- The macOS helper is now signed with a Developer ID (hardened runtime, secure timestamp), so the Forsion Desktop app passes Apple notarization; the old self-signed certificate made Apple reject the whole app. Upgrading costs each macOS user one new Accessibility and Screen Recording grant: when the installed helper's signature changes, the installer clears its stale grant rows so macOS asks again, instead of showing a switch that is on while the helper reads "not granted". Certificate renewals no longer drop grants, since they are tied to the team, not one certificate. Releases need the new repository secrets `DEVELOPER_ID_P12` / `DEVELOPER_ID_P12_PASSWORD`.
 
 ## 0.7.2 — 2026-11-17
 

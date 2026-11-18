@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# ⚠️ Release builds no longer use this: they are signed with the project's Developer ID (release.yml,
+# secrets DEVELOPER_ID_P12 / DEVELOPER_ID_P12_PASSWORD). Kept for local experiments only.
 # Create a stable self-signed code-signing certificate for release signing,
 # exported as a .p12 ready for the release workflow secrets.
 #
