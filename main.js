@@ -1078,13 +1078,13 @@ function clampScale(scale, fit) {
 const CSS = `
 .cu-live{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--bg-card,var(--bg,transparent));color:var(--text,inherit);font-size:13px}
 .cu-live-head{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border,rgba(128,128,128,.25));flex:0 0 auto}
-.cu-live-dot{width:8px;height:8px;border-radius:999px;background:var(--accent,#ff7818);flex:0 0 auto}
+.cu-live-dot{width:8px;height:8px;border-radius:50%;background:var(--accent,#ff7818);flex:0 0 auto}
 .cu-live-dot.idle{background:var(--text-faint,rgba(128,128,128,.6))}
 .cu-live-title{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 .cu-live-age{flex:0 0 auto;color:var(--text-muted,var(--text-light,rgba(128,128,128,.9)));font-variant-numeric:tabular-nums}
 .cu-live-zoom{display:none;align-items:center;gap:2px;flex:0 0 auto}
 .cu-live-zoom.on{display:flex}
-.cu-live-zoom button{font:inherit;line-height:1;padding:3px 7px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--text-muted,var(--text-light,inherit));cursor:pointer}
+.cu-live-zoom button{font:inherit;line-height:1;padding:3px 7px;border-radius:var(--radius-sm);border:1px solid transparent;background:transparent;color:var(--text-muted,var(--text-light,inherit));cursor:pointer}
 .cu-live-zoom button:hover:not(:disabled){background:var(--accent-light,var(--overlay-light,rgba(128,128,128,.14)));color:var(--accent-hover,var(--accent,inherit))}
 .cu-live-zoom button:disabled{opacity:.38;cursor:default}
 .cu-live-pct{min-width:4.2em;text-align:center;font-variant-numeric:tabular-nums}
@@ -1114,23 +1114,23 @@ const CSS = `
 .cu-live-status span.roll{animation:cu-live-roll .28s cubic-bezier(.2,.8,.2,1)}
 @keyframes cu-live-roll{from{transform:translateY(70%);opacity:0}to{transform:none;opacity:1}}
 .cu-live-head.has-status .cu-live-title{flex:0 1 auto;max-width:42%}
-.cu-live-stop{display:none;flex:0 0 auto;font:inherit;line-height:1;padding:3px 9px;border-radius:7px;border:1px solid var(--border,rgba(128,128,128,.25));background:transparent;color:var(--text,inherit);cursor:pointer}
+.cu-live-stop{display:none;flex:0 0 auto;font:inherit;line-height:1;padding:3px 9px;border-radius:var(--radius-sm);border:1px solid var(--border,rgba(128,128,128,.25));background:transparent;color:var(--text,inherit);cursor:pointer}
 .cu-live-stop.on{display:inline-block}
 .cu-live-stop:hover:not(:disabled){border-color:var(--cu-fill,var(--accent,currentColor));color:var(--cu-fill,var(--accent,inherit))}
 .cu-live-stop:disabled{opacity:.45;cursor:default}
 .cu-live-ovl{position:absolute;inset:0;pointer-events:none;overflow:hidden}
 .cu-live-cur{position:absolute;left:0;top:0;width:18px;height:18px;display:none;will-change:transform;filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.32))}
 .cu-live-cur svg{display:block;width:18px;height:18px;overflow:visible}
-.cu-live-ring{position:absolute;width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:999px;box-sizing:border-box;border:2.5px solid var(--cu-fill,#2c5f9e);box-shadow:0 0 0 1px var(--cu-edge-soft,rgba(255,255,255,.5)),inset 0 0 0 1px var(--cu-edge-soft,rgba(255,255,255,.5));opacity:0;animation:cu-live-ring .5s ease-out forwards}
+.cu-live-ring{position:absolute;width:44px;height:44px;margin:-22px 0 0 -22px;border-radius:50%;box-sizing:border-box;border:2.5px solid var(--cu-fill,#2c5f9e);box-shadow:0 0 0 1px var(--cu-edge-soft,rgba(255,255,255,.5)),inset 0 0 0 1px var(--cu-edge-soft,rgba(255,255,255,.5));opacity:0;animation:cu-live-ring .5s ease-out forwards}
 @keyframes cu-live-ring{0%{transform:scale(.27);opacity:.95}36%{opacity:.7}100%{transform:scale(1);opacity:0}}
 .cu-live-veil{position:absolute;inset:0;background:var(--bg-card,var(--bg,#fff));opacity:0;transition:opacity .4s ease}
 .cu-live-veil.on{opacity:.55}
-.cu-live-badge{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:var(--bg-card,var(--bg,#fff));border:1px solid var(--border,rgba(128,128,128,.25));color:var(--text,inherit);font-weight:500;white-space:nowrap;box-shadow:0 2px 10px rgba(0,0,0,.12)}
+.cu-live-badge{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);display:none;align-items:center;gap:6px;padding:6px 12px;border-radius:var(--radius-pill);background:var(--bg-card,var(--bg,#fff));border:1px solid var(--border,rgba(128,128,128,.25));color:var(--text,inherit);font-weight:500;white-space:nowrap;box-shadow:0 2px 10px rgba(0,0,0,.12)}
 .cu-live-badge.on{display:inline-flex}
-.cu-live-badge i{width:8px;height:8px;border-radius:999px;background:var(--cu-fill,#2c5f9e);flex:0 0 auto}
+.cu-live-badge i{width:8px;height:8px;border-radius:50%;background:var(--cu-fill,#2c5f9e);flex:0 0 auto}
 /* 「移到悬浮窗 / 放回去」:窄的时候(.narrow,JS 按视图宽度量)只留图标,标题和状态句先让位。
    ⚠️不用 container-type:它会让 .cu-live 的宽不再由内容撑,宿主哪天把挂载点做成随内容宽,视图就塌成 0 宽。 */
-.cu-live-pip{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;font:inherit;line-height:1;padding:3px 7px;border-radius:7px;border:1px solid transparent;background:transparent;color:var(--text-muted,var(--text-light,inherit));cursor:pointer;white-space:nowrap}
+.cu-live-pip{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;font:inherit;line-height:1;padding:3px 7px;border-radius:var(--radius-sm);border:1px solid transparent;background:transparent;color:var(--text-muted,var(--text-light,inherit));cursor:pointer;white-space:nowrap}
 .cu-live-pip-ic{display:flex;flex:0 0 auto}
 .cu-live-pip svg{display:block}
 .cu-live-pip:hover{background:var(--accent-light,var(--overlay-light,rgba(128,128,128,.14)));color:var(--accent-hover,var(--accent,inherit))}
