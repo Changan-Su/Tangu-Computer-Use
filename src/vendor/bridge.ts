@@ -1539,13 +1539,13 @@ interface BrowserActionReceipt {
 function browserActionHint(view: string, viewport: NonNullable<CdpPageSnapshot["viewport"]>, receipt?: BrowserActionReceipt): string {
 	if (receipt?.action.action === "moveMouse") {
 		const { x, y } = receipt.action;
-		let point = "[x,y]";
+		let location = "";
 		if (viewport.stamp === receipt.stamp && x !== undefined && y !== undefined) {
-			const px = Math.round((x - (viewport.origin?.x ?? 0)) * viewport.width / viewport.cssWidth);
-			const py = Math.round((y - (viewport.origin?.y ?? 0)) * viewport.height / viewport.cssHeight);
-			if (px >= 0 && px < viewport.width && py >= 0 && py < viewport.height) point = `[${px},${py}]`;
+			const px = (x - (viewport.origin?.x ?? 0)) * viewport.width / viewport.cssWidth;
+			const py = (y - (viewport.origin?.y ?? 0)) * viewport.height / viewport.cssHeight;
+			if (px >= 0 && px < viewport.width && py >= 0 && py < viewport.height) location = ` The pointer is near (${Number(px.toFixed(3))},${Number(py.toFixed(3))}) in this screenshot.`;
 		}
-		return `Pointer moved without clicking. Inspect the tooltip or status text. If it identifies the requested control, click with act_ui({view:"${view}",click:${point}}) using this screenshot.`;
+		return `Pointer moved without clicking.${location} Read the tooltip or status line. If it confirms the target, locate its center in this fresh screenshot and use act_ui({view:"${view}",click:[x,y]}). If the label identifies a different tool, hover another candidate.`;
 	}
 	const stop = receipt?.action.action === "click" ? " If only one click was requested, stop here." : "";
 	return `Input dispatched. Check the result in this screenshot.${stop} For a further requested step use {view:"${view}"}.`;
@@ -1563,7 +1563,8 @@ function browserClickHint(tool: string, detail: boolean, view?: string, region?:
 			return `Detail view.${region ? " Region: " + region + "." : ""} Click the target with ${click} in this image’s pixels.${further} If the target is absent, use this handle to inspect a different region.`;
 		}
 		if (canClip === false) return `At this page zoom, use ${click} in the full image or inspect it with magnify.`;
-		return `If you see the target, click with ${click}. For a small or crowded control, inspect its location with observe_ui({view:"${view}",focus:{x,y}}). If you can identify only the panel, use observe_ui({view:"${view}",region:POSITION}). POSITION is top-left, top, top-right, left, center, right, bottom-left, bottom or bottom-right. Use coordinates in the returned image.`;
+		const toolbar = tool === "launch_browser" ? `On a live icon-only toolbar, hover a candidate with act_ui({view:"${view}",hover:[x,y]}) before clicking. Read the application's tooltip or status line. If its description differs from the requested tool, inspect another candidate. Click after the visible label or description confirms it. On a static screenshot, use the visible pixels directly. ` : "";
+		return `${toolbar}If you see the target, click with ${click}. For a small or crowded control, inspect its location with observe_ui({view:"${view}",focus:{x,y}}). If you can identify only the panel, use observe_ui({view:"${view}",region:POSITION}). POSITION is top-left, top, top-right, left, center, right, bottom-left, bottom or bottom-right. Use coordinates in the returned image.`;
 	}
 	if (view) {
 		const click = `act_ui({view:"${view}",click:[x,y]})`;
@@ -1617,8 +1618,9 @@ function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string,
 	return { content: [{ type: "text", text: `${tool} completed for ${root.ref} ${JSON.stringify(browser.title)}. State ${browser.snapshotId}.${controlHint}\n${viewText}${controlText}${pageText ? "\nPage text:\n" + pageText : ""}` }], details };
 }
 
-async function refreshBrowserSnapshot(contextId: string, tool: string, base?: { stateId: string; outline: SerializedOutline }, receipt?: BrowserActionReceipt): Promise<AgentToolResult<BrowserObservationDetails>> {
+async function refreshBrowserSnapshot(contextId: string, tool: string, base?: { stateId: string; outline: SerializedOutline }, receipt?: BrowserActionReceipt, signal?: AbortSignal): Promise<AgentToolResult<BrowserObservationDetails>> {
 	const browser = await cdpSnapshotForContext(contextId, operationState().browserSnapshot?.pixelsOnly || undefined);
+	throwIfAborted(signal);
 	if (!browser) throw new Error(`Browser root '${contextId}' is no longer available. Call find_roots and observe_ui again.`);
 	const state = operationState();
 	const resourceKey = state.resourceKey ?? `cdp:${browser.targetId}`;
@@ -2505,6 +2507,7 @@ async function performBrowserTransaction(params: ActParams, actions: UiAction[],
 				if ((baseSnapshot.pixelsOnly || Number.isFinite(action.x) || action.path) && baseSnapshot.viewport?.stamp !== await cdpViewportStamp(contextId)) {
 					throw new Error("The page or viewport moved since the screenshot. Observe again in visual mode before coordinate input.");
 				}
+				throwIfAborted(signal);
 				let worked = false;
 				if (action.action === "press" || (action.action === "click" && action.ref)) {
 					worked = await cdpClickForContext(contextId, target!.backendNodeId!, action.clickCount ?? 1);
@@ -2545,7 +2548,7 @@ async function performBrowserTransaction(params: ActParams, actions: UiAction[],
 			const single = baseSnapshot.pixelsOnly && prepared.length === 1 ? prepared[0].action : undefined;
 			// A live control can paint its hover label after a short timer. Wait only on pixel-mode pointer moves in the panel experiment.
 			if (operationState().browserPanelZoom && single?.action === "moveMouse") await sleep(650, signal);
-			return await refreshBrowserSnapshot(contextId, "act_ui", baseView, single ? { action: single, stamp: baseSnapshot.viewport?.stamp } : undefined);
+			return await refreshBrowserSnapshot(contextId, "act_ui", baseView, single ? { action: single, stamp: baseSnapshot.viewport?.stamp } : undefined, signal);
 		}
 		catch (error) { throw new Error(`${completed} action(s) delivered. Observe before sending more input. ${error}`); }
 	});

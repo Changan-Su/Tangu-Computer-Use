@@ -1,7 +1,7 @@
 ---
 name: Desktop app control
 description: Use when a task needs a real desktop application rather than an API, CLI, or file — reading what is on screen in another app, clicking through its UI, filling its fields, or driving a GUI-only workflow. Covers the Computer Use tool loop, keeping actions in the background, and the confirmation rules for irreversible actions.
-version: 1.1.0
+version: 1.2.0
 category: automation
 ---
 
@@ -14,6 +14,8 @@ reading a file directly is always cheaper and more reliable.
 Forsion's own windows are not a Computer Use target. To change a Forsion setting or open one of its
 pages, use `list_ui_commands` and then `run_ui_command` / `set_ui_setting`; a tool result marked
 `[forsion]` means you are looking at Forsion itself.
+
+When selecting an icon-only tool in a live browser toolbar, identify it from the application's own tooltip or status line. If the screenshot offers hover, use `act_ui({view,hover:[x,y]})` on a likely icon. Read the returned full screenshot. If the description identifies a different tool, inspect the next candidate. Click the confirmed control's visible center in the latest screenshot. A static image cannot display a new tooltip; use its visible pixels and zoom instead.
 
 For a canvas, remote display, or screenshot-only request, open the browser with `launch_browser({url, mode:"pixels"})`. Ground each coordinate in the returned image, use `act_ui` to click or drag, and inspect its successor image. Coordinates use the reported image dimensions. Screenshots work in the background. For an existing desktop window, use `observe_ui({root,mode:"pixels"})` and pass its state to `act_ui`. For tiny or crowded browser targets, call `observe_ui({root,stateId,focus:{x,y}})` on the full pixels view. Click in the returned detail with its new stateId. If you cannot identify the control, inspect another region or report it. If the screenshot offers a short view handle, it accepts `act_ui({view,click:[x,y]})` for a single click in that image. For other windows, use `observe_ui({root,mode:"pixels",magnify:{x,y,width,height}})` to enlarge a region without changing the app. For exact-color work, read `samplePixels:[{x,y},…]` in the palette before editing and inside the finished shape before reporting success. These values come from the same screenshot. On dense toolbars, move the pointer to an uncertain icon or swatch and check its tooltip before committing. Select the tool and intended color before touching the document. If an edit changes the wrong pixels, undo it before trying again. Compare the whole result with the original image before claiming the other objects survived.
 

@@ -388,7 +388,8 @@ try {
   const hoverArgs = {view:viewOf(hoverDetail),hover:[localMarker.x,localMarker.y]};
   await assert.rejects(run('act_ui',hoverArgs,'B'),/another conversation/);
   await assert.rejects(run('act_ui',{...hoverArgs,click:[0,0]},'C'),/takes only/);
-  await assert.rejects(run('act_ui',{...hoverArgs,hover:[640,0]},'C'),/outside/);
+  const hoverWidth = Buffer.from(images.at(-1).url.split(',')[1],'base64').readUInt32BE(16);
+  await assert.rejects(run('act_ui',{...hoverArgs,hover:[hoverWidth,0]},'C'),/outside/);
   // An attempted out-of-bounds write can invalidate its handle. Re-observe before valid input.
   const hoverFresh = await observePixels();
   const hoverReady = await run('observe_ui',{view:viewOf(hoverFresh),focus:overviewMarker},'C');
@@ -397,12 +398,13 @@ try {
   assert.match(hovered,/Pointer moved without clicking/);
   assert.doesNotMatch(hovered,/stop here/);
   assert.deepEqual(marker([237,72,174]),overviewMarker);
-  const clickInSuccessor = /click:\[(\d+),(\d+)\]/.exec(hovered);
-  assert.ok(clickInSuccessor,'Missing full-image hover point');
+  assert.match(hovered,/pointer is near \([\d.]+,[\d.]+\)/);
+  assert.match(hovered,/click:\[x,y\]/);
+  const confirmed = marker([237,72,174]);
   assert.equal(await pointerCount(),beforeHover);
   await assert.rejects(run('act_ui',{view:viewOf(hoverReady),click:[localMarker.x,localMarker.y]},'C'),/stale|epoch/i);
   detailEvent=undefined;
-  const afterHoverClick = await run('act_ui',{view:viewOf(hovered),click:clickInSuccessor.slice(1).map(Number)},'C');
+  const afterHoverClick = await run('act_ui',{view:viewOf(hovered),click:[confirmed.x,confirmed.y]},'C');
   await waitFor(()=>detailEvent);
   assert.ok(detailEvent[0]>=240 && detailEvent[0]<=242 && detailEvent[1]>=110 && detailEvent[1]<=112 && detailEvent[3],JSON.stringify(detailEvent));
   assert.equal(await pointerCount(),beforeHover+1);
@@ -433,6 +435,8 @@ try {
   await assert.rejects(run('observe_ui',{stateId:state(pinched),region:'left'},'C'),/disabled/);
   assert.doesNotMatch(await observePixels(),/view:"v/);
   settings.browser_use = false;
+  settings.browser_panel_zoom = true;
+  assert.equal(actSchema().hover, undefined);
   await assert.rejects(observe(), /disabled/);
   sampling = false;
   await sampler;

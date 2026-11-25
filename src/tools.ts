@@ -412,6 +412,7 @@ function bindScreenshotArgs(tool: 'act_ui' | 'observe_ui', args: Record<string, 
 export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowserUrl): ToolProvider {
   const browserMode = () => {
     const settings = store.getScopeSettings(PLUGIN_ID, 'global');
+    if (settings.browser_use === false) return 'standard';
     if (settings.browser_panel_zoom === true) return 'panels';
     return settings.compact_browser_controls === true ? 'compact' : 'standard';
   };
