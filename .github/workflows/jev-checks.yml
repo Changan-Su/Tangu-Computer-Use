@@ -21,3 +21,6 @@ jobs:
       - run: npm run build
       - run: npm run check:platform
       - run: npm run check:jev
+      - name: Exercise managed Chrome through the built plugin
+        if: runner.os == 'Linux'
+        run: npm run check:managed-browser
