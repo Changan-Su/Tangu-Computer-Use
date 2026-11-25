@@ -253,13 +253,13 @@ export function render(result: AgentToolResult, tcx: ToolContext, args?: Record<
     }
   }
   const body = parts.join('\n') || '(no output)';
-  const details = (result as { details?: { execution?: unknown; target?: { app?: string; bundleId?: string }; capture?: { stateId?: string } } }).details;
+  const details = (result as { details?: { execution?: unknown; target?: { app?: string; bundleId?: string; pid?: number }; capture?: { stateId?: string } } }).details;
   const stateId = details?.capture?.stateId;
   if (stateId && (details?.target?.app || details?.target?.bundleId)) {
     targets.set(stateId, { app: details.target.app, bundleId: details.target.bundleId });
     if (targets.size > 64) targets.delete(targets.keys().next().value!);
   }
-  return executionNote(details) + body + imageNote(details, attached) + expectNote(details) + scrollNote(args?.actions, details?.execution) + foregroundNote(details?.execution) + selfWindowNote(details) + noRootsHint(details);
+  return executionNote(details) + body + imageNote(details, attached) + expectNote(details) + scrollNote(args?.actions, details?.execution) + foregroundNote(details?.execution, details?.target?.pid) + selfWindowNote(details) + noRootsHint(details);
 }
 
 /** ensure_app:后台启动目标 app(open -g)+ 轮询 find_roots 直到有可观察窗口,回其 roots。

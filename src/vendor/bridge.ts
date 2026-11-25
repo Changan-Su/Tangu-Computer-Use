@@ -2092,7 +2092,8 @@ async function terminalDesktopActionResult(
 	} catch {
 		// A failed identity probe cannot prove that the root closed.
 	}
-	const targetClosed = exactRootAvailable === false;
+	const targetClosed = exactRootAvailable === false && (!operationState().pixelsOnly || (execution.rootDelta ?? []).some(delta =>
+		delta.change === "closed" && delta.pid === target.pid && delta.ref === target.windowRef));
 	if (targetClosed && !(execution.rootDelta ?? []).some((delta) => delta.change === "closed" && delta.pid === target.pid && (delta.ref === target.windowRef || delta.ref === target.nativeWindowRef))) {
 		execution.rootDelta = [
 			...(execution.rootDelta ?? []),

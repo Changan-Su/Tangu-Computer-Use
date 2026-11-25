@@ -29,7 +29,7 @@ interface ExecStep {
   delivery?: string;
   deliveryPolicy?: string;
   steps?: ExecStep[];
-  rootDelta?: Array<{ change?: string }>;
+  rootDelta?: Array<{ change?: string; kind?: string; pid?: number }>;
 }
 
 /** Surface native facts without copying field contents or the whole internal trace. */
@@ -97,12 +97,15 @@ function tookForeground(step: ExecStep | undefined): boolean {
 }
 
 /** 传入 AgentToolResult.details.execution(或 undefined),返回一行提示或空串。 */
-export function foregroundNote(execution: unknown): string {
+export function foregroundNote(execution: unknown, targetPid?: number): string {
   const exec = execution as ExecStep | undefined;
   if (!exec || typeof exec !== 'object') return '';
   const steps: ExecStep[] = Array.isArray(exec.steps) && exec.steps.length ? exec.steps : [exec];
-  if ([exec, ...steps].some(s => Array.isArray(s?.rootDelta) && s.rootDelta.some(d => d?.change === 'focused'))) {
-    return '\n[foreground] The target window became foreground during this action, even if delivery used accessibility input. The target app may have activated itself.';
+  const focused = [exec, ...steps].flatMap(s => Array.isArray(s?.rootDelta) ? s.rootDelta.filter(d => d?.change === 'focused') : []);
+  // macOS distinguishes AX focus inside an app from a workspace transition to another frontmost process.
+  const macTarget = process.platform === 'darwin' && targetPid !== undefined;
+  if (focused.some(d => !macTarget || (d.kind === 'app' && d.pid === targetPid))) {
+    return '\n[foreground] The native helper reported that the target received foreground focus.';
   }
   if (!steps.some(tookForeground)) return '';
   const why = steps.map((s) => s?.escalationReason).find(Boolean);

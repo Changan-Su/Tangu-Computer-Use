@@ -50,6 +50,11 @@ async function unitTests() {
   assert.equal(foregroundNote({ delivery: 'ax', rootDelta: [{ change: 'appeared' }] }), '', 'a new root alone does not prove foreground activation');
   assert.equal(foregroundNote({ rootDelta: {}, steps: [null] }), '', 'malformed optional metadata does not break tool output');
 
+  if (process.platform === 'darwin') {
+    assert.equal(foregroundNote({ delivery:'ax', rootDelta:[{change:'focused',kind:'window',pid:10},{change:'focused',kind:'app',pid:20}] },10), '');
+    assert.ok(has(foregroundNote({ delivery:'ax', rootDelta:[{change:'focused',kind:'app',pid:10}] },10)));
+  }
+
   console.log('✓ unit: foregroundNote 判据 9 项全过');
 
   // 自家窗口提示(Forsion 反馈 6a239e58):目标 pid = 拉起引擎的桌面应用 → 提示改用界面命令;别的 App 不提示。
