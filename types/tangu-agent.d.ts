@@ -43,7 +43,7 @@ export interface ToolContext {
   /** 工具产出图片的回流闸(view_image / computer-use observe 用):把图片 data URL 交回 loop,
    *  loop 在本轮工具执行完后物化成一条 user 图像消息追加到对话尾部,让模型"看见"图片。
    *  缺省(未装配此闸)时工具应优雅降级,不要假定一定可用。 */
-  collectImage?: (img: { url: string; name?: string }) => void;
+  collectImage?: (img: { url: string; name?: string }) => void | boolean;
   displayFile?: (item: { name: string; mime?: string; path?: string; dataUrl?: string }) => void;
   /** 本次 run 的 id(一条用户消息引起的那一整轮)。拿来做「每轮只做一次」;缺省时按 sessionId 兜底。 */
   runId?: string;

@@ -146,7 +146,7 @@ try {
   await assert.rejects(run('act_ui',{stateId:state(picture),actions:[{action:'click',x:1,y:1},{action:'click',x:1,y:1}]},'C'),/one screenshot-grounded action/);
   const fresh = await run('observe_ui',{root:root(picture), magnify:{x:2,y:2,width:10,height:10}, samplePixels:[{x:2,y:2}]},'C');
   assert.match(fresh,/RGB\(255,255,255\)/);
-  assert.match(fresh,/second image is a 2× detail/);
+  assert.match(fresh,/second image is visible, it is a 2× detail/);
   assert.equal(images.at(-1).name,'detail-2x.png');
   const crop = Buffer.from(images.at(-1).url.split(',')[1], 'base64');
   assert.equal(crop.readUInt32BE(16),20);
@@ -154,6 +154,13 @@ try {
   const after = await run('act_ui',{stateId:state(fresh),actions:[{action:'moveMouse',x:10,y:10}]},'C');
   assert.match(after,/Screenshot only/);
   assert.equal(images.length,imageCount+4);
+  const inspectArgs = {root:root(picture),mode:'pixels',magnify:{x:0,y:0,width:10,height:10}};
+  let offered = 0;
+  const capacity = await byName.get('observe_ui').execute(inspectArgs, {sessionId:'C',appId:'fixture',userId:'fixture',execMode:'host', collectImage:() => ++offered === 1});
+  assert.match(capacity,/Magnified detail omitted/);
+  const imageCountBeforeError=images.length;
+  await assert.rejects(run('observe_ui',{...inspectArgs,magnify:{x:99999,y:0,width:2,height:2}},'C'),/within the full screenshot/);
+  assert.equal(images.length,imageCountBeforeError);
   settings.browser_use = false;
   await assert.rejects(observe(), /disabled/);
   sampling = false;

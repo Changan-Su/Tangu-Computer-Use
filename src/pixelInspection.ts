@@ -33,6 +33,7 @@ export function inspectScreenshot(image: AgentToolResultImageContent, { samplePi
     notes.push(`Colors from the ${lossless ? 'lossless PNG' : 'compressed JPEG (approximate colors)'} screenshot: ${samples.join(' | ')}.`);
   }
   let crop: string | undefined;
+  let detailDescription: string | undefined;
   if (magnify !== undefined) {
     checkPoint(magnify);
     const { x, y, width, height } = magnify;
@@ -47,7 +48,7 @@ export function inspectScreenshot(image: AgentToolResultImageContent, { samplePi
       }
     }
     crop = PNG.sync.write(detail).toString('base64');
-    notes.push(`The second image is a 2× detail of the full screenshot at (${x},${y}), size ${width} × ${height}. For an action at (u,v) in this detail, use x=${x}+floor(u/2), y=${y}+floor(v/2) on the full screenshot.`);
+    detailDescription = `If the second image is visible, it is a 2× detail of the full screenshot at (${x},${y}), size ${width} × ${height}. For an action at (u,v) in this detail, use x=${x}+floor(u/2), y=${y}+floor(v/2) on the full screenshot.`;
   }
-  return { text: notes.join('\n'), crop };
+  return { text: notes.join('\n'), crop, detailDescription };
 }

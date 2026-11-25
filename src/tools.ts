@@ -66,8 +66,8 @@ const conditionProps = {
 const clickCount = N('1-3', { minimum: 1, maximum: 3 });
 // 坐标一律是「最近一张截图里的像素」。反馈 55b984eb:这里以前没有任何说明,模型把它当成屏幕坐标去换算。
 const point = {
-  x: N('Pixels from the left edge of the latest screenshot of this state (its size is on the [image] line of the result that attached it), not screen or window-frame coordinates'),
-  y: N('Pixels from the top edge of that same screenshot'),
+  x: N('Pixels from the left edge of the full screenshot for this state. A magnified detail has a separate origin and scale; convert its coordinates using the observation result.'),
+  y: N('Pixels from the top edge of the same full screenshot'),
 };
 
 // act_ui 的 actions:上游 uiAction union(8 变体)→ anyOf
@@ -251,8 +251,9 @@ export function render(result: AgentToolResult, tcx: ToolContext, args?: Record<
   for (const block of result.content) {
     if (block.type === 'text') parts.push(block.text);
     else if (block.type === 'image' && tcx.collectImage) {
-      tcx.collectImage({ url: `data:${block.mimeType || 'image/jpeg'};base64,${block.data}`, name: block.mimeType === 'image/png' ? 'screen.png' : 'screen.jpg' });
-      attached = true;
+      const queued = tcx.collectImage({ url: `data:${block.mimeType || 'image/jpeg'};base64,${block.data}`, name: block.mimeType === 'image/png' ? 'screen.png' : 'screen.jpg' });
+      if (queued === false) parts.push('Screenshot omitted because the image queue is full. Observe this target again in a new model round before using coordinates.');
+      else attached = true;
     }
   }
   const body = parts.join('\n') || '(no output)';
@@ -417,13 +418,19 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
         explainGone(e, args);
         throw e;
       }
-      let text = render(result, tcx, args);
+      let detail: ReturnType<typeof inspectScreenshot> | undefined;
       if (inspectPixels) {
         const screen = result.content.find(block => block.type === 'image');
         if (!screen) throw new Error('The target supplied no screenshot to inspect.');
-        const detail = inspectScreenshot(screen, args);
-        if (detail.crop) tcx.collectImage?.({url: 'data:image/png;base64,' + detail.crop, name: 'detail-2x.png'});
-        text += '\n' + detail.text;
+        detail = inspectScreenshot(screen, args);
+      }
+      let text = render(result, tcx, args);
+      if (detail?.text) text += '\n' + detail.text;
+      if (detail?.crop) {
+        const queued = tcx.collectImage && tcx.collectImage({url:'data:image/png;base64,' + detail.crop,name:'detail-2x.png'});
+        text += '\n' + (!tcx.collectImage || queued === false
+          ? 'Magnified detail omitted by the image collector. Request it in a new model round.'
+          : detail.detailDescription);
       }
       return prefix + presentLiveViewOnce(spec.name, tcx, text);
       })(); } finally { unwatch(); }
