@@ -323,7 +323,8 @@ export function pixelBinding(id: string, owner: string, byView: boolean) {
 	const record = byView
 		? Array.from(savedStates.store.values()).find(r => r.value.kind === "browser" && r.value.view === id)
 		: savedStates.get(id);
-	if (record?.value.kind !== "browser" || !record.value.snapshot.pixelsOnly) return undefined;
+	if (!record) throw new Error("Screenshot expired or unavailable. Observe the root again.");
+	if (record.value.kind !== "browser" || !record.value.snapshot.pixelsOnly) return undefined;
 	if (record.value.snapshot.owner !== owner) throw new Error("Browser state belongs to another conversation.");
 	return { stateId: record.stateId, root: storeBrowserRootRef(record.value.snapshot.contextId), detail: !!record.value.snapshot.viewport?.origin };
 }
@@ -1842,6 +1843,13 @@ async function performObserve(params: ObserveParams, signal?: AbortSignal): Prom
 			return { browser, image };
 		});
 		const { browser, image } = value;
+		const observed = operationState();
+		const baseViewport = observed.browserSnapshot?.viewport;
+		if (baseViewport && observed.browserSnapshot?.pixelsOnly && ("samplePixels" in params || "magnify" in params)
+			&& (observed.epoch !== epoch || baseViewport.stamp !== browser.viewport?.stamp
+				|| baseViewport.width !== browser.viewport.width || baseViewport.height !== browser.viewport.height)) {
+			throw new Error("The screenshot or viewport is stale. Observe the full image again before inspecting its coordinates.");
+		}
 		if (image) browser.viewport = image.geometry;
 		const result = browserObservationResult(browser, resourceKey, epoch, "observe_ui");
 		if (image) {

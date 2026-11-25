@@ -364,8 +364,9 @@ async function legacyBrowserUrl(raw: string): Promise<string> {
   return url.href;
 }
 
-function bindScreenshotArgs(tool: 'act_ui' | 'observe_ui', args: Record<string, any>, owner: string): Record<string, any> {
+function bindScreenshotArgs(tool: 'act_ui' | 'observe_ui', args: Record<string, any>, owner: string, compact: boolean): Record<string, any> {
   const byView = args.view !== undefined;
+  if (!compact && (byView || args.click !== undefined)) throw new Error('Compact screenshot controls are disabled. Use stateId and actions to click.');
   if (byView && args.stateId !== undefined) throw new Error('Supply one screenshot view or stateId.');
   if (tool === 'act_ui' && !byView && args.click === undefined) {
     if (typeof args.stateId !== 'string' || !Array.isArray(args.actions)) throw new Error('Supply a screenshot and click:[x,y], or stateId and actions.');
@@ -375,7 +376,7 @@ function bindScreenshotArgs(tool: 'act_ui' | 'observe_ui', args: Record<string, 
   if (tool === 'observe_ui' && id === undefined) return args;
   const binding = typeof id === 'string' && pixelBinding(id.trim(), owner, byView);
   if (!binding) {
-    if (byView || tool === 'act_ui' || args.root === undefined) throw new Error('Screenshot expired or unavailable. Observe the browser again.');
+    if (byView || tool === 'act_ui') throw new Error('Screenshot expired or unavailable. Observe the browser again.');
     return args;
   }
   if (tool === 'act_ui') {
@@ -429,7 +430,7 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
         args = { ...args, url: await validateUrl(args.url.trim()) };
       }
       if (spec.name === 'act_ui' || spec.name === 'observe_ui') {
-        args = bindScreenshotArgs(spec.name, args, pctx.browserOwner!);
+        args = bindScreenshotArgs(spec.name, args, pctx.browserOwner!, pctx.compactBrowserControls);
       }
       const inspectPixels = spec.name === 'observe_ui' && (args.samplePixels !== undefined || args.magnify !== undefined);
       if (spec.name === 'observe_ui' && args.focus !== undefined) {

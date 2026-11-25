@@ -240,6 +240,10 @@ try {
   await assert.rejects(run('act_ui',{...bound,click:[640,384]},'C'),/outside/);
   assert.equal(detailEvent,undefined);
   await assert.rejects(run('act_ui',{stateId:state(detailState),click:[320,192]},'B'),/another conversation/);
+  settings.compact_browser_controls = false;
+  await assert.rejects(run('act_ui',bound,'C'),/disabled/);
+  await assert.rejects(run('act_ui',{stateId:state(detailState),click:[320,192]},'C'),/disabled/);
+  settings.compact_browser_controls = true;
   const reset = await run('act_ui',{stateId:state(detailState),click:[320,192]},'C');
   await assert.rejects(run('act_ui',bound,'C'),/stale|epoch/i);
   assert.doesNotMatch(reset,/Detail view/);
@@ -288,10 +292,12 @@ try {
   await run('act_ui',{view:viewOf(fractionalDetail),click:[finePoint.x,finePoint.y]},'C');
   await waitFor(()=>detailEvent);
   assert.ok(detailEvent[0]>=240 && detailEvent[0]<=242 && detailEvent[1]>=110 && detailEvent[1]<=112 && detailEvent[3],JSON.stringify(detailEvent));
+  const beforeZoom = await observePixels();
   await emulation('Emulation.setPageScaleFactor',{pageScaleFactor:2});
   await sleep(80);
   const pinched = await observePixels();
   const pinchPoint = marker();
+  await assert.rejects(run('observe_ui',{view:viewOf(beforeZoom),samplePixels:[{x:0,y:0}]},'C'),/stale/);
   await assert.rejects(run('observe_ui',{root:root(picture),stateId:state(pinched),focus:pinchPoint},'C'),/page zoom/);
   detailEvent=undefined;
   await run('act_ui',{stateId:state(pinched),actions:[{action:'click',...pinchPoint}]},'C');
