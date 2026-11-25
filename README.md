@@ -238,15 +238,17 @@ ASCII punctuation in its output is folded to half-width so it matches accessibil
 
 ## When to use it vs. browser tools
 
-Computer Use drives **any on-screen desktop app**. For **pure web** tasks prefer `browser_task` /
-`browser_*` (lighter), or plain `curl` when the page is directly fetchable. Use the Computer Use browser
-tools only when a desktop workflow must also touch a web page in the same root forest.
+Use `launch_browser({url})` for an interactive web page. The plugin starts Chrome or Helium in
+headless mode, with a fresh profile for this conversation. It needs the browser executable and can
+run without a Chrome extension or native desktop helper. Use the returned control refs with
+`act_ui` and keep the session with `navigate_browser`. Use `browser_tabs` for personal tabs
+and their existing logins. With strict background off, `visible: true` opens a visible managed window.
 
 ## Settings
 
 - **browser_use** (default on) — allow the CDP browser tools.
 - **managed_browser** (default Chrome) — which browser `launch_browser` starts.
-- **headless / 严格后台** (default off) — actions stay in the background; no foreground focus grab or
+- **headless / 严格后台** (default on) — actions stay in the background; no foreground focus grab or
   cursor move. Things the background genuinely cannot do then fail instead of stealing focus.
 - **cursor_overlay / 操作可视化** (default on) — the agent cursor *and* the controlled-window edge glow.
 

@@ -8,6 +8,7 @@
  *   - setup:每次工具执行前惰性 ensureComputerUseSetup(hasUI=false)→ 权限缺时 vendor 抛 nonInteractiveError,
  *     被 catch 成指导文本返回给模型(提示跑 `tangu computer-use setup`)。
  */
+import { assertPublicHttpUrl } from './publicUrl.ts';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ToolDef, ToolProvider, ToolContext, AppProfile, PluginStore } from '@forsion/tangu-agent';
@@ -16,9 +17,9 @@ import type { ExtensionContext, AgentToolResult } from './pi-compat.ts';
 import {
   executeFind, executeObserve, executeSearchUi, executeExpandUi, executeInspectUi,
   executeAct, executeReadText, executeWaitFor, executeLaunchBrowser, executeNavigateBrowser,
-  executeEvaluateBrowser, ensureComputerUseSetup,
+  executeEvaluateBrowser, ensureComputerUseSetup, toolSurface,
 } from './vendor/bridge.ts';
-import { getComputerUseConfig } from './vendor/config.ts';
+import { getComputerUseConfig, loadComputerUseConfig } from './vendor/config.ts';
 import { currentPlatformBackend } from './vendor/platform/index.ts';
 import { isSupportedPlatform } from './helperState.ts';
 import { autoInstallFailed, ensureHelperCurrent, guideMissingPermissions } from './onboarding.ts';
@@ -185,8 +186,8 @@ const SPECS: ToolSpec[] = [
   },
   {
     name: 'launch_browser', exec: executeLaunchBrowser as PiExecute, sideEffect: 'browser', approval: 'command', browserOnly: true, timeoutMs: 60_000,
-    description: 'Launch the configured Tangu-managed CDP browser and return an observed browser-page state. Use for browser work that needs a managed CDP context. Prefer curl through bash when the page is directly fetchable. Which browser starts is a plugin setting, not a parameter.',
-    parameters: obj({ url: S('Initial URL', 8192) }),
+    description: 'Open a fresh background browser for this conversation. No Chrome extension or desktop permissions are needed. For a URL or web form, start here and use the returned state with act_ui. This separate profile has no personal tabs or logins. Use browser_tabs when the user needs their existing browser.',
+    parameters: obj({ url: S('Initial URL', 8192), visible: { type: 'boolean', description: 'Show the window only when requested. Requires strict background to be off.' } }),
   },
   {
     name: 'navigate_browser', exec: executeNavigateBrowser as PiExecute, sideEffect: 'browser', approval: 'command', browserOnly: true, timeoutMs: 60_000,
@@ -222,6 +223,7 @@ const owned = new Set<string>();
 export function makePiCtx(tcx: ToolContext, hasUI: boolean): ExtensionContext {
   return {
     cwd: tcx.cwd || process.cwd(),
+    browserOwner: JSON.stringify([tcx.userId, tcx.appId, tcx.sessionId]),
     hasUI,
     ui: { notify: () => {}, select: async () => undefined },
     sessionManager: { getBranch: () => [] },
@@ -246,7 +248,7 @@ export function render(result: AgentToolResult, tcx: ToolContext, args?: Record<
   for (const block of result.content) {
     if (block.type === 'text') parts.push(block.text);
     else if (block.type === 'image' && tcx.collectImage) {
-      tcx.collectImage({ url: `data:${block.mimeType || 'image/jpeg'};base64,${block.data}`, name: 'screen.jpg' });
+      tcx.collectImage({ url: `data:${block.mimeType || 'image/jpeg'};base64,${block.data}`, name: block.mimeType === 'image/png' ? 'screen.png' : 'screen.jpg' });
       attached = true;
     }
   }
@@ -281,14 +283,13 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
   const wasRunning = (await apps()).some(mine);
   // -g:启动但不置前台。execFile 传 argv(非 shell),bundleId/app 作单参无注入。
   const open = (background: boolean) => execFileP('open', [...(background ? ['-g'] : []), ...(bundleId ? ['-b', bundleId] : ['-a', app])], { timeout: 8_000 });
-  const strict = getComputerUseConfig().headless === true;
-  // 严格后台下不去「重新打开」一个已经在跑的 App:微信这类收到这个事件会自己跳到前台。只找它现有的窗口。
-  if (!(strict && wasRunning)) {
+  const strict = loadComputerUseConfig(pctx.cwd).config.headless;
+  // 查找已运行的 App 时不重复发送 open 事件，有的 App 收到它会自己跳到前台。
+  if (!wasRunning) {
     try {
       await open(true);
     } catch (e: any) {
-      // 已经在跑的 App 按这个名字打不开(从没登记过的位置启动的)不要紧:接着找它的窗口就是了。
-      if (!wasRunning) return `Could not launch ${name}: ${e?.stderr?.toString().trim() || e?.message || e}. Check the app/bundleId is installed.`;
+      return `Could not launch ${name}: ${e?.stderr?.toString().trim() || e?.message || e}. Check the app/bundleId is installed.`;
     }
   }
   const started = Date.now();
@@ -344,7 +345,14 @@ async function spec_executeFind(pctx: ExtensionContext, tcx: ToolContext, app: s
   }
 }
 
-export function buildToolProvider(store: PluginStore): ToolProvider {
+async function legacyBrowserUrl(raw: string): Promise<string> {
+  if (!['1','true','yes','on'].includes((process.env.TANGU_BROWSER_ALLOW_PRIVATE_URLS ?? '').toLowerCase())) return (await assertPublicHttpUrl(raw)).href;
+  const url = new URL(raw);
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Only HTTP(S) URLs are allowed.');
+  return url.href;
+}
+
+export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowserUrl): ToolProvider {
   const gate = (spec: ToolSpec) => (profile: AppProfile): boolean =>
     !!profile.capabilities.hostExec
     && store.isPluginEnabledSync(PLUGIN_ID)
@@ -370,23 +378,26 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
         parseJevArgs(args);
       }
       syncSettings(store);
-      // ⚠️这里**绝不能**再加「没装就 return 指导文本」的早退:vendor 的 ensureInstalled() 本来就会
-      // 自动跑 setup-helper.mjs,早退等于把上游的自动安装堵死(用户报的「首次安装还要敲命令」就是它)。
-      // 我们只补上游缺的那半:装着的二进制比 bundle 老时也要重装。
-      const installNote = await ensureHelperCurrent(tcx.signal);
       const pctx = makePiCtx(tcx, false);
-      try {
-        await ensureComputerUseSetup(pctx, tcx.signal);
-      } catch (e: any) {
-        // 权限是系统安全设置,只能用户自己拨 —— 但可以替他把 App 登记好、把面板打开。
-        const guidance = await guideMissingPermissions(tcx.signal);
-        // ⚠️只有「自动安装本身失败了」才该提终端命令。就绪失败的原因多得很(Linux 缺 AT-SPI、
-        // 架构不符、daemon 起不来……),对这些 case 说「去跑 setup」是把模型引到错的方向上,
-        // 而真正的原因反而被这句话盖住了。
-        const fallback = autoInstallFailed()
-          ? `Computer Use is not ready: ${e?.message || e}\nAutomatic helper installation failed — run \`tangu computer-use setup\` in a terminal to see why.`
-          : `Computer Use is not ready: ${e?.message || e}`;
-        return [installNote, guidance ?? fallback].filter(Boolean).join('\n');
+      if ((spec.name === 'launch_browser' || spec.name === 'navigate_browser') && typeof args.url === 'string' && args.url.trim()) {
+        args = { ...args, url: await validateUrl(args.url.trim()) };
+      }
+      let installNote;
+      if (toolSurface(spec.name, args) === "desktop") {
+        installNote = await ensureHelperCurrent(tcx.signal);
+        try {
+          await ensureComputerUseSetup(pctx, tcx.signal);
+        } catch (e: any) {
+          // 权限是系统安全设置,只能用户自己拨 —— 但可以替他把 App 登记好、把面板打开。
+          const guidance = await guideMissingPermissions(tcx.signal);
+          // ⚠️只有「自动安装本身失败了」才该提终端命令。就绪失败的原因多得很(Linux 缺 AT-SPI、
+          // 架构不符、daemon 起不来……),对这些 case 说「去跑 setup」是把模型引到错的方向上,
+          // 而真正的原因反而被这句话盖住了。
+          const fallback = autoInstallFailed()
+            ? `Computer Use is not ready: ${e?.message || e}\nAutomatic helper installation failed — run \`tangu computer-use setup\` in a terminal to see why.`
+            : `Computer Use is not ready: ${e?.message || e}`;
+          return [installNote, guidance ?? fallback].filter(Boolean).join('\n');
+        }
       }
       // 装/升级过就在结果里说一句 —— 用户装了什么、agent 替他做了什么,不该是暗箱。
       const prefix = installNote ? `${installNote}\n` : '';

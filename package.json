@@ -57,6 +57,7 @@
     "check:first-click": "node scripts/first-click.check.mjs",
     "check:platform": "node scripts/platform-contract.check.mjs",
     "check:actions": "node scripts/actions.check.mjs",
+    "check:managed-browser": "node scripts/managed-browser.check.mjs",
     "check:web-content": "node scripts/web-content.check.mjs",
     "check:web-press": "node scripts/web-press.check.mjs",
     "check:web-covered": "node scripts/web-covered.check.mjs",
@@ -90,7 +91,11 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "@types/ws": "^8.18.2",
     "esbuild": "^0.24.0",
     "typescript": "^5.6.0"
+  },
+  "dependencies": {
+    "ws": "^8.23.0"
   }
 }

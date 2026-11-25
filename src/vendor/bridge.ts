@@ -1,19 +1,18 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { browserConversation, browserOwner, launchManagedBrowser, closeManagedBrowsers } from "../managedBrowser.ts";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { canRetryInForeground, isBackgroundPointer, keysFollow, needsFrontmostProbe, pointerMissesAfter, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
-import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
-import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
+import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpViewportForContext, cdpViewportStamp, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
+import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig, operationConfig } from "./config.ts";
 import { applyWheelFix, wheelFix } from "../wheel.ts"; // Forsion patch, see UPSTREAM.md
 import { noteContact, webContentWait } from "../webContent.ts"; // Forsion patch, see UPSTREAM.md
 import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
 import { foldToBudget, graftScopedOutline, nodeByRef, outlineNodeLabel, outlineNodePath, rankedTextMatch, restoreOutline, searchOutline, searchOutlineRanked, serializeOutline, serializeOutlineNodeShallow, serializeOutlineSearchMatch, type LookResponse, type Outline, type OutlineChange, type OutlineNode, type OutlineRect, type PictureGrid, type OutlineSearchMatch, type SerializedOutline, type SerializedOutlineNode, type SerializedOutlineSearchMatch } from "./outline.ts";
-import { applyOutputEnvelope, boundToolError, clearStoredOutputs, readStoredOutput, UI_TEXT_PAGE_CHARS } from "./output.ts";
+import { applyOutputEnvelope, boundToolError, clearStoredOutputs, isBrowserOutput, readStoredOutput, UI_TEXT_PAGE_CHARS } from "./output.ts";
 import { AGENT_TOOL_NAMES, type ActParams, type EvaluateBrowserParams, type ExpandUiParams, type ImageMode, type InspectUiParams, type LaunchBrowserParams, type FindParams, type NavigateBrowserParams, type ObserveParams, type ObserveTargetParams, type ReadTextParams, type RootSelector, type SearchUiParams, type UiAction, type WaitForParams } from "./contract.ts";
 import { toFiniteNumber } from "./platform/coerce.ts";
 import { currentPlatformBackend } from "./platform/index.ts";
@@ -284,9 +283,6 @@ interface RuntimeState {
 	browserRootByContext: Map<string, string>;
 	browserContextByRoot: Map<string, string>;
 	nextRootRefIndex: number;
-	managedBrowser?: ChildProcess;
-	managedBrowserCdpPort?: string;
-	previousCdpPort?: string;
 	permissionStatus?: PermissionStatus;
 	helperDiagnostics?: PlatformDiagnostics;
 	lastPermissionCheckAt: number;
@@ -303,7 +299,6 @@ const LOOK_TIMEOUT_MS = 33_000;
 const ACTION_SETTLE_MS = 280;
 
 const BROWSER_CONTEXT_PREFIX = "browser:";
-const MANAGED_BROWSER_READY_TIMEOUT_MS = 15_000;
 const AUTO_IMAGE_MAX_DIMENSION = 900;
 /** Forsion patch, see UPSTREAM.md. How long a covered page takes to paint again once activated: 0.9-1.3 s measured on macOS 27. */
 const COVERED_PAGE_REPAINT_MS = 2_000;
@@ -343,18 +338,7 @@ export async function shutdownComputerUseSession(): Promise<void> {
 	resourceScheduler = new ResourceScheduler();
 	disconnectCdp();
 
-	const managedBrowser = runtimeState.managedBrowser;
-	runtimeState.managedBrowser = undefined;
-	if (managedBrowser) {
-		managedBrowser.kill("SIGTERM");
-		managedBrowser.unref();
-	}
-	if (runtimeState.managedBrowserCdpPort && process.env.PI_COMPUTER_USE_CDP_PORT === runtimeState.managedBrowserCdpPort) {
-		if (runtimeState.previousCdpPort === undefined) delete process.env.PI_COMPUTER_USE_CDP_PORT;
-		else process.env.PI_COMPUTER_USE_CDP_PORT = runtimeState.previousCdpPort;
-	}
-	runtimeState.managedBrowserCdpPort = undefined;
-	runtimeState.previousCdpPort = undefined;
+	await closeManagedBrowsers();
 
 	savedStates.clear();
 	clearStoredOutputs();
@@ -560,7 +544,7 @@ function emptyActivation(): ActivationFlags {
 }
 
 async function ensureReady(ctx: ExtensionContext, signal?: AbortSignal): Promise<void> {
-	loadComputerUseConfig(ctx.cwd);
+	if (!operationConfig.getStore()) loadComputerUseConfig(ctx.cwd);
 
 	throwIfAborted(signal);
 	const ready = await currentPlatformBackend.ensureReady(
@@ -1175,7 +1159,8 @@ function modelRefForRootDelta(delta: NonNullable<HelperActResult["rootDelta"]>[n
 function executionTraceFromAct(result: HelperActResult, policy = currentDeliveryPolicy()): ExecutionTrace {
 	const rootDelta = result.rootDelta?.map((delta) => ({ ...delta, ref: modelRefForRootDelta(delta) }));
 	return executionTrace("act", result.performed?.delivery === "ax" ? "stealth" : "default", {
-		outcome: result.outcome,
+		// Repainting alone cannot establish whether the intended control handled the input.
+		outcome: result.performed?.verification === "pixels" && result.outcome === "worked" ? "unknown" : result.outcome,
 		performed: result.performed,
 		evidence: result.evidence,
 		error: result.error,
@@ -1450,7 +1435,7 @@ async function performListWindows(params: FindParams, signal?: AbortSignal): Pro
 		kind: rawParams.kind,
 	};
 	const config = getComputerUseConfig();
-	const desktopForest = await windowDetailsForFind(query, config, signal);
+	const desktopForest = query.kind === "browser_page" ? [] : await windowDetailsForFind(query, config, signal);
 	const includeBrowserPages = !query.pid && !query.bundleId && (!query.app || normalizeText(query.app) === "browser") && config.browser_use;
 	const browserForest: ListWindowsDetails["windows"] = !includeBrowserPages ? [] : (await listCdpPageContexts().catch(() => []))
 		.map((page) => ({
@@ -1534,7 +1519,13 @@ function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string,
 	const viewText = useDiff
 		? `Changes (${transition!.changedNodeCount}, ${base!.stateId} → ${browser.snapshotId}):\n${renderChanges(transition!.changes) || "(no element changes)"}\nUse stateId ${browser.snapshotId} for subsequent actions and queries.`
 		: folded.text;
-	return { content: [{ type: "text", text: `${tool} completed for ${root.ref} ${JSON.stringify(browser.title)}. State ${browser.snapshotId}.\n${viewText}` }], details };
+	const controls = browser.targets.filter(target => !viewText.includes(`${target.ref} `)).slice(0, 24);
+	const pageText = browser.text.length <= 2400 ? browser.text
+		: browser.text.slice(0, 1400) + `\n… read_text with ${currentOutline.root.ref} for more …\n` + browser.text.slice(-900);
+	const controlHint = tool === "launch_browser" ? "\nUse act_ui with this stateId for all clicks and text entry on this page. To verify the result use observe_ui with this root." : "";
+	const controlText = controls.length ? "\nControls in this state:\n" + controls.map(target =>
+		`${target.ref} ${target.role} ${JSON.stringify(target.name.slice(0, 120))}`).join("\n") : "";
+	return { content: [{ type: "text", text: `${tool} completed for ${root.ref} ${JSON.stringify(browser.title)}. State ${browser.snapshotId}.${controlHint}\n${viewText}${controlText}${pageText ? "\nPage text:\n" + pageText : ""}` }], details };
 }
 
 async function refreshBrowserSnapshot(contextId: string, tool: string, base?: { stateId: string; outline: SerializedOutline }): Promise<AgentToolResult<BrowserObservationDetails>> {
@@ -1675,6 +1666,13 @@ function conditionScopeNode(outline: Outline, condition: ReturnType<typeof valid
 	return scopeNode;
 }
 
+function browserConditionPresent(snapshot: CdpPageSnapshot, condition: ReturnType<typeof validateCondition>, wireRef?: string): boolean {
+	const outline = restoreOutline(snapshot.outline);
+	if (!condition.scopeRef) return outlineConditionPresent(outline, condition);
+	const scopeRef = wireRef && outline.wireRefToRef.get(wireRef);
+	return Boolean(scopeRef && outlineConditionPresent(outline, { ...condition, scopeRef }));
+}
+
 async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Promise<AgentToolResult<WaitForDetails>> {
 	const contextId = operationState().contextId;
 	const condition = validateCondition(params);
@@ -1685,7 +1683,7 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 		if (!state.resourceKey) throw new Error("The browser observation has no live resource identity. Observe again.");
 		const baseSnapshot = state.browserSnapshot;
 		if (!baseSnapshot) throw new Error("Browser wait requires a complete base observation.");
-		conditionScopeNode(restoreOutline(baseSnapshot.outline), condition);
+		const scope = conditionScopeNode(restoreOutline(baseSnapshot.outline), condition);
 		const deadline = Date.now() + timeoutMs;
 		let lastSnapshot: CdpPageSnapshot | undefined;
 		let lastEpoch = state.epoch ?? resourceScheduler.epoch(state.resourceKey);
@@ -1706,7 +1704,7 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 			lastSnapshot = scheduled.value;
 			lastEpoch = scheduled.epoch;
 			if (!lastSnapshot) throw new Error(`Browser root '${contextId}' is no longer available. Call find_roots and observe_ui again.`);
-			const present = outlineConditionPresent(restoreOutline(lastSnapshot.outline), condition);
+			const present = browserConditionPresent(lastSnapshot, condition, scope?.wireRef);
 			if (present !== gone) return finish(true);
 			await sleep(200, signal);
 		} while (Date.now() < deadline);
@@ -1773,10 +1771,20 @@ async function performObserve(params: ObserveParams, signal?: AbortSignal): Prom
 	if (isBrowserContextId(browserContextId)) {
 		const targetId = browserContextId.slice(BROWSER_CONTEXT_PREFIX.length);
 		const resourceKey = `cdp:${targetId}`;
-		const scheduled = await resourceScheduler.read(resourceKey, async () => await cdpSnapshotForContext(browserContextId));
-		const browser = scheduled.value;
-		if (!browser) throw new Error(`Browser context '${browserContextId}' is no longer available. Call find_roots again.`);
-		return browserObservationResult(browser, resourceKey, scheduled.epoch, "observe_ui");
+		const { value, epoch } = await resourceScheduler.read(resourceKey, async () => {
+			const browser = await cdpSnapshotForContext(browserContextId);
+			if (!browser) throw new Error(`Browser context '${browserContextId}' is no longer available. Call find_roots again.`);
+			const image = params.mode === "visual" ? await cdpViewportForContext(browserContextId) : undefined;
+			return { browser, image };
+		});
+		const { browser, image } = value;
+		if (image) browser.viewport = image.geometry;
+		const result = browserObservationResult(browser, resourceKey, epoch, "observe_ui");
+		if (image) {
+			result.content.push({ type: "text", text: `[image] Browser viewport ${image.geometry.width} × ${image.geometry.height} pixels. Use coordinates directly from this image with this stateId.` });
+			result.content.push({ type: "image", mimeType: "image/png", data: image.data });
+		}
+		return result;
 	}
 	const state = operationState();
 	const mode = params.mode ?? "fused";
@@ -1837,7 +1845,7 @@ async function performSearchUi(params: SearchUiParams, signal?: AbortSignal): Pr
 	let matches = ranked.matches;
 	let escalatedOCR = false;
 	const look = state.currentLook;
-	if (shouldEscalateSearchOCR(matches, text) && look && look.readText?.requested !== "never" && !look.readText?.executed && state.lastSearchOcrEscalatedLookId !== look.lookId) {
+	if (!state.browserSnapshot && shouldEscalateSearchOCR(matches, text) && look && look.readText?.requested !== "never" && !look.readText?.executed && state.lastSearchOcrEscalatedLookId !== look.lookId) {
 		state.lastSearchOcrEscalatedLookId = look.lookId;
 		const currentTarget = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 		// captureCurrentTarget adopts the new look/outline/capture into
@@ -1873,7 +1881,7 @@ async function performExpandUi(params: ExpandUiParams, signal?: AbortSignal): Pr
 	const depth = Math.max(1, Math.min(8, Math.trunc(toFiniteNumber(params.depth, 3))));
 	const regionKey = noteRegionKeyForRef(outline, ref);
 	const regionChanged = Boolean(regionKey && state.currentNote?.regions.some((region) => region.key === regionKey && region.status === "changed"));
-	if (target.truncated || regionChanged) {
+	if (!state.browserSnapshot && (target.truncated || regionChanged)) {
 		const currentTarget = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 		const targetWireRef = wireRefForNode(target);
 		if (!state.resourceKey || state.epoch === undefined) throw new Error("The observation has no live resource identity. Observe again.");
@@ -1990,7 +1998,7 @@ async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget
 		if (!result.steps || result.steps.length === 0) throw new Error("Native action transaction returned no checked steps.");
 		const execution = aggregateExecutions(result.steps.map((step) => executionTraceFromAct(step, "ax_only")));
 		const batchTrace = executionTraceFromAct(result, "ax_only");
-		execution.outcome = result.outcome;
+		if (result.outcome !== "worked") execution.outcome = result.outcome;
 		execution.performed = result.performed;
 		execution.rootDelta = batchTrace.rootDelta;
 		execution.stoppedAt = result.stoppedAt;
@@ -2279,7 +2287,7 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 			const pressedSteps = execution.steps?.length ? execution.steps : [execution];
 			const pressed = pressedSteps.filter((step) => step.accessibilityPress);
 			if (pressed.length > 0 && !execution.rootDelta?.length && (!execution.error || execution.error.code === "postcondition_failed") && !webContentChanged(baseView.outline, capture.outline)) {
-				const activated = await currentPlatformBackend.activateWindow?.(nativeWindowRequest(target), signal);
+				const activated = !isHeadlessMode() && await currentPlatformBackend.activateWindow?.(nativeWindowRequest(target), signal);
 				if (activated) {
 					await sleep(COVERED_PAGE_REPAINT_MS, signal);
 					capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);
@@ -2335,8 +2343,17 @@ async function performBrowserTransaction(params: ActParams, actions: UiAction[],
 	if (!baseSnapshot) throw new Error("Browser transaction requires a complete base observation.");
 	const baseView = { stateId: baseSnapshot.snapshotId, outline: baseSnapshot.outline };
 	const condition = params.expect ? validateCondition(params.expect) : undefined;
-	if (condition) conditionScopeNode(restoreOutline(baseSnapshot.outline), condition);
-	const prepared = actions.map((action) => {
+	const scope = condition ? conditionScopeNode(restoreOutline(baseSnapshot.outline), condition) : undefined;
+	const toCss = (x: number, y: number) => {
+		const viewport = baseSnapshot.viewport;
+		if (!viewport) throw new Error("Coordinate input requires observe_ui with mode=visual. Use the returned screenshot and stateId.");
+		if (x < 0 || y < 0 || x >= viewport.width || y >= viewport.height) throw new Error("Point falls outside the observed browser viewport.");
+		return { x: x * viewport.cssWidth / viewport.width, y: y * viewport.cssHeight / viewport.height };
+	};
+	const prepared = actions.map((input) => {
+		let action = input;
+		if (Number.isFinite(input.x) && Number.isFinite(input.y)) action = { ...input, ...toCss(input.x!, input.y!) };
+		if (input.path) action = { ...action, path: normalizeActionPath(input.path).map(point => toCss(point.x, point.y)) };
 		if (!BROWSER_TRANSACTION_ACTIONS.has(action.action)) throw new Error(`Browser transactions do not support '${action.action}'.`);
 		if (action.action === "click" && action.ref && action.button && action.button !== "left") throw new Error("Browser ref clicks support only the left button; use coordinate clicks for right or middle buttons.");
 		const target = browserSnapshotTarget(params.stateId, trimOrUndefined(action.ref));
@@ -2347,35 +2364,48 @@ async function performBrowserTransaction(params: ActParams, actions: UiAction[],
 		return { action, target };
 	});
 	return await withBrowserWrite(contextId, async () => {
-		for (const { action, target } of prepared) {
-			let worked = false;
-			if (action.action === "press" || (action.action === "click" && action.ref)) {
-				worked = true;
-				for (let count = 0; count < (action.clickCount ?? 1); count += 1) worked = await cdpClickForContext(contextId, target!.backendNodeId!) && worked;
-			} else if (action.action === "click") {
-				worked = await cdpMouseForContext(contextId, action.x!, action.y!, "mousePressed", action.button ?? "left", action.clickCount ?? 1)
-					&& await cdpMouseForContext(contextId, action.x!, action.y!, "mouseReleased", action.button ?? "left", action.clickCount ?? 1);
-			} else if (action.action === "setText") worked = await cdpTypeForContext(contextId, target!.backendNodeId!, action.text ?? "", true);
-			else if (action.action === "typeText") worked = target?.backendNodeId
-				? await cdpTypeForContext(contextId, target.backendNodeId, action.text ?? "", false)
-				: await cdpTypeFocusedForContext(contextId, action.text ?? "");
-			else if (action.action === "keypress") worked = await cdpKeypressForContext(contextId, action.keys ?? []);
-			else if (action.action === "scroll") worked = await cdpScrollForContext(contextId, toFiniteNumber(action.scrollX, 0), toFiniteNumber(action.scrollY, 0), target?.backendNodeId);
-			else if (action.action === "drag") worked = await cdpDragForContext(contextId, normalizeActionPath(action.path));
-			else if (action.action === "moveMouse") worked = await cdpMouseForContext(contextId, action.x!, action.y!, "mouseMoved");
-			if (!worked) throw new Error("The browser root became unavailable during the action transaction. Observe it again.");
+		let completed = 0;
+		try {
+			for (const { action, target } of prepared) {
+				throwIfAborted(signal);
+				if ((Number.isFinite(action.x) || action.path) && baseSnapshot.viewport?.stamp !== await cdpViewportStamp(contextId)) {
+					throw new Error("The page or viewport moved since the screenshot. Observe again in visual mode before coordinate input.");
+				}
+				let worked = false;
+				if (action.action === "press" || (action.action === "click" && action.ref)) {
+					worked = await cdpClickForContext(contextId, target!.backendNodeId!, action.clickCount ?? 1);
+				} else if (action.action === "click") {
+					worked = await cdpMouseForContext(contextId, action.x!, action.y!, "mousePressed", action.button ?? "left", action.clickCount ?? 1)
+						&& await cdpMouseForContext(contextId, action.x!, action.y!, "mouseReleased", action.button ?? "left", action.clickCount ?? 1);
+				} else if (action.action === "setText") worked = await cdpTypeForContext(contextId, target!.backendNodeId!, action.text ?? "", true);
+				else if (action.action === "typeText") worked = target?.backendNodeId
+					? await cdpTypeForContext(contextId, target.backendNodeId, action.text ?? "", false)
+					: await cdpTypeFocusedForContext(contextId, action.text ?? "");
+				else if (action.action === "keypress") worked = await cdpKeypressForContext(contextId, action.keys ?? [], target?.backendNodeId);
+				else if (action.action === "scroll") worked = await cdpScrollForContext(contextId, toFiniteNumber(action.scrollX, 0), toFiniteNumber(action.scrollY, 0), target?.backendNodeId);
+				else if (action.action === "drag") worked = await cdpDragForContext(contextId, normalizeActionPath(action.path));
+				else if (action.action === "moveMouse") worked = await cdpMouseForContext(contextId, action.x!, action.y!, "mouseMoved");
+				if (!worked) throw new Error("The browser root became unavailable during the action transaction. Observe it again.");
+				completed++;
+			}
+		} catch (error) {
+			if (!completed) throw error;
+			throw new Error(`${completed} earlier action(s) delivered. Inspect the current state before continuing: ${error}`);
 		}
 		if (condition) {
 			const deadline = Date.now() + condition.timeoutMs;
-			let satisfied = false;
 			do {
+				throwIfAborted(signal);
 				const snapshot = await cdpSnapshotForContext(contextId);
 				if (!snapshot) throw new Error(`Browser root '${contextId}' is no longer available. Observe it again.`);
-				const present = outlineConditionPresent(restoreOutline(snapshot.outline), condition);
-				satisfied = present !== condition.gone;
-				if (!satisfied) await sleep(100, signal);
-			} while (!satisfied && Date.now() < deadline);
-			if (!satisfied) throw new Error(`The browser action was delivered but its postcondition was not satisfied within ${condition.timeoutMs}ms.`);
+				const present = browserConditionPresent(snapshot, condition, scope?.wireRef);
+				if (present !== condition.gone) {
+					const state = operationState();
+					return browserObservationResult(snapshot, state.resourceKey!, state.epoch!, "act_ui", baseView);
+				}
+				await sleep(100, signal);
+			} while (Date.now() < deadline);
+			throw new Error(`The browser action was delivered but its postcondition was not satisfied within ${condition.timeoutMs}ms.`);
 		}
 		return await refreshBrowserSnapshot(contextId, "act_ui", baseView);
 	});
@@ -2475,79 +2505,25 @@ async function managedBrowserExecutable(browser: "helium" | "chrome"): Promise<s
 	throw new Error(`${browser} executable was not found. Set ${overrideName} to its absolute path.`);
 }
 
-function freeTcpPort(): Promise<number> {
-	return new Promise((resolve, reject) => {
-		const server = net.createServer();
-		server.on("error", reject);
-		server.listen(0, "127.0.0.1", () => {
-			const address = server.address();
-			const port = typeof address === "object" && address ? address.port : 0;
-			server.close(() => port > 0 ? resolve(port) : reject(new Error("Could not allocate a local CDP port.")));
-		});
-	});
-}
-
-async function waitForCdpPort(port: number, signal?: AbortSignal): Promise<void> {
-	const deadline = Date.now() + MANAGED_BROWSER_READY_TIMEOUT_MS;
-	while (Date.now() < deadline) {
-		if (signal?.aborted) throw new Error("Browser launch was aborted.");
-		try {
-			const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(500) });
-			if (response.ok) return;
-		} catch {
-			// Browser is still starting.
-		}
-		await sleep(200, signal);
-	}
-	throw new Error(`Managed browser did not expose CDP on port ${port} within ${MANAGED_BROWSER_READY_TIMEOUT_MS}ms.`);
-}
-
-// Side effects: starts a Pi-managed browser process, replaces any previous managed browser,
-// and sets PI_COMPUTER_USE_CDP_PORT for subsequent CDP context discovery.
 async function performLaunchBrowser(params: LaunchBrowserParams, signal?: AbortSignal): Promise<AgentToolResult<BrowserObservationDetails>> {
-	const browser = getComputerUseConfig().managed_browser;
-	const executable = await managedBrowserExecutable(browser);
-	const port = await freeTcpPort();
-	const requestedUrl = trimOrUndefined(params.url);
-	if (requestedUrl && !/^https?:\/\//i.test(requestedUrl)) throw new Error("launch_browser.url must be an absolute HTTP(S) URL.");
-	const url = requestedUrl ?? "about:blank";
-	const profileDir = path.join(os.tmpdir(), `pi-${browser}-cdp-${port}`);
-	disconnectCdp();
-	runtimeState.managedBrowser?.kill("SIGTERM");
-	const args = [
-		`--remote-debugging-port=${port}`,
-		`--user-data-dir=${profileDir}`,
-		"--no-first-run",
-		"--no-default-browser-check",
-		url,
-	];
-	if (runtimeState.previousCdpPort === undefined && runtimeState.managedBrowserCdpPort === undefined) {
-		runtimeState.previousCdpPort = process.env.PI_COMPUTER_USE_CDP_PORT;
-	}
-	const managedBrowser = spawn(executable, args, { stdio: "ignore", detached: false });
-	managedBrowser.unref();
-	runtimeState.managedBrowser = managedBrowser;
-	runtimeState.managedBrowserCdpPort = String(port);
-	process.env.PI_COMPUTER_USE_CDP_PORT = String(port);
-	try {
-		await waitForCdpPort(port, signal);
-	} catch (error) {
-		if (runtimeState.managedBrowser === managedBrowser) {
-			runtimeState.managedBrowser = undefined;
-			managedBrowser.kill("SIGTERM");
-			if (runtimeState.previousCdpPort === undefined) delete process.env.PI_COMPUTER_USE_CDP_PORT;
-			else process.env.PI_COMPUTER_USE_CDP_PORT = runtimeState.previousCdpPort;
-			runtimeState.managedBrowserCdpPort = undefined;
-			runtimeState.previousCdpPort = undefined;
-		}
-		throw error;
-	}
-	const page = (await listCdpPageContexts())[0];
-	if (!page) throw new Error("Managed browser launched without a CDP page context.");
-	const resourceKey = `cdp:${page.targetId}`;
-	const scheduled = await resourceScheduler.read(resourceKey, async () => await cdpSnapshotForContext(page.contextId));
-	if (!scheduled.value) throw new Error("Managed browser page could not be observed after launch.");
-	return browserObservationResult(scheduled.value, resourceKey, scheduled.epoch, "launch_browser");
+	const config = getComputerUseConfig();
+	const url = trimOrUndefined(params.url);
+	if (url && !/^https?:\/\//i.test(url)) throw new Error("launch_browser.url must be an absolute HTTP(S) URL.");
+	const visible = params.visible === true;
+	if (visible && config.headless) throw new Error("Strict background is enabled. Launch without visible to keep the browser in the background.");
+	const executable = await managedBrowserExecutable(config.managed_browser);
+	const launch = await resourceScheduler.read(`managed-browser:${browserOwner()}`, () =>
+		launchManagedBrowser(executable, visible, signal, async () => {
+			const pages = await listCdpPageContexts();
+			const page = pages.find(candidate => candidate.url === "about:blank");
+			if (!page) throw new Error("Managed browser launched without its initial blank page.");
+			if (url && !await cdpNavigateContext(page.contextId, url)) throw new Error("The initial browser page closed during navigation.");
+			const resourceKey = `cdp:${page.targetId}`;
+			const scheduled = await resourceScheduler.read(resourceKey, () => cdpSnapshotForContext(page.contextId));
+			if (!scheduled.value) throw new Error("Managed browser page could not be observed after launch.");
+			return browserObservationResult(scheduled.value, resourceKey, scheduled.epoch, "launch_browser");
+		}));
+	return launch.value;
 }
 
 async function performNavigateBrowser(params: NavigateBrowserParams): Promise<AgentToolResult<BrowserObservationDetails>> {
@@ -2588,8 +2564,18 @@ async function performEvaluateBrowser(params: EvaluateBrowserParams): Promise<Ag
 	});
 }
 
-async function executeTool<P, T>(ctx: ExtensionContext, params: P, signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
-	const outputRef = trimOrUndefined((params as { ref?: string } | undefined)?.ref)?.startsWith("@o") === true;
+// Resolve the actual stored state/root. Extra arguments on a native command must not change its readiness checks.
+const browserStateTools = new Set(["act_ui", "inspect_ui", "search_ui", "expand_ui", "wait_for", "read_text"]);
+export function toolSurface(tool: string, params: { stateId?: unknown; root?: unknown; kind?: unknown; ref?: unknown } = {}): "browser" | "desktop" | "output" {
+	if (tool === "read_text" && typeof params.ref === "string" && params.ref.trim().startsWith("@o")) return isBrowserOutput(params.ref.trim()) ? "browser" : "output";
+	if (["launch_browser", "navigate_browser", "evaluate_browser"].includes(tool)) return "browser";
+	if (tool === "find_roots") return params.kind === "browser_page" ? "browser" : "desktop";
+	if (tool === "observe_ui") return typeof params.root === "string" && runtimeState.browserContextByRoot.has(params.root) ? "browser" : "desktop";
+	return browserStateTools.has(tool) && typeof params.stateId === "string" && savedStates.get(params.stateId.trim())?.value.kind === "browser" ? "browser" : "desktop";
+}
+
+async function executeTool<P, T>(tool: string, ctx: ExtensionContext, params: P, signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
+	const outputRef = tool === "read_text" && trimOrUndefined((params as { ref?: string } | undefined)?.ref)?.startsWith("@o") === true;
 	const requestedStateId = outputRef ? undefined : trimOrUndefined((params as { stateId?: string } | undefined)?.stateId);
 	const stateRecord = requestedStateId ? savedStates.get(requestedStateId) : undefined;
 	if (requestedStateId && !stateRecord) {
@@ -2597,7 +2583,13 @@ async function executeTool<P, T>(ctx: ExtensionContext, params: P, signal: Abort
 	}
 	const operation = savedStates.hydrate(stateRecord);
 	return await savedStates.operations.run(operation, async () => {
-		await resourceScheduler.read("session-lifecycle", async () => await ensureReady(ctx, signal));
+		const surface = toolSurface(tool, params as Record<string, unknown>);
+		if (stateRecord?.value.kind === "browser" && stateRecord.value.snapshot.owner !== browserOwner()) throw new Error("Browser state belongs to another conversation. Observe your browser again.");
+		if (surface === "browser") {
+			if (!isBrowserUseEnabled()) throw new Error("Browser use is disabled in Computer Use settings.");
+		} else if (surface === "desktop") {
+			await resourceScheduler.read("session-lifecycle", async () => await ensureReady(ctx, signal));
+		}
 		throwIfAborted(signal);
 		const result = await run();
 		persistOperation(operation);
@@ -2613,11 +2605,14 @@ function makeToolExecutor<P, D>(tool: string, perform: (params: P, signal?: Abor
 		_onUpdate: AgentToolUpdateCallback<D> | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<D>> => {
-		try {
-			return applyOutputEnvelope(tool, await executeTool(ctx, params, signal, () => perform(params, signal)));
-		} catch (error) {
-			throw boundToolError(tool, error);
-		}
+		return operationConfig.run(loadComputerUseConfig(ctx.cwd), () => browserConversation.run(ctx.browserOwner ?? "standalone", async () => {
+			const browser = toolSurface(tool, params as Record<string, unknown>) === "browser";
+			try {
+				return applyOutputEnvelope(tool, await executeTool(tool, ctx, params, signal, () => perform(params, signal)), browser);
+			} catch (error) {
+				throw boundToolError(tool, error, browser);
+			}
+		}));
 	};
 }
 

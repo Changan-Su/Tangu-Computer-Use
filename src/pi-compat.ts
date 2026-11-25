@@ -20,6 +20,7 @@ export interface ExtensionUI {
 
 export interface ExtensionContext {
   cwd: string;
+  browserOwner?: string;
   hasUI: boolean;
   ui: ExtensionUI;
   /** reconstructStateFromBranch 用;引擎侧无会话分支概念 → 给返回空数组的 stub(非可选,免 vendor possibly-undefined)。 */

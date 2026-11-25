@@ -1,7 +1,7 @@
 ---
 name: Desktop app control
 description: Use when a task needs a real desktop application rather than an API, CLI, or file — reading what is on screen in another app, clicking through its UI, filling its fields, or driving a GUI-only workflow. Covers the Computer Use tool loop, keeping actions in the background, and the confirmation rules for irreversible actions.
-version: 1.0.0
+version: 1.1.0
 category: automation
 ---
 
@@ -15,9 +15,12 @@ Forsion's own windows are not a Computer Use target. To change a Forsion setting
 pages, use `list_ui_commands` and then `run_ui_command` / `set_ui_setting`; a tool result marked
 `[forsion]` means you are looking at Forsion itself.
 
-For a page you can simply fetch, use `curl` through bash. For pure web work prefer `browser_task` /
-`browser_*` — they are lighter. Use Computer Use when the workflow lives in a native desktop app, or
-when a web page must be handled inside the same window forest as a desktop app.
+For a fresh interactive web task, use `launch_browser({url})`. Each conversation gets a separate
+Chrome or Helium profile. The default opens in the background, without a Chrome extension or desktop
+Accessibility and Screen Recording permissions. Use the returned state and control refs with
+`act_ui`; use `navigate_browser` to keep the same session. A fresh launch replaces this conversation's
+previous managed browser. For the user's existing signed-in tab, use `browser_tabs`. For a desktop
+application, start with `find_roots`. Strict background is on by default; a saved preference takes priority.
 
 ## The loop
 
@@ -152,7 +155,7 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
   the screenshot the result attaches before scrolling again.
 - Background is attempted first; the foreground is taken only when an action truly needs it, and the
   result then carries a `[foreground]` line. **When you see that line, tell the user** — you moved
-  their focus. Users who never want that can turn on the plugin's "strict background" setting.
+  their focus. Automatic foreground fallback requires the user to turn off "strict background".
   When it is on, do not bypass it through shell, AppleScript, `open`/activate or another tool.
   If foreground input is needed, ask the user to switch the app or change the setting.
 - Clicking by coordinates no longer implies the foreground: the helper hit-tests that point inside the
@@ -163,8 +166,8 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
   background too. The result says so. If the returned state shows nothing changed, press the same
   element again: the repeat is a real click and takes the foreground. Do not retry it any other way.
 - If the tree did not change right after such a press, the press has probably landed anyway: a covered
-  web page takes it but stops updating its tree, sometimes until the page next changes. The result
-  says so, brings the window forward and attaches a current screenshot. Go by that screenshot and press
+  web page takes it but stops updating its tree, sometimes until the page next changes. With foreground fallback enabled, the result
+  can bring the window forward and attach a current screenshot. Go by that screenshot and press
   again only if it shows the press did nothing.
 
 ## Show the user what you are doing

@@ -24,6 +24,7 @@ export interface NavigateBrowserParams extends StateTargetParams {
 }
 
 export interface LaunchBrowserParams {
+	visible?: boolean;
 	url?: string;
 }
 

@@ -199,6 +199,7 @@ export interface ScopedPluginRouter {
 
 /** 运行时句柄(按引用传入,核心同一模块实例)。只列稳定公开成员。 */
 export interface TanguSdk {
+  validateBrowserUrl?(raw: string): Promise<string>;
   automation: {
     list(): Promise<Array<{id:string;desc:string;enabled:boolean;nextRunAt:string|null;[key:string]:any}>>;
     save(key:string,input:{description:string;type:'at'|'every'|'daily_at';datetime?:string;interval?:string;time?:string;tool:string;args:Record<string,unknown>;enabled:boolean}):Promise<{id:string;[key:string]:any}>;
