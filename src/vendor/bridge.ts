@@ -1542,8 +1542,8 @@ function browserClickHint(tool: string, detail: boolean, view?: string, region?:
 				const xy = `[${inspectedPoint.x},${inspectedPoint.y}]`;
 				return `Detail view. Fresh screenshot at maximum zoom. Your inspection point is ${xy}. If that point is on the requested control, click it with act_ui({view:"${view}",click:${xy}}). Otherwise use the control’s actual position in this image or inspect a different region.`;
 			}
-			const focus = region ? " You can focus on a point in this panel." : " This is the maximum zoom.";
-			return `Detail view.${region ? " Region: " + region + "." : ""}${focus} Identify small icons by their visible shape and neighboring controls. Click the requested control with ${click} using this image’s pixels. If it is absent, inspect a different region.`;
+			const further = region ? " Use focus:{x,y} in this panel if nearby controls are hard to distinguish." : "";
+			return `Detail view.${region ? " Region: " + region + "." : ""} Click the target with ${click} in this image’s pixels.${further} If the target is absent, use this handle to inspect a different region.`;
 		}
 		if (canClip === false) return `At this page zoom, use ${click} in the full image or inspect it with magnify.`;
 		return `If you see the target, click with ${click}. For a small or crowded control, inspect its location with observe_ui({view:"${view}",focus:{x,y}}). If you can identify only the panel, use observe_ui({view:"${view}",region:POSITION}). POSITION is top-left, top, top-right, left, center, right, bottom-left, bottom or bottom-right. Use coordinates in the returned image.`;

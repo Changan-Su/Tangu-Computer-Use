@@ -320,11 +320,16 @@ try {
   const refreshed = await observePixels();
   const sibling = await run('observe_ui',{view:viewOf(refreshed),region:'bottom-right'},'C');
   const panel = await run('observe_ui',{view:viewOf(sibling),region:'top-left'},'C');
-  assert.match(panel,/Region: top-left/);
+  // Keep first-visit guidance stable while the repeat-focus receipt has its own instructions.
+  const detailHint = result => result.split(' px. ')[1].split('\n')[0];
+  assert.equal(detailHint(panel),
+    `Detail view. Region: top-left. Click the target with act_ui({view:"${viewOf(panel)}",click:[x,y]}) in this image’s pixels. Use focus:{x,y} in this panel if nearby controls are hard to distinguish. If the target is absent, use this handle to inspect a different region. Inspect the next image after each action.`);
   const panelImage = PNG.sync.read(Buffer.from(images.at(-1).url.split(',')[1],'base64'));
   assert.ok(Math.max(panelImage.width,panelImage.height)<=1600);
   const panelPoint = marker();
   const precise = await run('observe_ui',{view:viewOf(panel),focus:panelPoint},'C');
+  assert.equal(detailHint(precise),
+    `Detail view. Click the target with act_ui({view:"${viewOf(precise)}",click:[x,y]}) in this image’s pixels. If the target is absent, use this handle to inspect a different region. Inspect the next image after each action.`);
   const precisePoint = marker();
   const zoomed = PNG.sync.read(Buffer.from(images.at(-1).url.split(',')[1],'base64'));
   assert.ok(Math.abs(zoomed.width-640)<6 && Math.abs(zoomed.height-384)<6);
