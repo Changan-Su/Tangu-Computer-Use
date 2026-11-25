@@ -3,7 +3,7 @@
 // .github/workflows/windows-recorder-probe.yml,推 ci/windows-recorder* 分支触发)。
 //
 // 用真命名管道订阅 recordSubscribe,然后真的操作桌面:记事本打字 / 组合键 / 点菜单,stdio 助手 focusWindow(agent 标记),
-// Chrome 普通窗口(标题 + 网址 + 排除站点)、Chrome 无痕 / Edge InPrivate(只能留不带标题的切换)、网页输入框与密码框。
+// Chrome / Edge 普通窗口(标题 + 网址)、Chrome 排除站点、Chrome 无痕 / Edge InPrivate(只留切换)、网页输入框与密码框。
 // 输入走 SendKeys / mouse_event(注入的输入;采集器不按注入标记判 agent,所以照常记)。
 //
 // 用法:node scripts/probe-recorder-windows.mjs <windows-bridge.exe> [--out probe-results.json]
@@ -290,6 +290,37 @@ async function main() {
 		findings.edgeInPrivateEvents = edgeEvents;
 		check("the InPrivate window was observed at all", edgeEvents.length > 0, JSON.stringify(edgeEvents));
 		check("Edge InPrivate never leaks title or URL", edgeEvents.every((e) => !/inprivate-page|Example/.test(e.title ?? "") && !String(e.url ?? "").includes("inprivate-page")), JSON.stringify(edgeEvents));
+
+		t0 = Date.now();
+		const normalProfile = mkdtempSync(path.join(os.tmpdir(), "probe-edge-normal-"));
+		const normalEdge = spawn(edge, [...flags(normalProfile), "https://example.com/?q=edge-probe-query#edge-probe-fragment"], { detached: true, stdio: "ignore" });
+		normalEdge.unref();
+		await sleep(8000);
+		const normalWin = mainWindowOf("msedge").find((x) => x.pid === normalEdge.pid && /^Example Domain\b/.test(x.title));
+		findings.edgeNormal = normalWin;
+		if (normalWin) focus(normalWin.hwnd);
+		await sleep(6000);
+		const normalEvents = since(main.events, t0).filter((e) => e.app?.bundleId === "msedge.exe");
+		const edgeSiteEvents = normalEvents.filter((e) => e.title?.includes("Example Domain"));
+		check("Edge normal window has a title", normalWin && edgeSiteEvents.length > 0, JSON.stringify(normalEvents.slice(-3)));
+		check("Edge URL is read without the probe query or fragment",
+			edgeSiteEvents.some((e) => /^https:\/\/example\.com\/?$/.test(e.url ?? "")) &&
+			normalEvents.every((e) => !/edge-probe-query|edge-probe-fragment/.test(e.url ?? "")),
+			JSON.stringify(normalEvents.map((e) => e.url)));
+
+		t0 = Date.now();
+		spawn(edge, [...flags(normalProfile), "data:text/html,<title>Forsion Edge Recorder Fixture</title><input autofocus placeholder=Name>"], { detached: true, stdio: "ignore" }).unref();
+		await sleep(5000);
+		const formWin = mainWindowOf("msedge").find((x) => x.pid === normalEdge.pid && x.title.startsWith("Forsion Edge Recorder Fixture"));
+		if (formWin) focus(formWin.hwnd);
+		await sleep(1500);
+		if (formWin && fg() === formWin.hwnd) {
+			sendKeys("ForsionEdgeRecorderFixture");
+			await sleep(3500);
+		}
+		const edgeText = since(main.events, t0).filter((e) => e.kind === "text" && e.app?.bundleId === "msedge.exe");
+		check("typing in a normal Edge input records the fixture text",
+			edgeText.some((e) => e.text?.includes("ForsionEdgeRecorderFixture")), JSON.stringify(edgeText));
 	} else {
 		check("Edge is installed on the runner", false, "skipped Edge scenarios", false);
 	}
