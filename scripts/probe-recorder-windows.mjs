@@ -61,6 +61,14 @@ function mainWindowOf(name) {
 		return { pid: Number(pid), hwnd: Number(hwnd), title: title.join("|") };
 	});
 }
+async function waitBrowserWindow(name, pid, title) {
+	for (let attempt = 0; attempt < 12; attempt++) {
+		const win = mainWindowOf(name).find((w) => w.pid === pid && title.test(w.title));
+		if (win) return win;
+		await sleep(1000);
+	}
+	return null;
+}
 function focus(hwnd) {
 	// 按住 Alt 解除前台锁(SetForegroundWindow 对后台进程的限制),再置前。Alt 按下抬起之间垫一个空键(F24):
 	// 单独轻敲 Alt 会让记事本进菜单模式、让 Chrome 聚焦到应用菜单按钮,焦点被抢,打的字进不了输入框。
@@ -219,13 +227,17 @@ async function main() {
 	const edge = ["C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe", "C:/Program Files/Microsoft/Edge/Application/msedge.exe"].find(existsSync);
 	const flags = (dir) => [`--user-data-dir=${dir}`, "--no-first-run", "--no-default-browser-check", "--disable-search-engine-choice-screen", "--disable-features=PrivacySandboxSettings4"];
 	if (chrome) {
+		if (process.env.GITHUB_ACTIONS === "true" && process.env.RUNNER_ENVIRONMENT === "github-hosted") {
+			ps("Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force");
+		}
 		const siteOff = await connectWithRetry({ excludeDomains: ["example.com"] }, "siteOff");
 		t0 = Date.now();
 		const profile = mkdtempSync(path.join(os.tmpdir(), "probe-chrome-"));
-		spawn(chrome, [...flags(profile), "https://example.com/?q=secret#frag"], { detached: true, stdio: "ignore" }).unref();
-		await sleep(7000);
-		const win = mainWindowOf("chrome").find((w) => w.title);
+		const normalChrome = spawn(chrome, [...flags(profile), "--new-window", "https://example.com/?q=secret#frag"], { detached: true, stdio: "ignore" });
+		normalChrome.unref();
+		const win = await waitBrowserWindow("chrome", normalChrome.pid, /^Example Domain\b/);
 		findings.chromeNormal = win;
+		findings.chromeNormalProcess = { pid: normalChrome.pid, exitCode: normalChrome.exitCode };
 		if (win) focus(win.hwnd);
 		// 第一次遍历可能走不完(Chrome 此刻才打开无障碍):采集器按无痕先不记,约 1 秒后自己重走,这里多等几轮。
 		await sleep(6000);
@@ -239,30 +251,35 @@ async function main() {
 		// 网页输入框与密码框
 		t0 = Date.now();
 		spawn(chrome, [...flags(profile), "data:text/html,<title>Form</title><input id=a autofocus placeholder=Name>"], { detached: true, stdio: "ignore" }).unref();
-		await sleep(4000);
-		const formWin = mainWindowOf("chrome").find((w) => w.title.startsWith("Form"));
+		const formWin = await waitBrowserWindow("chrome", normalChrome.pid, /^Form\b/);
 		if (formWin) focus(formWin.hwnd);
 		await sleep(1500);
-		sendKeys("plain words");
-		await sleep(3500);
-		const webText = since(main.events, t0).filter((e) => e.kind === "text");
-		check("typing in a web input is recorded", webText.some((e) => e.text?.includes("plain words")), JSON.stringify(webText), false);
+		if (formWin && fg() === formWin.hwnd) {
+			sendKeys("plain words");
+			await sleep(3500);
+		}
+		const webText = since(main.events, t0).filter((e) => e.kind === "text" && e.app?.bundleId === "chrome.exe");
+		check("typing in a Chrome web input is recorded", webText.some((e) => e.text?.includes("plain words")), JSON.stringify(webText));
 		t0 = Date.now();
 		spawn(chrome, [...flags(profile), "data:text/html,<title>Login</title><input type=password autofocus>"], { detached: true, stdio: "ignore" }).unref();
-		await sleep(4000);
-		const loginWin = mainWindowOf("chrome").find((w) => w.title.startsWith("Login"));
+		const loginWin = await waitBrowserWindow("chrome", normalChrome.pid, /^Login\b/);
 		if (loginWin) focus(loginWin.hwnd);
 		await sleep(1500);
-		sendKeys("hunter2secret");
-		await sleep(3500);
+		const loginInFront = loginWin && fg() === loginWin.hwnd;
+		if (loginInFront) {
+			sendKeys("hunter2secret");
+			await sleep(3500);
+		}
 		const leaked = since(main.events, t0).filter((e) => JSON.stringify(e).includes("hunter2"));
-		check("password fields are never recorded", leaked.length === 0, JSON.stringify(leaked));
+		check("Chrome password field input is never recorded", loginInFront && leaked.length === 0,
+			JSON.stringify({ fixtureFocused: !!loginInFront, leaked }));
 
 		// 无痕:先关掉前面的普通窗口,免得前台落回普通窗口时误判
-		ps("Get-Process chrome -ErrorAction SilentlyContinue | Stop-Process -Force");
+		normalChrome.kill();
 		await sleep(1500);
 		t0 = Date.now();
-		spawn(chrome, [...flags(profile), "--incognito", "https://example.com/incognito-page"], { detached: true, stdio: "ignore" }).unref();
+		const incognitoProfile = mkdtempSync(path.join(os.tmpdir(), "probe-chrome-incognito-"));
+		spawn(chrome, [...flags(incognitoProfile), "--incognito", "https://example.com/incognito-page"], { detached: true, stdio: "ignore" }).unref();
 		await sleep(6000);
 		const incognito = mainWindowOf("chrome");
 		findings.chromeIncognitoTitles = incognito.map((w) => w.title);
