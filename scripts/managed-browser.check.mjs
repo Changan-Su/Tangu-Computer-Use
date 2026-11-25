@@ -43,10 +43,11 @@ const server = createServer(async (req, res) => {
     <button id="vanish" onclick="this.remove()">Vanish</button><label>Read only <input readonly></label><label>Redirect <input id="redirect" value="old"></label><output></output>
     <canvas id="surface" style="position:fixed;left:80%;top:80%;width:10%;height:10%;background:green"></canvas>
     <div id="probe" style="position:fixed;left:240px;top:110px;width:18px;height:14px;background:#50b12c"></div>
+    <div id="cornerProbe" style="position:fixed;left:1050px;top:610px;width:18px;height:14px;background:#235bdf"></div>
     <div id="stripes" style="position:fixed;left:610px;top:370px;width:20px;height:20px;background:repeating-linear-gradient(90deg,black 0 .5px,white .5px 1px)"></div>
     <div style="height:200vh"></div>
     <script>
-    probe.onpointerdown = stripes.onpointerdown = e => fetch('/detail-event', {method:'POST',body:JSON.stringify([e.clientX,e.clientY,scrollY,e.isTrusted])});
+    probe.onpointerdown = cornerProbe.onpointerdown = stripes.onpointerdown = e => fetch('/detail-event', {method:'POST',body:JSON.stringify([e.clientX,e.clientY,scrollY,e.isTrusted])});
     redirect.select = () => field.focus();
     surface.onclick = e => { document.querySelector('output').textContent = e.isTrusted ? 'Canvas pressed' : 'Synthetic'; };
     const interval = setInterval(async () => {
@@ -272,11 +273,11 @@ try {
     };
     geometrySocket.on('message',result);geometrySocket.send(JSON.stringify({id,method,params}));
   });
-  const marker = () => {
+  const marker = (rgb = [80,177,44]) => {
     const img = PNG.sync.read(Buffer.from(images.at(-1).url.split(',')[1],'base64'));
     // First solid marker pixel, just inside its top left. Independent of the product's transform.
     for(let pos=0;pos<img.data.length;pos+=4) {
-      if(img.data[pos]===80 && img.data[pos+1]===177 && img.data[pos+2]===44) {
+      if(img.data[pos]===rgb[0] && img.data[pos+1]===rgb[1] && img.data[pos+2]===rgb[2]) {
         return {x:(pos/4)%img.width+2,y:Math.floor(pos/4/img.width)+2};
       }
     }
@@ -292,10 +293,43 @@ try {
   await run('act_ui',{view:viewOf(fractionalDetail),click:[finePoint.x,finePoint.y]},'C');
   await waitFor(()=>detailEvent);
   assert.ok(detailEvent[0]>=240 && detailEvent[0]<=242 && detailEvent[1]>=110 && detailEvent[1]<=112 && detailEvent[3],JSON.stringify(detailEvent));
+  // Switch from the opposite corner to the top-left panel at fractional DPI.
+  const regionBase = await observePixels();
+  const regionArgs = {view:viewOf(regionBase),region:'bottom-right'};
+  await assert.rejects(run('observe_ui',regionArgs,'B'),/another conversation/);
+  await assert.rejects(run('observe_ui',{...regionArgs,focus:{x:0,y:0}},'C'),/one at a time/);
+  await assert.rejects(run('observe_ui',{...regionArgs,region:'other'},'C'),/named region/);
+  const corner = await run('observe_ui',regionArgs,'C');
+  assert.match(corner,/Region: bottom-right/);
+  const cornerPoint = marker([35,91,223]);
+  detailEvent=undefined;
+  await run('act_ui',{view:viewOf(corner),click:[cornerPoint.x,cornerPoint.y]},'C');
+  await waitFor(()=>detailEvent);
+  assert.ok(detailEvent[0]>=1050 && detailEvent[0]<=1052 && detailEvent[1]>=610 && detailEvent[1]<=612 && detailEvent[3],JSON.stringify(detailEvent));
+  const refreshed = await observePixels();
+  const sibling = await run('observe_ui',{view:viewOf(refreshed),region:'bottom-right'},'C');
+  const panel = await run('observe_ui',{view:viewOf(sibling),region:'top-left'},'C');
+  assert.match(panel,/Region: top-left/);
+  const panelImage = PNG.sync.read(Buffer.from(images.at(-1).url.split(',')[1],'base64'));
+  assert.ok(Math.max(panelImage.width,panelImage.height)<=1600);
+  const panelPoint = marker();
+  const precise = await run('observe_ui',{view:viewOf(panel),focus:panelPoint},'C');
+  const precisePoint = marker();
+  const zoomed = PNG.sync.read(Buffer.from(images.at(-1).url.split(',')[1],'base64'));
+  assert.ok(Math.abs(zoomed.width-640)<6 && Math.abs(zoomed.height-384)<6);
+  detailEvent=undefined;
+  await run('act_ui',{view:viewOf(precise),click:[precisePoint.x,precisePoint.y]},'C');
+  await waitFor(()=>detailEvent);
+  assert.ok(detailEvent[0]>=240 && detailEvent[0]<=242 && detailEvent[1]>=110 && detailEvent[1]<=112 && detailEvent[3],JSON.stringify(detailEvent));
+  await assert.rejects(run('observe_ui',regionArgs,'C'),/stale|epoch/i);
   const beforeZoom = await observePixels();
+  const beforeZoomPanel = await run('observe_ui',{view:viewOf(beforeZoom),region:'left'},'C');
   await emulation('Emulation.setPageScaleFactor',{pageScaleFactor:2});
   await sleep(80);
+  await assert.rejects(run('observe_ui',{view:viewOf(beforeZoomPanel),region:'right'},'C'),/viewport moved/i);
   const pinched = await observePixels();
+  assert.match(pinched,/magnify/);
+  assert.doesNotMatch(pinched,/region:POSITION/);
   const pinchPoint = marker();
   await assert.rejects(run('observe_ui',{view:viewOf(beforeZoom),samplePixels:[{x:0,y:0}]},'C'),/stale/);
   await assert.rejects(run('observe_ui',{root:root(picture),stateId:state(pinched),focus:pinchPoint},'C'),/page zoom/);
@@ -304,6 +338,7 @@ try {
   await waitFor(()=>detailEvent);
   assert.ok(detailEvent[0]>=240 && detailEvent[0]<=242 && detailEvent[1]>=110 && detailEvent[1]<=112 && detailEvent[3],JSON.stringify(detailEvent));
   settings.compact_browser_controls = false;
+  await assert.rejects(run('observe_ui',{stateId:state(pinched),region:'left'},'C'),/disabled/);
   assert.doesNotMatch(await observePixels(),/view:"v/);
   settings.browser_use = false;
   await assert.rejects(observe(), /disabled/);

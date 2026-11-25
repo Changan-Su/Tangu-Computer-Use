@@ -7,6 +7,7 @@
 // keeps the AX/CGEvent path, so with the env var unset this module is inert.
 
 import WebSocket from "ws";
+import { browserRegions, type BrowserRegion } from "./contract.ts";
 import { browserOwner, browserPort, managedPixelsOnly } from "../managedBrowser.ts";
 import { randomUUID } from "node:crypto";
 import { parseLookResponse, serializeOutline, type SerializedOutline } from "./outline.ts";
@@ -41,10 +42,16 @@ interface BrowserImageGeometry {
 	stamp: string;
 	/** Viewport-relative CSS origin of a detail image. Full images start at (0,0). */
 	origin?: { x: number; y: number };
+	/** Full image geometry for switching between regions without resampling another detail. */
+	overview?: BrowserImageGeometry;
+	region?: BrowserRegion;
+	captureScale?: number;
+	canClip?: boolean;
 }
 
 interface FocusRequest {
-	center: { x: number; y: number };
+	center?: { x: number; y: number };
+	region?: BrowserRegion;
 	base: BrowserImageGeometry;
 }
 
@@ -169,10 +176,11 @@ export class CdpTab {
 	async viewportStamp(): Promise<string> { return (await this.viewportMetrics()).stamp; }
 
 	/** Render the visible region at twice the overview pixel density. The page keeps its viewport and zoom. */
-	async detailImage({ center, base }: FocusRequest) {
-		if (base.origin || !center || !Number.isInteger(center.x) || !Number.isInteger(center.y)
-			|| center.x < 0 || center.y < 0 || center.x >= base.width || center.y >= base.height) {
-			throw new Error("Choose a point inside a full screenshot to focus.");
+	async detailImage({ center, region, base: source }: FocusRequest) {
+		const base = source.overview ?? source;
+		if (!region && ((source.origin && !source.region) || !center || !Number.isInteger(center.x) || !Number.isInteger(center.y)
+			|| center.x < 0 || center.y < 0 || center.x >= source.width || center.y >= source.height)) {
+			throw new Error("Choose a point inside a full screenshot or named panel to focus.");
 		}
 		const { viewport, stamp } = await this.viewportMetrics();
 		if (stamp !== base.stamp) throw new Error("The viewport moved. Observe the full image again.");
@@ -180,27 +188,32 @@ export class CdpTab {
 		if (viewport.scale !== 1 || (viewport.zoom ?? 1) !== 1) throw new Error("Use the full image or magnify at this page zoom.");
 		const scaleX = base.cssWidth / base.width, scaleY = base.cssHeight / base.height;
 		// The full screenshot can include classic scrollbars. CDP clips page content only.
-		function clipAxis(pixel: number, cssPerPixel: number, page: number, visible: number, maxPixels: number) {
-			if (pixel * cssPerPixel >= visible) throw new Error("Use the full screenshot for the browser scrollbar.");
-			// Integer DIP boundaries avoid version-dependent truncation at fractional device scales.
+		const position = region === undefined ? -1 : browserRegions.indexOf(region);
+		if (region !== undefined && position < 0) throw new Error("Unknown browser region.");
+		function clipAxis(page: number, visible: number, requestedSize: number, point: number | undefined, alignment: number) {
 			const start = Math.ceil(page), end = Math.floor(page + visible);
-			const size = Math.min(end - start, Math.max(1, Math.round(maxPixels * cssPerPixel)));
+			const size = Math.min(end - start, Math.max(1, Math.round(requestedSize)));
 			if (size <= 0) throw new Error("This viewport is too small to focus.");
-			const center = page + pixel * cssPerPixel;
-			const offset = Math.max(start, Math.min(end - size, Math.round(center - size / 2)));
-			return { offset, size };
+			if (point !== undefined && point >= visible) throw new Error("Use the full screenshot for the browser scrollbar.");
+			const target = point === undefined ? start + alignment * (end - start - size) : page + point - size / 2;
+			return { offset: Math.max(start, Math.min(end - size, Math.round(target))), size };
 		}
-		const x = clipAxis(center.x, scaleX, viewport.pageX, viewport.clientWidth, 320);
-		const y = clipAxis(center.y, scaleY, viewport.pageY, viewport.clientHeight, 192);
+		// Named regions overlap enough to keep controls at panel boundaries in view.
+		const sourceX = source.cssWidth / source.width, sourceY = source.cssHeight / source.height;
+		const x = clipAxis(viewport.pageX, viewport.clientWidth, region ? viewport.clientWidth * 0.55 : 320 * sourceX,
+			center && (source.origin?.x ?? 0) + center.x * sourceX, (position % 3) / 2);
+		const y = clipAxis(viewport.pageY, viewport.clientHeight, region ? viewport.clientHeight * 0.55 : 192 * sourceY,
+			center && (source.origin?.y ?? 0) + center.y * sourceY, Math.floor(position / 3) / 2);
 		const origin = { x: x.offset - viewport.pageX, y: y.offset - viewport.pageY };
 		const cssWidth = x.size, cssHeight = y.size;
-		const clip = { x: x.offset, y: y.offset, width: cssWidth, height: cssHeight, scale: 2 };
+		const scale = region ? Math.min(2, 1598 * scaleX / cssWidth, 1598 * scaleY / cssHeight) : 2 * (source.captureScale ?? 1);
+		const clip = { x: x.offset, y: y.offset, width: cssWidth, height: cssHeight, scale };
 		const { data } = await this.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, clip });
 		if (stamp !== await this.viewportStamp()) throw new Error("The viewport moved during capture. Observe the full image again.");
 		const header = Buffer.from(data.slice(0, 40), "base64");
 		const width = header.readUInt32BE(16), height = header.readUInt32BE(20);
-		if (Math.abs(width - 2 * cssWidth / scaleX) > 2 || Math.abs(height - 2 * cssHeight / scaleY) > 2) throw new Error("Unexpected detail dimensions. Observe the full image again.");
-		return { data: String(data), geometry: { width, height, cssWidth, cssHeight, stamp, origin } };
+		if ((region && Math.max(width, height) > 1600) || Math.abs(width - scale * cssWidth / scaleX) > 2 || Math.abs(height - scale * cssHeight / scaleY) > 2) throw new Error("Unexpected detail dimensions. Observe the full image again.");
+		return { data: String(data), geometry: { width, height, cssWidth, cssHeight, stamp, origin, overview: base, region, captureScale: scale } };
 	}
 
 	async viewportImage() {
@@ -212,7 +225,7 @@ export class CdpTab {
 			const width = header.readUInt32BE(16), height = header.readUInt32BE(20);
 			return { data: String(data), geometry: { width, height,
 				cssWidth: width * viewport.clientWidth / device.clientWidth / viewport.scale,
-				cssHeight: height * viewport.clientHeight / device.clientHeight / viewport.scale, stamp } };
+				cssHeight: height * viewport.clientHeight / device.clientHeight / viewport.scale, canClip: viewport.scale === 1 && (viewport.zoom ?? 1) === 1, stamp } };
 		}
 		throw new Error("The viewport kept changing during capture. Observe the page again.");
 	}

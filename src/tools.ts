@@ -8,6 +8,7 @@
  *   - setup:每次工具执行前惰性 ensureComputerUseSetup(hasUI=false)→ 权限缺时 vendor 抛 nonInteractiveError,
  *     被 catch 成指导文本返回给模型(提示跑 `tangu computer-use setup`)。
  */
+import { browserRegions } from './vendor/contract.ts';
 import { assertPublicHttpUrl } from './publicUrl.ts';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -139,13 +140,13 @@ const toolSpecs = (compact: boolean): ToolSpec[] => [
   {
     name: 'observe_ui', exec: executeObserve as PiExecute, sideEffect: 'read', timeoutMs: 60_000,
     description: 'Capture the current/frontmost root or one exact @r root and return a bounded UI outline. Use mode=semantic to skip OCR and images, visual to force them, fused for automatic selection. For screenshot-only work use pixels. For '
-      + (compact ? 'a small browser target, use focus with the full screenshot handle and click in the returned image. For exact colors use samplePixels. For native windows use magnify' : 'small icons or exact colors, choose magnify or samplePixels on the target root')
+      + (compact ? 'a small browser target, use focus with a full screenshot or named panel handle and click in the returned image. For exact colors use samplePixels. For native windows use magnify' : 'small icons or exact colors, choose magnify or samplePixels on the target root')
       + '. Primary UI observation tool; follow with search_ui/expand_ui/inspect_ui/act_ui. Use @e outline refs from observe_ui/search_ui for act_ui; pictureOnly refs are coordinate-only.',
     parameters: obj({
       root: S('Exact @r ref issued by find_roots'),
-      ...(compact ? { view } : {}),
+      ...(compact ? { view, region: { type: 'string', enum: browserRegions, description: 'Zoom a named position of the full browser viewport. Each region includes the surrounding panel. Use view or stateId and click in the returned image. You may inspect a different region from a detail.' } } : {}),
       stateId: S(compact ? 'Alternative to view. The full stateId of the browser screenshot.' : 'State owning the full browser screenshot when using focus.'),
-      focus: { ...obj({x:N(), y:N()}, ['x','y']), description: compact ? 'Inspect small controls in a fresh high-resolution browser detail centered on full-image x/y. Supply its view handle or stateId. Click directly in the returned detail.' : 'Inspect small controls in a fresh high-resolution browser detail centered on full-image x/y. Requires root and stateId from the full screenshot. Click directly in the returned detail.' },
+      focus: { ...obj({x:N(), y:N()}, ['x','y']), description: compact ? 'Render a high-resolution detail around x/y from the full screenshot or a named panel. Supply its view handle or stateId. Click directly in the returned detail.' : 'Inspect small controls in a fresh high-resolution browser detail centered on full-image x/y. Requires root and stateId from the full screenshot. Click directly in the returned detail.' },
       samplePixels: { type: 'array', items: obj(point, ['x', 'y']), minItems: 1, maxItems: 8, description: 'Read RGB at these full screenshot coordinates to check swatches or edits. Requires an exact root. Implies pixels mode.' },
       magnify: { ...obj({ ...point, width: N(), height: N() }, ['x', 'y']), description: 'Attach a 2× detail. Give only x and y to center the detail on a point. With width and height, x and y specify the top-left of the rectangle (max 320 × 320). Requires an exact root. Implies pixels mode.' },
       mode: { type: 'string', enum: ['semantic', 'visual', 'fused', 'pixels'], description: 'pixels shows only the screenshot and its coordinates, including for a native desktop root. visual includes the outline as well. Default fused.' },
@@ -366,7 +367,7 @@ async function legacyBrowserUrl(raw: string): Promise<string> {
 
 function bindScreenshotArgs(tool: 'act_ui' | 'observe_ui', args: Record<string, any>, owner: string, compact: boolean): Record<string, any> {
   const byView = args.view !== undefined;
-  if (!compact && (byView || args.click !== undefined)) throw new Error('Compact screenshot controls are disabled. Use stateId and actions to click.');
+  if (!compact && (byView || args.click !== undefined || args.region !== undefined)) throw new Error('Compact screenshot controls are disabled. Use stateId and actions to click.');
   if (byView && args.stateId !== undefined) throw new Error('Supply one screenshot view or stateId.');
   if (tool === 'act_ui' && !byView && args.click === undefined) {
     if (typeof args.stateId !== 'string' || !Array.isArray(args.actions)) throw new Error('Supply a screenshot and click:[x,y], or stateId and actions.');
@@ -433,7 +434,10 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
         args = bindScreenshotArgs(spec.name, args, pctx.browserOwner!, pctx.compactBrowserControls);
       }
       const inspectPixels = spec.name === 'observe_ui' && (args.samplePixels !== undefined || args.magnify !== undefined);
-      if (spec.name === 'observe_ui' && args.focus !== undefined) {
+      if (spec.name === 'observe_ui' && args.region !== undefined && (!browserRegions.includes(args.region) || args.focus !== undefined)) {
+        throw new Error('Choose a named region or a focus point, one at a time.');
+      }
+      if (spec.name === 'observe_ui' && (args.focus !== undefined || args.region !== undefined)) {
         if (typeof args.root !== 'string' || toolSurface(spec.name, args) !== 'browser' || typeof args.stateId !== 'string' || !args.stateId.trim()
           || inspectPixels || (args.mode !== undefined && args.mode !== 'pixels')) {
           throw new Error('Focus requires one browser root and its full screenshot stateId in pixels mode, without magnify or samplePixels.');

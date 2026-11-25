@@ -1530,17 +1530,18 @@ async function withBrowserWrite<T>(contextId: string, work: () => Promise<T>): P
 	return result.value;
 }
 
-function browserClickHint(tool: string, detail: boolean, view?: string): string {
+function browserClickHint(tool: string, detail: boolean, view?: string, region?: ObserveParams["region"], canClip?: boolean): string {
 	if (view) {
-		const click = `act_ui({view:"${view}",click:[x,y]})`;
-		const focus = `observe_ui({view:"${view}",focus:{x,y}})`;
-		let hint = `Click with ${click}. For a small target, inspect its region with ${focus}.`;
-		if (detail) {
-			hint = `Detail view. Click the target with ${click} using pixels in this image. If absent, report not found or return to the full view.`;
-		} else if (tool === "launch_browser") {
-			hint = `For a first click in a desktop screenshot or dense toolbar, inspect the most likely region once with ${focus}. Click in the returned detail. For a large isolated control use ${click} directly.`;
+		if (tool === "act_ui") {
+			return `Input dispatched. Check the result in this screenshot. If only one click was requested, stop here. For a further requested step use {view:"${view}"}.`;
 		}
-		return hint;
+		const click = `act_ui({view:"${view}",click:[x,y]})`;
+		if (detail) {
+			const further = region ? " Use focus:{x,y} in this panel if nearby controls are hard to distinguish." : "";
+			return `Detail view.${region ? " Region: " + region + "." : ""} Click the target with ${click} in this image’s pixels.${further} If the target is absent, use this handle to inspect a different region.`;
+		}
+		if (canClip === false) return `At this page zoom, use ${click} in the full image or inspect it with magnify.`;
+		return `If you see the target, click with ${click}. For a small or crowded control, inspect its location with observe_ui({view:"${view}",focus:{x,y}}). If you can identify only the panel, use observe_ui({view:"${view}",region:POSITION}). POSITION is top-left, top, top-right, left, center, right, bottom-left, bottom or bottom-right. Use coordinates in the returned image.`;
 	}
 	let hint = "Use act_ui with coordinates from this image. For a small or crowded target, inspect its region first with observe_ui, this root, stateId and focus:{x,y}.";
 	if (detail) {
@@ -1557,7 +1558,7 @@ function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string,
 	savedStates.set({ stateId: browser.snapshotId, resourceKey, epoch, value: { kind: "browser", view, snapshot: stored, outline: stored.outline } });
 	if (pixelImage && stored.viewport) {
 		const root = { ref:storeBrowserRootRef(stored.contextId), kind:"browser_page" as const, title:"", url:"" };
-		const hint = browserClickHint(tool, !!stored.viewport.origin, view);
+		const hint = browserClickHint(tool, !!stored.viewport.origin, view, stored.viewport.region, stored.viewport.canClip);
 		return { content: [
 			{ type:"text", text:`${tool} completed for ${root.ref}. State ${stored.snapshotId}. Screenshot only, ${stored.viewport.width} × ${stored.viewport.height} px. ${hint} Inspect the next image after each action.` },
 			{ type:"image", mimeType:"image/png", data:pixelImage },
@@ -1824,13 +1825,13 @@ async function performObserve(params: ObserveParams, signal?: AbortSignal): Prom
 	if (isBrowserContextId(browserContextId)) {
 		const targetId = browserContextId.slice(BROWSER_CONTEXT_PREFIX.length);
 		const resourceKey = `cdp:${targetId}`;
-		if (params.focus !== undefined) {
+		if (params.focus !== undefined || params.region !== undefined) {
 			const base = operationState().browserSnapshot;
 			const baseEpoch = operationState().epoch;
 			if (!base?.pixelsOnly || !base.viewport || base.contextId !== browserContextId || baseEpoch === undefined) {
 				throw new Error("Focus requires the full screenshot stateId belonging to this browser root.");
 			}
-			const focus = { center: params.focus, base: base.viewport };
+			const focus = { center: params.focus, region: params.region, base: base.viewport };
 			const { value, epoch } = await resourceScheduler.readAt(resourceKey, baseEpoch,
 				() => cdpSnapshotForContext(browserContextId, true, focus));
 			if (!value) throw new Error("Browser root is no longer available.");

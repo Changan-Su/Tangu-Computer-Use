@@ -587,3 +587,5 @@ Screenshot-only Computer Use uses `launch_browser(mode: "pixels")` for an isolat
 The browser pixel path in `vendor/{contract,bridge,cdp}.ts` supports state-bound, high-density viewport regions. Only the region geometry is saved with its observation. A focused action maps local image coordinates to the original viewport.
 
 With compact_browser_controls enabled, each delivered browser screenshot has a short handle in the bounded observation store. The adapter checks the owning session and binds focus or a click to the original image. Navigation, viewport changes and intervening write operations invalidate the mapping. Applications can repaint without changing the viewport.
+
+Compact browser controls support nine overlapping viewport regions. They use the same CDP clip path and checked coordinate mapping as point focus, with the output capped at 1600 pixels on the longest edge. A sibling region refers to the original viewport.
