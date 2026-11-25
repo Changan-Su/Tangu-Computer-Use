@@ -298,12 +298,16 @@ try {
   // Switch from the opposite corner to the top-left panel at fractional DPI.
   const observeSchema = () => provider.tools().find(t => t.name === 'observe_ui').definition.function.parameters.properties;
   assert.equal(observeSchema().region,undefined);
+  const actSchema = () => provider.tools().find(t => t.name === 'act_ui').definition.function.parameters.properties;
+  assert.equal(actSchema().hover, undefined);
   const compactOnly = await observePixels();
+  await assert.rejects(run('act_ui',{view:viewOf(compactOnly),hover:[0,0]},'C'),/requires browser panel zoom/);
   assert.doesNotMatch(compactOnly,/region:POSITION/);
   await assert.rejects(run('observe_ui',{view:viewOf(compactOnly),region:'bottom-right'},'C'),/disabled/);
   settings.compact_browser_controls = false;
   settings.browser_panel_zoom = true;
   assert.equal(observeSchema().region.enum.length,9);
+  assert.equal(actSchema().hover.maxItems,2);
   const regionBase = await observePixels();
   assert.match(regionBase,/region:POSITION/);
   const regionArgs = {view:viewOf(regionBase),region:'bottom-right'};
@@ -370,6 +374,40 @@ try {
     assert.match(undelivered,/Screenshot unavailable.+observe_ui/);
     assert.doesNotMatch(undelivered,/act_ui|view:"v/);
   }
+  // The browser's pixel feedback follows a real move at fractional DPI. The delayed badge is drawn by page code.
+  await emulation('Runtime.evaluate',{expression:`{
+    const probe = document.getElementById('probe');
+    probe.onpointermove = event => {
+      if (event.isTrusted && event.buttons === 0) setTimeout(() => { probe.style.background = '#ed48ae'; }, 300);
+    };
+  }`});
+  const hoverOverview = await observePixels();
+  const overviewMarker = marker();
+  const hoverDetail = await run('observe_ui',{view:viewOf(hoverOverview),focus:overviewMarker},'C');
+  const localMarker = marker();
+  const hoverArgs = {view:viewOf(hoverDetail),hover:[localMarker.x,localMarker.y]};
+  await assert.rejects(run('act_ui',hoverArgs,'B'),/another conversation/);
+  await assert.rejects(run('act_ui',{...hoverArgs,click:[0,0]},'C'),/takes only/);
+  await assert.rejects(run('act_ui',{...hoverArgs,hover:[640,0]},'C'),/outside/);
+  // An attempted out-of-bounds write can invalidate its handle. Re-observe before valid input.
+  const hoverFresh = await observePixels();
+  const hoverReady = await run('observe_ui',{view:viewOf(hoverFresh),focus:overviewMarker},'C');
+  const beforeHover = await pointerCount();
+  const hovered = await run('act_ui',{stateId:state(hoverReady),hover:[localMarker.x,localMarker.y]},'C');
+  assert.match(hovered,/Pointer moved without clicking/);
+  assert.doesNotMatch(hovered,/stop here/);
+  assert.deepEqual(marker([237,72,174]),overviewMarker);
+  const clickInSuccessor = /click:\[(\d+),(\d+)\]/.exec(hovered);
+  assert.ok(clickInSuccessor,'Missing full-image hover point');
+  assert.equal(await pointerCount(),beforeHover);
+  await assert.rejects(run('act_ui',{view:viewOf(hoverReady),click:[localMarker.x,localMarker.y]},'C'),/stale|epoch/i);
+  detailEvent=undefined;
+  const afterHoverClick = await run('act_ui',{view:viewOf(hovered),click:clickInSuccessor.slice(1).map(Number)},'C');
+  await waitFor(()=>detailEvent);
+  assert.ok(detailEvent[0]>=240 && detailEvent[0]<=242 && detailEvent[1]>=110 && detailEvent[1]<=112 && detailEvent[3],JSON.stringify(detailEvent));
+  assert.equal(await pointerCount(),beforeHover+1);
+  assert.match(afterHoverClick,/only one click was requested, stop here/);
+  await emulation('Runtime.evaluate',{expression:"document.getElementById('probe').onpointermove = null; document.getElementById('probe').style.background='#50b12c'"});
   const beforeNav = await observePixels();
   const beforeNavFine = await run('observe_ui',{view:viewOf(beforeNav),focus:{x:100,y:100}},'C');
   await emulation('Runtime.evaluate',{expression:"history.pushState({}, '', '#new-view')"});

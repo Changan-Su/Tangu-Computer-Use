@@ -50,6 +50,9 @@ type PiExecute = (
 const S = (description?: string, maxLength?: number) => ({ type: 'string', ...(description ? { description } : {}), ...(maxLength ? { maxLength } : {}) });
 const N = (description?: string, extra: Record<string, number> = {}) => ({ type: 'number', ...(description ? { description } : {}), ...extra });
 const stateId = { type: 'string', description: 'Required state id owning every @e ref used by this operation' };
+const screenshotPoint = (description: string) => ({
+  type: 'array', items: { type: 'integer', minimum: 0 }, minItems: 2, maxItems: 2, description,
+});
 const view = S('Handle printed on one browser screenshot. Its coordinates belong to that exact full image or detail.');
 const mouseButton = { type: 'string', enum: ['left', 'right', 'middle'] };
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required });
@@ -172,9 +175,11 @@ const toolSpecs = (compact: boolean, panels = false): ToolSpec[] => [
     name: 'act_ui', exec: executeAct as PiExecute, sideEffect: 'system', approval: 'command', timeoutMs: 120_000,
     description: 'Perform one or more precisely targeted checked actions and return the successor state. '
       + (compact ? 'For a single left click in a browser screenshot, pass click:[x,y] and its view or stateId. ' : '')
+      + (panels ? 'For an unfamiliar icon on a live page, hover:[x,y] can reveal its tooltip or status text before you click. ' : '')
       + 'When the state says Screenshot only, send exactly ONE action, then inspect the successor image and use its new stateId. For other states, batch only actions whose targets are already present in this state (for example focus then type). After navigation or opening a popup, inspect the successor state before targeting a newly revealed control; do not guess its coordinates from the old screenshot. Use expect for observable completion. expect reads accessibility text only, never the pixels: on a window whose outline has almost no text it will rarely match, so prefer leaving it out there and judging from the attached screenshot. Coordinates (x / y, drag path) are pixels in the latest attached screenshot, whose size the result states on an [image] line. After clicking an editable region in the same call, omit ref from typeText/keypress so input follows that focus; a later call can omit ref only while the target window is still frontmost, otherwise click again first. To fill a text field prefer a single setText action — it writes the value in the background without taking focus; only click the field first (which takes the foreground) if setText reports it did not take, as happens on some web/Electron inputs. When any action takes the foreground the result says so on a [foreground] line. For strict background-only runs, turn on the plugin\'s "strict background" setting.',
     parameters: obj({
-      ...(compact ? { view, click: { type: 'array', items: { type: 'integer', minimum: 0 }, minItems: 2, maxItems: 2, description: 'Single left click at [x,y] in the identified screenshot.' } } : {}),
+      ...(compact ? { view, click: screenshotPoint('Single left click at [x,y] in the identified screenshot.') } : {}),
+      ...(panels ? { hover: screenshotPoint('Move the browser pointer to [x,y] without clicking and capture the full page viewport after a short dwell.') } : {}),
       stateId, expect: obj(conditionProps),
       actions: { type: 'array', items: uiAction, minItems: 1, maxItems: 20 },
     }, compact ? [] : ['stateId', 'actions']),
@@ -374,7 +379,7 @@ function bindScreenshotArgs(tool: 'act_ui' | 'observe_ui', args: Record<string, 
   const byView = args.view !== undefined;
   if (!compact && (byView || args.click !== undefined || args.region !== undefined)) throw new Error('Compact screenshot controls are disabled. Use stateId and actions to click.');
   if (byView && args.stateId !== undefined) throw new Error('Supply one screenshot view or stateId.');
-  if (tool === 'act_ui' && !byView && args.click === undefined) {
+  if (tool === 'act_ui' && !byView && args.click === undefined && args.hover === undefined) {
     if (typeof args.stateId !== 'string' || !Array.isArray(args.actions)) throw new Error('Supply a screenshot and click:[x,y], or stateId and actions.');
     return args;
   }
@@ -387,12 +392,13 @@ function bindScreenshotArgs(tool: 'act_ui' | 'observe_ui', args: Record<string, 
   }
   if (tool === 'act_ui') {
     const idKey = byView ? 'view' : 'stateId';
-    const xy = args.click;
-    if (Object.keys(args).some(key => key !== idKey && key !== 'click') || !Array.isArray(xy) || xy.length !== 2
+    const kind = args.hover !== undefined ? 'hover' : 'click';
+    const xy = args[kind];
+    if (Object.keys(args).some(key => key !== idKey && key !== kind) || !Array.isArray(xy) || xy.length !== 2
       || !xy.every(n => Number.isSafeInteger(n) && n >= 0)) {
-      throw new Error('A screenshot click takes only its view or stateId and click:[x,y] in whole pixels.');
+      throw new Error(`A screenshot ${kind} takes only its view or stateId and ${kind}:[x,y] in whole pixels.`);
     }
-    return { stateId: binding.stateId, actions: [{ action: 'click', x: xy[0], y: xy[1] }] };
+    return { stateId: binding.stateId, actions: [{ action: kind === 'hover' ? 'moveMouse' : 'click', x: xy[0], y: xy[1] }] };
   }
   if (args.root !== undefined && args.root !== binding.root) throw new Error('Use the screenshot belonging to this browser root.');
   if (args.mode !== undefined && args.mode !== 'pixels') throw new Error('Screenshot-only state requires pixels mode.');
@@ -438,6 +444,7 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
       const mode = browserMode();
       pctx.compactBrowserControls = mode !== 'standard';
       pctx.browserPanelZoom = mode === 'panels';
+      if (args.hover !== undefined && spec.name === 'act_ui' && !pctx.browserPanelZoom) throw new Error('Screenshot hover requires browser panel zoom.');
       if (args.region !== undefined && spec.name === 'observe_ui' && !pctx.browserPanelZoom) throw new Error('Browser panel zoom is disabled.');
       if ((spec.name === 'launch_browser' || spec.name === 'navigate_browser') && typeof args.url === 'string' && args.url.trim()) {
         args = { ...args, url: await validateUrl(args.url.trim()) };

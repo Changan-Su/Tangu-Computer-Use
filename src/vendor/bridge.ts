@@ -1531,11 +1531,28 @@ async function withBrowserWrite<T>(contextId: string, work: () => Promise<T>): P
 	return result.value;
 }
 
+interface BrowserActionReceipt {
+	action: UiAction;
+	stamp?: string;
+}
+
+function browserActionHint(view: string, viewport: NonNullable<CdpPageSnapshot["viewport"]>, receipt?: BrowserActionReceipt): string {
+	if (receipt?.action.action === "moveMouse") {
+		const { x, y } = receipt.action;
+		let point = "[x,y]";
+		if (viewport.stamp === receipt.stamp && x !== undefined && y !== undefined) {
+			const px = Math.round((x - (viewport.origin?.x ?? 0)) * viewport.width / viewport.cssWidth);
+			const py = Math.round((y - (viewport.origin?.y ?? 0)) * viewport.height / viewport.cssHeight);
+			if (px >= 0 && px < viewport.width && py >= 0 && py < viewport.height) point = `[${px},${py}]`;
+		}
+		return `Pointer moved without clicking. Inspect the tooltip or status text. If it identifies the requested control, click with act_ui({view:"${view}",click:${point}}) using this screenshot.`;
+	}
+	const stop = receipt?.action.action === "click" ? " If only one click was requested, stop here." : "";
+	return `Input dispatched. Check the result in this screenshot.${stop} For a further requested step use {view:"${view}"}.`;
+}
+
 function browserClickHint(tool: string, detail: boolean, view?: string, region?: ObserveParams["region"], canClip?: boolean, inspectedPoint?: ObserveParams["focus"]): string {
 	if (view && operationState().browserPanelZoom) {
-		if (tool === "act_ui") {
-			return `Input dispatched. Check the result in this screenshot. If only one click was requested, stop here. For a further requested step use {view:"${view}"}.`;
-		}
 		const click = `act_ui({view:"${view}",click:[x,y]})`;
 		if (detail) {
 			if (inspectedPoint) {
@@ -1568,13 +1585,15 @@ function browserClickHint(tool: string, detail: boolean, view?: string, region?:
 	return hint;
 }
 
-function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string, epoch: number, tool: string, base?: { stateId: string; outline: SerializedOutline }, inspectedPoint?: ObserveParams["focus"]): AgentToolResult<BrowserObservationDetails> {
+function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string, epoch: number, tool: string, base?: { stateId: string; outline: SerializedOutline }, observation?: { inspectedPoint?: ObserveParams["focus"]; receipt?: BrowserActionReceipt }): AgentToolResult<BrowserObservationDetails> {
 	const { pixelImage, ...stored } = browser;
 	const view = operationState().compactBrowserControls && pixelImage && stored.viewport ? viewPrefix + (++nextView).toString(36) : undefined;
 	savedStates.set({ stateId: browser.snapshotId, resourceKey, epoch, value: { kind: "browser", view, snapshot: stored, outline: stored.outline } });
 	if (pixelImage && stored.viewport) {
 		const root = { ref:storeBrowserRootRef(stored.contextId), kind:"browser_page" as const, title:"", url:"" };
-		const hint = browserClickHint(tool, !!stored.viewport.origin, view, stored.viewport.region, stored.viewport.canClip, inspectedPoint);
+		const hint = tool === "act_ui" && view && operationState().browserPanelZoom
+			? browserActionHint(view, stored.viewport, observation?.receipt)
+			: browserClickHint(tool, !!stored.viewport.origin, view, stored.viewport.region, stored.viewport.canClip, observation?.inspectedPoint);
 		return { content: [
 			{ type:"text", text:`${tool} completed for ${root.ref}. State ${stored.snapshotId}. Screenshot only, ${stored.viewport.width} × ${stored.viewport.height} px. ${hint} Inspect the next image after each action.` },
 			{ type:"image", mimeType:"image/png", data:pixelImage },
@@ -1598,12 +1617,12 @@ function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string,
 	return { content: [{ type: "text", text: `${tool} completed for ${root.ref} ${JSON.stringify(browser.title)}. State ${browser.snapshotId}.${controlHint}\n${viewText}${controlText}${pageText ? "\nPage text:\n" + pageText : ""}` }], details };
 }
 
-async function refreshBrowserSnapshot(contextId: string, tool: string, base?: { stateId: string; outline: SerializedOutline }): Promise<AgentToolResult<BrowserObservationDetails>> {
+async function refreshBrowserSnapshot(contextId: string, tool: string, base?: { stateId: string; outline: SerializedOutline }, receipt?: BrowserActionReceipt): Promise<AgentToolResult<BrowserObservationDetails>> {
 	const browser = await cdpSnapshotForContext(contextId, operationState().browserSnapshot?.pixelsOnly || undefined);
 	if (!browser) throw new Error(`Browser root '${contextId}' is no longer available. Call find_roots and observe_ui again.`);
 	const state = operationState();
 	const resourceKey = state.resourceKey ?? `cdp:${browser.targetId}`;
-	return browserObservationResult(browser, resourceKey, state.epoch ?? resourceScheduler.epoch(resourceKey), tool, base);
+	return browserObservationResult(browser, resourceKey, state.epoch ?? resourceScheduler.epoch(resourceKey), tool, base, { receipt });
 }
 
 function sliceText(value: string, offsetValue: unknown, _limitValue?: unknown): Pick<ReadTextDetails, "offset" | "limit" | "totalChars" | "hasMore" | "text"> {
@@ -1852,7 +1871,7 @@ async function performObserve(params: ObserveParams, signal?: AbortSignal): Prom
 			const { value, epoch } = await resourceScheduler.readAt(resourceKey, baseEpoch,
 				() => cdpSnapshotForContext(browserContextId, true, focus));
 			if (!value) throw new Error("Browser root is no longer available.");
-			return browserObservationResult(value, resourceKey, epoch, "observe_ui", undefined, refreshDetail ? params.focus : undefined);
+			return browserObservationResult(value, resourceKey, epoch, "observe_ui", undefined, { inspectedPoint: refreshDetail ? params.focus : undefined });
 		}
 		const { value, epoch } = await resourceScheduler.read(resourceKey, async () => {
 			const browser = await cdpSnapshotForContext(browserContextId, params.mode === "pixels" || undefined);
@@ -2522,7 +2541,12 @@ async function performBrowserTransaction(params: ActParams, actions: UiAction[],
 			} while (Date.now() < deadline);
 			throw new Error(`The browser action was delivered but its postcondition was not satisfied within ${condition.timeoutMs}ms.`);
 		}
-		try { return await refreshBrowserSnapshot(contextId, "act_ui", baseView); }
+		try {
+			const single = baseSnapshot.pixelsOnly && prepared.length === 1 ? prepared[0].action : undefined;
+			// A live control can paint its hover label after a short timer. Wait only on pixel-mode pointer moves in the panel experiment.
+			if (operationState().browserPanelZoom && single?.action === "moveMouse") await sleep(650, signal);
+			return await refreshBrowserSnapshot(contextId, "act_ui", baseView, single ? { action: single, stamp: baseSnapshot.viewport?.stamp } : undefined);
+		}
 		catch (error) { throw new Error(`${completed} action(s) delivered. Observe before sending more input. ${error}`); }
 	});
 }
