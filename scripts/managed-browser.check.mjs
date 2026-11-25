@@ -226,7 +226,10 @@ try {
   await assert.rejects(run('observe_ui',focusArgs,'C'),/stale|epoch/i);
   const edge = await run('observe_ui',{root:root(picture),stateId:state(reset),focus:{x:0,y:0}},'C');
   assert.match(edge,/Detail view/);
-  const [profile] = await readdir(privateProfiles);
+  const profiles = (await readdir(privateProfiles,{withFileTypes:true}))
+    .filter(entry=>entry.isDirectory() && entry.name.startsWith('tangu-browser-'));
+  assert.equal(profiles.length,1,'Expected exactly one managed profile in the isolated test directory.');
+  const profile = profiles[0].name;
   const portFile = await readFile(path.join(privateProfiles,profile,'DevToolsActivePort'),'utf8');
   const pages = await (await fetch('http://127.0.0.1:'+portFile.split('\n')[0]+'/json/list')).json();
   geometrySocket = new WebSocket(pages.find(p=>p.url===url+'?geometry').webSocketDebuggerUrl);
