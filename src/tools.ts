@@ -17,7 +17,7 @@ import type { ExtensionContext, AgentToolResult } from './pi-compat.ts';
 import {
   executeFind, executeObserve, executeSearchUi, executeExpandUi, executeInspectUi,
   executeAct, executeReadText, executeWaitFor, executeLaunchBrowser, executeNavigateBrowser,
-  executeEvaluateBrowser, ensureComputerUseSetup, toolSurface,
+  executeEvaluateBrowser, ensureComputerUseSetup, toolSurface, pixelBinding,
 } from './vendor/bridge.ts';
 import { getComputerUseConfig, loadComputerUseConfig } from './vendor/config.ts';
 import { currentPlatformBackend } from './vendor/platform/index.ts';
@@ -49,6 +49,7 @@ type PiExecute = (
 const S = (description?: string, maxLength?: number) => ({ type: 'string', ...(description ? { description } : {}), ...(maxLength ? { maxLength } : {}) });
 const N = (description?: string, extra: Record<string, number> = {}) => ({ type: 'number', ...(description ? { description } : {}), ...extra });
 const stateId = { type: 'string', description: 'Required state id owning every @e ref used by this operation' };
+const view = S('Handle printed on one browser screenshot. Its coordinates belong to that exact full image or detail.');
 const mouseButton = { type: 'string', enum: ['left', 'right', 'middle'] };
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required });
 
@@ -100,7 +101,7 @@ interface ToolSpec {
   timeoutMs: number;
 }
 
-const SPECS: ToolSpec[] = [
+const toolSpecs = (compact: boolean): ToolSpec[] => [
   {
     name: 'jev_ui', sideEffect: 'system', approval: 'command', darwinOnly: true, jevOnly: true, timeoutMs: 180_000,
     description: 'Experimental Jev acceleration for ONE native desktop root: you plan, Jev acts and checks. Plan the whole on-screen sequence yourself, then send it as 1–8 steps in one call. Actions: click; double_click (play a row, open a file); fill (atomic setText, native text fields only); type (clicks target when given, then types text at the caret; works on canvas, CEF and web windows where fill is refused, and does not clear the field; keys, e.g. ["return"], are pressed right after the text in the same input: for a search box or a form that applies on Return, never to send a message, which stays a step of its own after you checked the screenshot); key (keys such as ["return"] or ["cmd","a"], after clicking target when given, else to the current focus, which only works while that window is in front); scroll (target = the list or panel; Jev scrolls it, three quarters of the list per wheel and short wheels once part of the item shows, at most maxScrolls times (default 12, up to 30 for a long list), until `until` is fully in view, checking every frame itself; then click the item in the same call). Describe targets by what is drawn (a label, a row\'s title text), never by pixel coordinates; for a list row, target its title text, not the whole row. Give every other step that changes the screen an expect: what the window will certainly show once it worked (e.g. "the Daily picks song list is shown", "row 3 shows a playing icon"); do not guess text you have not seen, such as a page title. Jev locates each target on a fresh observation, sends the input, then looks for expect on new screenshots for up to 4 s (page loads included) and only then moves on, with no main-model round trip per step. It hands back early, with the latest screenshot, when a target is missing/ambiguous/low-confidence, an expect does not appear, a scroll does not reach until, or a step without expect cannot be confirmed natively (canvas/web windows never confirm natively, so always give expect there). A rejected target means Jev does not see it as described: describe it differently and call again. mode=elements selects accessibility refs and never takes screenshots (click and fill only; expect is then not checked); vision uses screenshot boxes; auto tries elements then vision. preview=true locates ONE target without acting. point in the report is in Jev\'s own capture; use pointFraction to compare with other screenshots. Unknown is an unverified input, not a failed one: inspect the returned screenshot before repeating anything with any tool, and continue only the unconfirmed steps. Same executor and foreground policy as act_ui; only drag needs act_ui. key ["return"] in a message field sends it: do not batch irreversible/outward-facing actions without the authorization the normal Computer Use rules require. Never put API keys in arguments.',
@@ -137,11 +138,14 @@ const SPECS: ToolSpec[] = [
   },
   {
     name: 'observe_ui', exec: executeObserve as PiExecute, sideEffect: 'read', timeoutMs: 60_000,
-    description: 'Capture the current/frontmost root or one exact @r root and return a bounded UI outline. Use mode=semantic to skip OCR and images, visual to force them, fused for automatic selection. For screenshot-only work use pixels. For small icons or exact colors, choose magnify or samplePixels on the target root. Primary UI observation tool; follow with search_ui/expand_ui/inspect_ui/act_ui. Use @e outline refs from observe_ui/search_ui for act_ui; pictureOnly refs are coordinate-only.',
+    description: 'Capture the current/frontmost root or one exact @r root and return a bounded UI outline. Use mode=semantic to skip OCR and images, visual to force them, fused for automatic selection. For screenshot-only work use pixels. For '
+      + (compact ? 'a small browser target, use focus with the full screenshot handle and click in the returned image. For exact colors use samplePixels. For native windows use magnify' : 'small icons or exact colors, choose magnify or samplePixels on the target root')
+      + '. Primary UI observation tool; follow with search_ui/expand_ui/inspect_ui/act_ui. Use @e outline refs from observe_ui/search_ui for act_ui; pictureOnly refs are coordinate-only.',
     parameters: obj({
       root: S('Exact @r ref issued by find_roots'),
-      stateId: S('For focus, the stateId of the full browser screenshot containing the target region.'),
-      focus: { ...obj({x:N(), y:N()}, ['x','y']), description: 'Inspect small controls in a fresh high-resolution browser detail centered on full-image x/y. Requires root and stateId from the full screenshot. Click directly in the returned detail.' },
+      ...(compact ? { view } : {}),
+      stateId: S(compact ? 'Alternative to view. The full stateId of the browser screenshot.' : 'State owning the full browser screenshot when using focus.'),
+      focus: { ...obj({x:N(), y:N()}, ['x','y']), description: compact ? 'Inspect small controls in a fresh high-resolution browser detail centered on full-image x/y. Supply its view handle or stateId. Click directly in the returned detail.' : 'Inspect small controls in a fresh high-resolution browser detail centered on full-image x/y. Requires root and stateId from the full screenshot. Click directly in the returned detail.' },
       samplePixels: { type: 'array', items: obj(point, ['x', 'y']), minItems: 1, maxItems: 8, description: 'Read RGB at these full screenshot coordinates to check swatches or edits. Requires an exact root. Implies pixels mode.' },
       magnify: { ...obj({ ...point, width: N(), height: N() }, ['x', 'y']), description: 'Attach a 2× detail. Give only x and y to center the detail on a point. With width and height, x and y specify the top-left of the rectangle (max 320 × 320). Requires an exact root. Implies pixels mode.' },
       mode: { type: 'string', enum: ['semantic', 'visual', 'fused', 'pixels'], description: 'pixels shows only the screenshot and its coordinates, including for a native desktop root. visual includes the outline as well. Default fused.' },
@@ -164,12 +168,14 @@ const SPECS: ToolSpec[] = [
   },
   {
     name: 'act_ui', exec: executeAct as PiExecute, sideEffect: 'system', approval: 'command', timeoutMs: 120_000,
-    description: 'Perform one or more precisely targeted checked actions and return the successor state. When the state says Screenshot only, send exactly ONE action, then inspect the successor image and use its new stateId. For other states, batch only actions whose targets are already present in this state (for example focus then type). After navigation or opening a popup, inspect the successor state before targeting a newly revealed control; do not guess its coordinates from the old screenshot. Use expect for observable completion. expect reads accessibility text only, never the pixels: on a window whose outline has almost no text it will rarely match, so prefer leaving it out there and judging from the attached screenshot. Coordinates (x / y, drag path) are pixels in the latest attached screenshot, whose size the result states on an [image] line. After clicking an editable region in the same call, omit ref from typeText/keypress so input follows that focus; a later call can omit ref only while the target window is still frontmost, otherwise click again first. To fill a text field prefer a single setText action — it writes the value in the background without taking focus; only click the field first (which takes the foreground) if setText reports it did not take, as happens on some web/Electron inputs. When any action takes the foreground the result says so on a [foreground] line. For strict background-only runs, turn on the plugin\'s "strict background" setting.',
+    description: 'Perform one or more precisely targeted checked actions and return the successor state. '
+      + (compact ? 'For a single left click in a browser screenshot, pass click:[x,y] and its view or stateId. ' : '')
+      + 'When the state says Screenshot only, send exactly ONE action, then inspect the successor image and use its new stateId. For other states, batch only actions whose targets are already present in this state (for example focus then type). After navigation or opening a popup, inspect the successor state before targeting a newly revealed control; do not guess its coordinates from the old screenshot. Use expect for observable completion. expect reads accessibility text only, never the pixels: on a window whose outline has almost no text it will rarely match, so prefer leaving it out there and judging from the attached screenshot. Coordinates (x / y, drag path) are pixels in the latest attached screenshot, whose size the result states on an [image] line. After clicking an editable region in the same call, omit ref from typeText/keypress so input follows that focus; a later call can omit ref only while the target window is still frontmost, otherwise click again first. To fill a text field prefer a single setText action — it writes the value in the background without taking focus; only click the field first (which takes the foreground) if setText reports it did not take, as happens on some web/Electron inputs. When any action takes the foreground the result says so on a [foreground] line. For strict background-only runs, turn on the plugin\'s "strict background" setting.',
     parameters: obj({
-      stateId,
-      expect: obj(conditionProps),
+      ...(compact ? { view, click: { type: 'array', items: { type: 'integer', minimum: 0 }, minItems: 2, maxItems: 2, description: 'Single left click at [x,y] in the identified screenshot.' } } : {}),
+      stateId, expect: obj(conditionProps),
       actions: { type: 'array', items: uiAction, minItems: 1, maxItems: 20 },
-    }, ['stateId', 'actions']),
+    }, compact ? [] : ['stateId', 'actions']),
   },
   {
     name: 'ensure_app', run: runEnsureApp, sideEffect: 'system', darwinOnly: true, timeoutMs: 25_000,
@@ -358,7 +364,40 @@ async function legacyBrowserUrl(raw: string): Promise<string> {
   return url.href;
 }
 
+function bindScreenshotArgs(tool: 'act_ui' | 'observe_ui', args: Record<string, any>, owner: string): Record<string, any> {
+  const byView = args.view !== undefined;
+  if (byView && args.stateId !== undefined) throw new Error('Supply one screenshot view or stateId.');
+  if (tool === 'act_ui' && !byView && args.click === undefined) {
+    if (typeof args.stateId !== 'string' || !Array.isArray(args.actions)) throw new Error('Supply a screenshot and click:[x,y], or stateId and actions.');
+    return args;
+  }
+  const id = byView ? args.view : args.stateId;
+  if (tool === 'observe_ui' && id === undefined) return args;
+  const binding = typeof id === 'string' && pixelBinding(id.trim(), owner, byView);
+  if (!binding) {
+    if (byView || tool === 'act_ui' || args.root === undefined) throw new Error('Screenshot expired or unavailable. Observe the browser again.');
+    return args;
+  }
+  if (tool === 'act_ui') {
+    const idKey = byView ? 'view' : 'stateId';
+    const xy = args.click;
+    if (Object.keys(args).some(key => key !== idKey && key !== 'click') || !Array.isArray(xy) || xy.length !== 2
+      || !xy.every(n => Number.isSafeInteger(n) && n >= 0)) {
+      throw new Error('A screenshot click takes only its view or stateId and click:[x,y] in whole pixels.');
+    }
+    return { stateId: binding.stateId, actions: [{ action: 'click', x: xy[0], y: xy[1] }] };
+  }
+  if (args.root !== undefined && args.root !== binding.root) throw new Error('Use the screenshot belonging to this browser root.');
+  if (args.mode !== undefined && args.mode !== 'pixels') throw new Error('Screenshot-only state requires pixels mode.');
+  if (binding.detail && (args.magnify !== undefined || args.samplePixels !== undefined)) {
+    throw new Error('Magnify and samplePixels use full-image coordinates. Observe the full screenshot first.');
+  }
+  const { view: _view, ...rest } = args;
+  return { ...rest, root: binding.root, stateId: binding.stateId, mode: 'pixels' };
+}
+
 export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowserUrl): ToolProvider {
+  const compactEnabled = () => store.getScopeSettings(PLUGIN_ID, 'global').compact_browser_controls === true;
   const gate = (spec: ToolSpec) => (profile: AppProfile): boolean =>
     !!profile.capabilities.hostExec
     && store.isPluginEnabledSync(PLUGIN_ID)
@@ -385,8 +424,12 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
       }
       syncSettings(store);
       const pctx = makePiCtx(tcx, false);
+      pctx.compactBrowserControls = compactEnabled();
       if ((spec.name === 'launch_browser' || spec.name === 'navigate_browser') && typeof args.url === 'string' && args.url.trim()) {
         args = { ...args, url: await validateUrl(args.url.trim()) };
+      }
+      if (spec.name === 'act_ui' || spec.name === 'observe_ui') {
+        args = bindScreenshotArgs(spec.name, args, pctx.browserOwner!);
       }
       const inspectPixels = spec.name === 'observe_ui' && (args.samplePixels !== undefined || args.magnify !== undefined);
       if (spec.name === 'observe_ui' && args.focus !== undefined) {
@@ -446,5 +489,7 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
     }),
   });
 
-  return { id: 'plugin:computer-use', tools: () => SPECS.map(toTool) };
+  const defaults = toolSpecs(false);
+  const compact = toolSpecs(true);
+  return { id: 'plugin:computer-use', tools: () => (compactEnabled() ? compact : defaults).map(toTool) };
 }

@@ -739,7 +739,8 @@ for (const legacy of [false, true]) {
 {
   // ① 认领的名单 == 引擎半身真正注册的工具(src/tools.ts 的 SPECS);新加一个工具忘了认领,这里红
   const toolsSrc = readFileSync(new URL('./src/tools.ts', import.meta.url), 'utf8')
-  const specs = toolsSrc.slice(toolsSrc.indexOf('const SPECS'), toolsSrc.indexOf('];', toolsSrc.indexOf('const SPECS')))
+  const start = toolsSrc.indexOf('const toolSpecs =')
+  const specs = toolsSrc.slice(start, toolsSrc.indexOf('];', start))
   const specNames = [...specs.matchAll(/^\s+name: '([a-z_]+)'/gm)].map((m) => m[1]).sort()
   A.ok(specNames.length >= 13, `SPECS 里应读出全部工具名(读到 ${specNames.length} 个)`)
   A.deepEqual([...T.CU_TOOLS].sort(), specNames, 'registerToolLabel 认领的工具必须正好是 src/tools.ts 的 SPECS')

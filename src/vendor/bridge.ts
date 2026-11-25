@@ -315,6 +315,18 @@ const runtimeState: RuntimeState = {
 };
 
 const savedStates = new SavedStates();
+// Handles identify a particular immutable frame, even across concurrent runs or delayed approvals.
+const viewPrefix = "v" + randomUUID().slice(0, 8) + "-";
+let nextView = 0;
+
+export function pixelBinding(id: string, owner: string, byView: boolean) {
+	const record = byView
+		? Array.from(savedStates.store.values()).find(r => r.value.kind === "browser" && r.value.view === id)
+		: savedStates.get(id);
+	if (record?.value.kind !== "browser" || !record.value.snapshot.pixelsOnly) return undefined;
+	if (record.value.snapshot.owner !== owner) throw new Error("Browser state belongs to another conversation.");
+	return { stateId: record.stateId, root: storeBrowserRootRef(record.value.snapshot.contextId), detail: !!record.value.snapshot.viewport?.origin };
+}
 let resourceScheduler = new ResourceScheduler();
 
 function operationState(): OperationState {
@@ -1517,17 +1529,34 @@ async function withBrowserWrite<T>(contextId: string, work: () => Promise<T>): P
 	return result.value;
 }
 
+function browserClickHint(tool: string, detail: boolean, view?: string): string {
+	if (view) {
+		const click = `act_ui({view:"${view}",click:[x,y]})`;
+		const focus = `observe_ui({view:"${view}",focus:{x,y}})`;
+		let hint = `Click with ${click}. For a small target, inspect its region with ${focus}.`;
+		if (detail) {
+			hint = `Detail view. Click the target with ${click} using pixels in this image. If absent, report not found or return to the full view.`;
+		} else if (tool === "launch_browser") {
+			hint = `For a first click in a desktop screenshot or dense toolbar, inspect the most likely region once with ${focus}. Click in the returned detail. For a large isolated control use ${click} directly.`;
+		}
+		return hint;
+	}
+	let hint = "Use act_ui with coordinates from this image. For a small or crowded target, inspect its region first with observe_ui, this root, stateId and focus:{x,y}.";
+	if (detail) {
+		hint = "Detail view. Use act_ui with x/y directly in this image and its stateId. If the target is absent, observe this root again for the full image.";
+	} else if (tool === "launch_browser") {
+		hint = "For the first click in a desktop screenshot, canvas or dense toolbar, inspect the most likely region once with observe_ui using this root, stateId and focus:{x,y}. Then click directly in the detail with its new stateId. If you cannot identify the target, report it without guessing. Large isolated controls can be clicked directly.";
+	}
+	return hint;
+}
+
 function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string, epoch: number, tool: string, base?: { stateId: string; outline: SerializedOutline }): AgentToolResult<BrowserObservationDetails> {
 	const { pixelImage, ...stored } = browser;
-	savedStates.set({ stateId: browser.snapshotId, resourceKey, epoch, value: { kind: "browser", snapshot: stored, outline: stored.outline } });
+	const view = operationState().compactBrowserControls && pixelImage && stored.viewport ? viewPrefix + (++nextView).toString(36) : undefined;
+	savedStates.set({ stateId: browser.snapshotId, resourceKey, epoch, value: { kind: "browser", view, snapshot: stored, outline: stored.outline } });
 	if (pixelImage && stored.viewport) {
 		const root = { ref:storeBrowserRootRef(stored.contextId), kind:"browser_page" as const, title:"", url:"" };
-		let hint = "Use act_ui with coordinates from this image. For a small or crowded target, inspect its region first with observe_ui, this root, stateId and focus:{x,y}.";
-		if (stored.viewport.origin) {
-			hint = "Detail view. Use act_ui with x/y directly in this image and its stateId. If the target is absent, observe this root again for the full image.";
-		} else if (tool === "launch_browser") {
-			hint = "For the first click in a desktop screenshot, canvas or dense toolbar, inspect the most likely region once with observe_ui using this root, stateId and focus:{x,y}. Then click directly in the detail with its new stateId. If you cannot identify the target, report it without guessing. Large isolated controls can be clicked directly.";
-		}
+		const hint = browserClickHint(tool, !!stored.viewport.origin, view);
 		return { content: [
 			{ type:"text", text:`${tool} completed for ${root.ref}. State ${stored.snapshotId}. Screenshot only, ${stored.viewport.width} × ${stored.viewport.height} px. ${hint} Inspect the next image after each action.` },
 			{ type:"image", mimeType:"image/png", data:pixelImage },
@@ -2642,13 +2671,15 @@ async function executeTool<P, T>(tool: string, ctx: ExtensionContext, params: P,
 		throw new Error(`State '${requestedStateId}' is unavailable or was evicted. Observe the root again.`);
 	}
 	const operation = savedStates.hydrate(stateRecord);
+	operation.compactBrowserControls = ctx.compactBrowserControls;
 	return await savedStates.operations.run(operation, async () => {
 		const surface = toolSurface(tool, params as Record<string, unknown>);
 		if (operation.pixelsOnly && tool !== "act_ui") throw new Error("Screenshot-only state. Use observe_ui in pixels mode for another image.");
 		if (stateRecord?.value.kind === "browser" && stateRecord.value.snapshot.owner !== browserOwner()) throw new Error("Browser state belongs to another conversation. Observe your browser again.");
 		if (surface === "browser") {
 			if (stateRecord?.value.kind === "browser" && stateRecord.value.snapshot.pixelsOnly && tool !== "act_ui" && tool !== "navigate_browser"
-				&& !(tool === "observe_ui" && (params as ObserveParams).focus !== undefined && (params as ObserveParams).mode === "pixels")) {
+				&& !(tool === "observe_ui" && (params as ObserveParams).mode === "pixels"
+					&& runtimeState.browserContextByRoot.get((params as ObserveParams).root ?? "") === stateRecord.value.snapshot.contextId)) {
 				throw new Error("Screenshot-only browser state. Inspect the image or request another with observe_ui.");
 			}
 			if (!isBrowserUseEnabled()) throw new Error("Browser use is disabled in Computer Use settings.");

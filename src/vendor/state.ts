@@ -31,6 +31,7 @@ export interface CurrentCapture {
 }
 
 export interface OperationState {
+	compactBrowserControls?: boolean;
 	pixelsOnly?: boolean;
 	currentTarget?: CurrentTarget;
 	currentCapture?: CurrentCapture;
@@ -58,6 +59,7 @@ interface DesktopObservation {
 }
 
 interface BrowserObservation {
+	view?: string;
 	kind: "browser";
 	snapshot: CdpPageSnapshot;
 	outline: SerializedOutline;

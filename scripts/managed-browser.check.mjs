@@ -72,6 +72,10 @@ const settings = {};
 let provider;
 plugin.activate({ registerPlugin(meta) { provider = meta.toolProvider; }, registerCommand() {}, log() {},
   sdk: { pluginStore: { isPluginEnabledSync: () => true, getScopeSettings: () => settings } } });
+const defaultActions = provider.tools().find(t => t.name === 'act_ui').definition.function.parameters;
+assert.deepEqual(defaultActions.required, ['stateId','actions']);
+assert.equal(defaultActions.properties.view,undefined);
+settings.compact_browser_controls = true;
 const byName = new Map(provider.tools().map(t => [t.name, t]));
 const images = [];
 const run = (tool, args, sessionId = 'A') => byName.get(tool).execute(args, { appId:'fixture', userId:'fixture', execMode:'host', collectImage:image => images.push(image), sessionId });
@@ -206,7 +210,11 @@ try {
   const full = PNG.sync.read(Buffer.from(images.at(-1).url.split(',')[1],'base64'));
   const pxPerCss = full.width / 1280;
   const focusArgs = {root:root(picture),stateId:state(scrolledPixels),focus:{x:Math.round(620*pxPerCss),y:Math.round(380*pxPerCss)}};
-  const detailState = await run('observe_ui',focusArgs,'C');
+  const viewOf = text => {
+    const match = /view:"(v[0-9a-f]+-[a-z0-9]+)"/.exec(text);
+    assert.ok(match,text); return match[1];
+  };
+  const detailState = await run('observe_ui',{view:viewOf(scrolledPixels),focus:focusArgs.focus},'C');
   assert.match(detailState,/Detail view/);
   const detail = PNG.sync.read(Buffer.from(images.at(-1).url.split(',')[1],'base64'));
   assert.deepEqual([detail.width,detail.height],[640,384]);
@@ -219,7 +227,21 @@ try {
   await assert.rejects(run('observe_ui',{...focusArgs,focus:{x:-1,y:0}},'C'),/inside a full screenshot/);
   await assert.rejects(run('observe_ui',{...focusArgs,root:root(a)},'C'),/belonging to this browser root/);
   await assert.rejects(run('observe_ui',focusArgs,'B'),/another conversation/);
-  const reset = await run('act_ui',{stateId:state(detailState),actions:[{action:'click',x:320,y:192}]},'C');
+  // A detail click must still use its original mapping after a later read gives the model a full image.
+  await assert.rejects(run('observe_ui',{view:viewOf(detailState),samplePixels:[{x:0,y:0}]},'C'),/full-image coordinates/);
+  await assert.rejects(run('observe_ui',{stateId:' '+state(detailState)+' ',root:root(a)},'C'),/belonging to this browser root/);
+  const backToFull = await run('observe_ui',{stateId:' '+state(detailState)+' '},'C');
+  assert.doesNotMatch(backToFull,/Detail view/);
+  const bound = {view:viewOf(detailState),click:[320,192]};
+  await assert.rejects(run('act_ui',bound,'B'),/another conversation/);
+  await assert.rejects(run('act_ui',{...bound,actions:[{action:'keypress',keys:['return']}]},'C'),/takes only/);
+  await assert.rejects(run('act_ui',{...bound,stateId:state(backToFull)},'C'),/one screenshot view/);
+  await assert.rejects(run('act_ui',{view:'expired',click:[0,0]},'C'),/unavailable/);
+  await assert.rejects(run('act_ui',{...bound,click:[640,384]},'C'),/outside/);
+  assert.equal(detailEvent,undefined);
+  await assert.rejects(run('act_ui',{stateId:state(detailState),click:[320,192]},'B'),/another conversation/);
+  const reset = await run('act_ui',{stateId:state(detailState),click:[320,192]},'C');
+  await assert.rejects(run('act_ui',bound,'C'),/stale|epoch/i);
   assert.doesNotMatch(reset,/Detail view/);
   await waitFor(()=>detailEvent);
   assert.deepEqual(detailEvent,[620,380,300,true]);
@@ -262,7 +284,8 @@ try {
   const coarse = marker();
   const fractionalDetail = await run('observe_ui',{root:root(picture),stateId:state(fractional),focus:{x:coarse.x+78,y:coarse.y+40}},'C');
   detailEvent=undefined;
-  await run('act_ui',{stateId:state(fractionalDetail),actions:[{action:'click',...marker()}]},'C');
+  const finePoint = marker();
+  await run('act_ui',{view:viewOf(fractionalDetail),click:[finePoint.x,finePoint.y]},'C');
   await waitFor(()=>detailEvent);
   assert.ok(detailEvent[0]>=240 && detailEvent[0]<=242 && detailEvent[1]>=110 && detailEvent[1]<=112 && detailEvent[3],JSON.stringify(detailEvent));
   await emulation('Emulation.setPageScaleFactor',{pageScaleFactor:2});
@@ -274,6 +297,8 @@ try {
   await run('act_ui',{stateId:state(pinched),actions:[{action:'click',...pinchPoint}]},'C');
   await waitFor(()=>detailEvent);
   assert.ok(detailEvent[0]>=240 && detailEvent[0]<=242 && detailEvent[1]>=110 && detailEvent[1]<=112 && detailEvent[3],JSON.stringify(detailEvent));
+  settings.compact_browser_controls = false;
+  assert.doesNotMatch(await observePixels(),/view:"v/);
   settings.browser_use = false;
   await assert.rejects(observe(), /disabled/);
   sampling = false;
