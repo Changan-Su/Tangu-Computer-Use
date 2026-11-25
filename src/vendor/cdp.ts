@@ -33,11 +33,26 @@ export interface CdpSnapshotTarget {
 	backendNodeId?: number;
 }
 
+interface BrowserImageGeometry {
+	width: number;
+	height: number;
+	cssWidth: number;
+	cssHeight: number;
+	stamp: string;
+	/** Viewport-relative CSS origin of a detail image. Full images start at (0,0). */
+	origin?: { x: number; y: number };
+}
+
+interface FocusRequest {
+	center: { x: number; y: number };
+	base: BrowserImageGeometry;
+}
+
 export interface CdpPageSnapshot {
 	owner?: string;
 	pixelImage?: string; // Only carried to the result; never stored in the observation cache.
 	pixelsOnly?: boolean;
-	viewport?: { width: number; height: number; cssWidth: number; cssHeight: number; stamp: string };
+	viewport?: BrowserImageGeometry;
 	contextId: string;
 	snapshotId: string;
 	targetId: string;
@@ -148,19 +163,56 @@ export class CdpTab {
 	private async viewportMetrics() {
 		const { cssVisualViewport: viewport, visualViewport: device } = await this.send("Page.getLayoutMetrics");
 		const stamp = JSON.stringify([this.connectionId, this.pageRevision, viewport.pageX, viewport.pageY, viewport.clientWidth, viewport.clientHeight, viewport.scale, viewport.zoom, device.clientWidth, device.clientHeight]);
-		return { viewport, stamp };
+		return { viewport, device, stamp };
 	}
 
 	async viewportStamp(): Promise<string> { return (await this.viewportMetrics()).stamp; }
 
+	/** Render the visible region at twice the overview pixel density. The page keeps its viewport and zoom. */
+	async detailImage({ center, base }: FocusRequest) {
+		if (base.origin || !center || !Number.isInteger(center.x) || !Number.isInteger(center.y)
+			|| center.x < 0 || center.y < 0 || center.x >= base.width || center.y >= base.height) {
+			throw new Error("Choose a point inside a full screenshot to focus.");
+		}
+		const { viewport, stamp } = await this.viewportMetrics();
+		if (stamp !== base.stamp) throw new Error("The viewport moved. Observe the full image again.");
+		// CDP clip uses page-relative device-independent pixels. Avoid mixing units under pinch/browser zoom.
+		if (viewport.scale !== 1 || (viewport.zoom ?? 1) !== 1) throw new Error("Use the full image or magnify at this page zoom.");
+		const scaleX = base.cssWidth / base.width, scaleY = base.cssHeight / base.height;
+		// The full screenshot can include classic scrollbars. CDP clips page content only.
+		function clipAxis(pixel: number, cssPerPixel: number, page: number, visible: number, maxPixels: number) {
+			if (pixel * cssPerPixel >= visible) throw new Error("Use the full screenshot for the browser scrollbar.");
+			// Integer DIP boundaries avoid version-dependent truncation at fractional device scales.
+			const start = Math.ceil(page), end = Math.floor(page + visible);
+			const size = Math.min(end - start, Math.max(1, Math.round(maxPixels * cssPerPixel)));
+			if (size <= 0) throw new Error("This viewport is too small to focus.");
+			const center = page + pixel * cssPerPixel;
+			const offset = Math.max(start, Math.min(end - size, Math.round(center - size / 2)));
+			return { offset, size };
+		}
+		const x = clipAxis(center.x, scaleX, viewport.pageX, viewport.clientWidth, 320);
+		const y = clipAxis(center.y, scaleY, viewport.pageY, viewport.clientHeight, 192);
+		const origin = { x: x.offset - viewport.pageX, y: y.offset - viewport.pageY };
+		const cssWidth = x.size, cssHeight = y.size;
+		const clip = { x: x.offset, y: y.offset, width: cssWidth, height: cssHeight, scale: 2 };
+		const { data } = await this.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, clip });
+		if (stamp !== await this.viewportStamp()) throw new Error("The viewport moved during capture. Observe the full image again.");
+		const header = Buffer.from(data.slice(0, 40), "base64");
+		const width = header.readUInt32BE(16), height = header.readUInt32BE(20);
+		if (Math.abs(width - 2 * cssWidth / scaleX) > 2 || Math.abs(height - 2 * cssHeight / scaleY) > 2) throw new Error("Unexpected detail dimensions. Observe the full image again.");
+		return { data: String(data), geometry: { width, height, cssWidth, cssHeight, stamp, origin } };
+	}
+
 	async viewportImage() {
 		for (let attempt = 0; attempt < 3; attempt++) {
-			const { viewport, stamp } = await this.viewportMetrics();
+			const { viewport, device, stamp } = await this.viewportMetrics();
 			const { data } = await this.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
 			if (stamp !== await this.viewportStamp()) continue;
 			const header = Buffer.from(data.slice(0, 40), "base64");
-			return { data: String(data), geometry: { width: header.readUInt32BE(16), height: header.readUInt32BE(20),
-				cssWidth: Number(viewport.clientWidth), cssHeight: Number(viewport.clientHeight), stamp } };
+			const width = header.readUInt32BE(16), height = header.readUInt32BE(20);
+			return { data: String(data), geometry: { width, height,
+				cssWidth: width * viewport.clientWidth / device.clientWidth / viewport.scale,
+				cssHeight: height * viewport.clientHeight / device.clientHeight / viewport.scale, stamp } };
 		}
 		throw new Error("The viewport kept changing during capture. Observe the page again.");
 	}
@@ -555,10 +607,10 @@ export async function cdpViewportForContext(contextId: string) {
 	return withCdpContextTab(contextId, tab => tab.viewportImage());
 }
 
-export async function cdpSnapshotForContext(contextId: string, pixelsOnly = managedPixelsOnly()): Promise<CdpPageSnapshot | undefined> {
+export async function cdpSnapshotForContext(contextId: string, pixelsOnly = managedPixelsOnly(), focus?: FocusRequest): Promise<CdpPageSnapshot | undefined> {
 	return withCdpContextTab(contextId, async tab => {
 		if (tab.pixelsOnly || pixelsOnly) {
-			const image = await tab.viewportImage();
+			const image = focus ? await tab.detailImage(focus) : await tab.viewportImage();
 			const snapshotId = randomUUID();
 			return { owner: browserOwner(), contextId, targetId: tab.targetId, snapshotId, capturedAt: Date.now(),
 				title: "", url: "", text: "", ...cdpSnapshotOutline(snapshotId, []), pixelsOnly: true,

@@ -66,8 +66,8 @@ const conditionProps = {
 const clickCount = N('1-3', { minimum: 1, maximum: 3 });
 // 坐标一律是「最近一张截图里的像素」。反馈 55b984eb:这里以前没有任何说明,模型把它当成屏幕坐标去换算。
 const point = {
-  x: N('Pixels from the left edge of the full screenshot for this state. A magnified detail has a separate origin and scale; convert its coordinates using the observation result.'),
-  y: N('Pixels from the top edge of the same full screenshot'),
+  x: N('Pixels from the left edge of the screenshot identified by stateId (full image or focused browser detail). A magnified detail has a separate origin and scale; convert its coordinates using the observation result.'),
+  y: N('Pixels from the top edge of the same screenshot'),
 };
 
 // act_ui 的 actions:上游 uiAction union(8 变体)→ anyOf
@@ -140,6 +140,8 @@ const SPECS: ToolSpec[] = [
     description: 'Capture the current/frontmost root or one exact @r root and return a bounded UI outline. Use mode=semantic to skip OCR and images, visual to force them, fused for automatic selection. For screenshot-only work use pixels. For small icons or exact colors, choose magnify or samplePixels on the target root. Primary UI observation tool; follow with search_ui/expand_ui/inspect_ui/act_ui. Use @e outline refs from observe_ui/search_ui for act_ui; pictureOnly refs are coordinate-only.',
     parameters: obj({
       root: S('Exact @r ref issued by find_roots'),
+      stateId: S('For focus, the stateId of the full browser screenshot containing the target region.'),
+      focus: { ...obj({x:N(), y:N()}, ['x','y']), description: 'Inspect small controls in a fresh high-resolution browser detail centered on full-image x/y. Requires root and stateId from the full screenshot. Click directly in the returned detail.' },
       samplePixels: { type: 'array', items: obj(point, ['x', 'y']), minItems: 1, maxItems: 8, description: 'Read RGB at these full screenshot coordinates to check swatches or edits. Requires an exact root. Implies pixels mode.' },
       magnify: { ...obj({ ...point, width: N(), height: N() }, ['x', 'y']), description: 'Attach a 2× detail. Give only x and y to center the detail on a point. With width and height, x and y specify the top-left of the rectangle (max 320 × 320). Requires an exact root. Implies pixels mode.' },
       mode: { type: 'string', enum: ['semantic', 'visual', 'fused', 'pixels'], description: 'pixels shows only the screenshot and its coordinates, including for a native desktop root. visual includes the outline as well. Default fused.' },
@@ -387,6 +389,13 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
         args = { ...args, url: await validateUrl(args.url.trim()) };
       }
       const inspectPixels = spec.name === 'observe_ui' && (args.samplePixels !== undefined || args.magnify !== undefined);
+      if (spec.name === 'observe_ui' && args.focus !== undefined) {
+        if (typeof args.root !== 'string' || toolSurface(spec.name, args) !== 'browser' || typeof args.stateId !== 'string' || !args.stateId.trim()
+          || inspectPixels || (args.mode !== undefined && args.mode !== 'pixels')) {
+          throw new Error('Focus requires one browser root and its full screenshot stateId in pixels mode, without magnify or samplePixels.');
+        }
+        args = { ...args, mode: 'pixels' };
+      }
       if (inspectPixels) {
         if (typeof args.root !== 'string' || !/^@r\d+$/.test(args.root) || (args.mode && args.mode !== 'pixels')) throw new Error('Use an exact root and pixels mode for screenshot details.');
         args = { ...args, mode: 'pixels' };
@@ -425,9 +434,6 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
         detail = inspectScreenshot(screen, args);
       }
       let text = render(result, tcx, args);
-      if (args.mode === 'pixels' && spec.name === 'launch_browser') {
-        text += '\nFor a tiny icon or a tightly spaced row, first inspect the neighborhood with observe_ui on this root and magnify:{x,y}. Use full-image coordinates from the latest state to click.';
-      }
       if (detail?.text) text += '\n' + detail.text;
       if (detail?.crop) {
         const queued = tcx.collectImage && tcx.collectImage({url:'data:image/png;base64,' + detail.crop,name:'detail-2x.png'});

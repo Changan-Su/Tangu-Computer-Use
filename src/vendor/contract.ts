@@ -35,6 +35,8 @@ export interface EvaluateBrowserParams {
 }
 
 export interface ObserveParams extends ObserveTargetParams {
+	stateId?: string;
+	focus?: { x: number; y: number };
 	mode?: "semantic" | "visual" | "fused" | "pixels";
 	/** Internal capture override; not part of the model-facing schema. */
 	readText?: "auto" | "always" | "never";

@@ -1522,8 +1522,14 @@ function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string,
 	savedStates.set({ stateId: browser.snapshotId, resourceKey, epoch, value: { kind: "browser", snapshot: stored, outline: stored.outline } });
 	if (pixelImage && stored.viewport) {
 		const root = { ref:storeBrowserRootRef(stored.contextId), kind:"browser_page" as const, title:"", url:"" };
+		let hint = "Use act_ui with coordinates from this image. For a small or crowded target, inspect its region first with observe_ui, this root, stateId and focus:{x,y}.";
+		if (stored.viewport.origin) {
+			hint = "Detail view. Use act_ui with x/y directly in this image and its stateId. If the target is absent, observe this root again for the full image.";
+		} else if (tool === "launch_browser") {
+			hint = "For the first click in a desktop screenshot, canvas or dense toolbar, inspect the most likely region once with observe_ui using this root, stateId and focus:{x,y}. Then click directly in the detail with its new stateId. If you cannot identify the target, report it without guessing. Large isolated controls can be clicked directly.";
+		}
 		return { content: [
-			{ type:"text", text:`${tool} completed for ${root.ref}. State ${stored.snapshotId}. Screenshot only, ${stored.viewport.width} × ${stored.viewport.height} px. Read this image and use one act_ui action with screenshot coordinates and this stateId. Check the resulting image before continuing.` },
+			{ type:"text", text:`${tool} completed for ${root.ref}. State ${stored.snapshotId}. Screenshot only, ${stored.viewport.width} × ${stored.viewport.height} px. ${hint} Inspect the next image after each action.` },
 			{ type:"image", mimeType:"image/png", data:pixelImage },
 		], details:{ tool, kind:"browser_page", stateId:stored.snapshotId, view:"full", root, outline:stored.outline, renderedOutline:"" } };
 	}
@@ -1788,6 +1794,18 @@ async function performObserve(params: ObserveParams, signal?: AbortSignal): Prom
 	if (isBrowserContextId(browserContextId)) {
 		const targetId = browserContextId.slice(BROWSER_CONTEXT_PREFIX.length);
 		const resourceKey = `cdp:${targetId}`;
+		if (params.focus !== undefined) {
+			const base = operationState().browserSnapshot;
+			const baseEpoch = operationState().epoch;
+			if (!base?.pixelsOnly || !base.viewport || base.contextId !== browserContextId || baseEpoch === undefined) {
+				throw new Error("Focus requires the full screenshot stateId belonging to this browser root.");
+			}
+			const focus = { center: params.focus, base: base.viewport };
+			const { value, epoch } = await resourceScheduler.readAt(resourceKey, baseEpoch,
+				() => cdpSnapshotForContext(browserContextId, true, focus));
+			if (!value) throw new Error("Browser root is no longer available.");
+			return browserObservationResult(value, resourceKey, epoch, "observe_ui");
+		}
 		const { value, epoch } = await resourceScheduler.read(resourceKey, async () => {
 			const browser = await cdpSnapshotForContext(browserContextId, params.mode === "pixels" || undefined);
 			if (!browser) throw new Error(`Browser context '${browserContextId}' is no longer available. Call find_roots again.`);
@@ -2385,7 +2403,8 @@ async function performBrowserTransaction(params: ActParams, actions: UiAction[],
 		const viewport = baseSnapshot.viewport;
 		if (!viewport) throw new Error("Coordinate input requires observe_ui with mode=visual. Use the returned screenshot and stateId.");
 		if (x < 0 || y < 0 || x >= viewport.width || y >= viewport.height) throw new Error("Point falls outside the observed browser viewport.");
-		return { x: x * viewport.cssWidth / viewport.width, y: y * viewport.cssHeight / viewport.height };
+		return { x: (viewport.origin?.x ?? 0) + x * viewport.cssWidth / viewport.width,
+			y: (viewport.origin?.y ?? 0) + y * viewport.cssHeight / viewport.height };
 	};
 	const prepared = actions.map((input) => {
 		let action = input;
@@ -2628,7 +2647,8 @@ async function executeTool<P, T>(tool: string, ctx: ExtensionContext, params: P,
 		if (operation.pixelsOnly && tool !== "act_ui") throw new Error("Screenshot-only state. Use observe_ui in pixels mode for another image.");
 		if (stateRecord?.value.kind === "browser" && stateRecord.value.snapshot.owner !== browserOwner()) throw new Error("Browser state belongs to another conversation. Observe your browser again.");
 		if (surface === "browser") {
-			if (stateRecord?.value.kind === "browser" && stateRecord.value.snapshot.pixelsOnly && tool !== "act_ui" && tool !== "navigate_browser") {
+			if (stateRecord?.value.kind === "browser" && stateRecord.value.snapshot.pixelsOnly && tool !== "act_ui" && tool !== "navigate_browser"
+				&& !(tool === "observe_ui" && (params as ObserveParams).focus !== undefined && (params as ObserveParams).mode === "pixels")) {
 				throw new Error("Screenshot-only browser state. Inspect the image or request another with observe_ui.");
 			}
 			if (!isBrowserUseEnabled()) throw new Error("Browser use is disabled in Computer Use settings.");
