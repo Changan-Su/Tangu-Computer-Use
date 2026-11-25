@@ -25,6 +25,7 @@ import { isSupportedPlatform } from './helperState.ts';
 import { autoInstallFailed, ensureHelperCurrent, guideMissingPermissions } from './onboarding.ts';
 import { executionNote, expectNote, foregroundNote, goneHint, imageNote, noRootsHint, scrollNote, selfWindowNote } from './foregroundNote.ts';
 import { runJev, parseJevArgs } from './jevRun.ts';
+import { inspectScreenshot } from './pixelInspection.ts';
 import { watchRunAbort, withOverlayRun } from './overlayState.ts';
 
 const execFileP = promisify(execFile);
@@ -136,9 +137,11 @@ const SPECS: ToolSpec[] = [
   },
   {
     name: 'observe_ui', exec: executeObserve as PiExecute, sideEffect: 'read', timeoutMs: 60_000,
-    description: 'Capture the current/frontmost root or one exact @r root and return a bounded UI outline. Use mode=semantic to skip OCR and images, visual to force them, fused for automatic selection. Primary UI observation tool; follow with search_ui/expand_ui/inspect_ui/act_ui. Use @e outline refs from observe_ui/search_ui for act_ui; pictureOnly refs are coordinate-only.',
+    description: 'Capture the current/frontmost root or one exact @r root and return a bounded UI outline. Use mode=semantic to skip OCR and images, visual to force them, fused for automatic selection. For screenshot-only work use pixels. For small icons or exact colors, choose magnify or samplePixels on the target root. Primary UI observation tool; follow with search_ui/expand_ui/inspect_ui/act_ui. Use @e outline refs from observe_ui/search_ui for act_ui; pictureOnly refs are coordinate-only.',
     parameters: obj({
       root: S('Exact @r ref issued by find_roots'),
+      samplePixels: { type: 'array', items: obj(point, ['x', 'y']), minItems: 1, maxItems: 8, description: 'Read RGB at these full screenshot coordinates to check swatches or edits. Requires an exact root. Implies pixels mode.' },
+      magnify: { ...obj({ ...point, width: N(), height: N() }, ['x', 'y', 'width', 'height']), description: 'Attach a 2× detail of a small screenshot rectangle (max 320 × 320) alongside the full image. Requires an exact root. Implies pixels mode.' },
       mode: { type: 'string', enum: ['semantic', 'visual', 'fused', 'pixels'], description: 'pixels shows only the screenshot and its coordinates, including for a native desktop root. visual includes the outline as well. Default fused.' },
     }),
   },
@@ -382,6 +385,11 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
       if ((spec.name === 'launch_browser' || spec.name === 'navigate_browser') && typeof args.url === 'string' && args.url.trim()) {
         args = { ...args, url: await validateUrl(args.url.trim()) };
       }
+      const inspectPixels = spec.name === 'observe_ui' && (args.samplePixels !== undefined || args.magnify !== undefined);
+      if (inspectPixels) {
+        if (!args.root || (args.mode && args.mode !== 'pixels')) throw new Error('Use an exact root and pixels mode for screenshot details.');
+        args = { ...args, mode: 'pixels' };
+      }
       let installNote;
       if (toolSurface(spec.name, args) === "desktop") {
         installNote = await ensureHelperCurrent(tcx.signal);
@@ -409,7 +417,15 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
         explainGone(e, args);
         throw e;
       }
-      return prefix + presentLiveViewOnce(spec.name, tcx, render(result, tcx, args));
+      let text = render(result, tcx, args);
+      if (inspectPixels) {
+        const screen = result.content.find(block => block.type === 'image');
+        if (!screen) throw new Error('The target supplied no screenshot to inspect.');
+        const detail = inspectScreenshot(screen, args);
+        if (detail.crop) tcx.collectImage?.({url: 'data:image/png;base64,' + detail.crop, name: 'detail-2x.png'});
+        text += '\n' + detail.text;
+      }
+      return prefix + presentLiveViewOnce(spec.name, tcx, text);
       })(); } finally { unwatch(); }
     }),
   });

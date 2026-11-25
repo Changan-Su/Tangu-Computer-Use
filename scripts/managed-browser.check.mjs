@@ -144,10 +144,16 @@ try {
   const discovery = await run('find_roots',{kind:'browser_page'},'C');
   assert.doesNotMatch(discovery, /Editor|127\.0\.0\.1/);
   await assert.rejects(run('act_ui',{stateId:state(picture),actions:[{action:'click',x:1,y:1},{action:'click',x:1,y:1}]},'C'),/one screenshot-grounded action/);
-  const fresh = await run('observe_ui',{root:root(picture)},'C');
+  const fresh = await run('observe_ui',{root:root(picture), magnify:{x:2,y:2,width:10,height:10}, samplePixels:[{x:2,y:2}]},'C');
+  assert.match(fresh,/RGB\(255,255,255\)/);
+  assert.match(fresh,/second image is a 2× detail/);
+  assert.equal(images.at(-1).name,'detail-2x.png');
+  const crop = Buffer.from(images.at(-1).url.split(',')[1], 'base64');
+  assert.equal(crop.readUInt32BE(16),20);
+  assert.equal(crop.readUInt32BE(20),20);
   const after = await run('act_ui',{stateId:state(fresh),actions:[{action:'moveMouse',x:10,y:10}]},'C');
   assert.match(after,/Screenshot only/);
-  assert.equal(images.length,imageCount+3);
+  assert.equal(images.length,imageCount+4);
   settings.browser_use = false;
   await assert.rejects(observe(), /disabled/);
   sampling = false;
