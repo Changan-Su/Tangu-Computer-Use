@@ -3,7 +3,7 @@ import { decode } from 'jpeg-js';
 import type { AgentToolResultImageContent } from './pi-compat.ts';
 
 type Point = { x: number; y: number };
-type Region = Point & { width: number; height: number };
+type Region = Point & { width?: number; height?: number };
 export interface PixelInspection { samplePixels?: Point[]; magnify?: Region }
 
 /** Read the image returned by the provider, in its original coordinate system. */
@@ -36,8 +36,15 @@ export function inspectScreenshot(image: AgentToolResultImageContent, { samplePi
   let detailDescription: string | undefined;
   if (magnify !== undefined) {
     checkPoint(magnify);
-    const { x, y, width, height } = magnify;
-    if (![width,height].every(n => Number.isInteger(n) && n >= 1 && n <= 320) || x + width > shot.width || y + height > shot.height) {
+    const centered = magnify.width === undefined && magnify.height === undefined;
+    const width = centered ? Math.min(256, shot.width) : magnify.width;
+    const height = centered ? Math.min(160, shot.height) : magnify.height;
+    if (width === undefined || height === undefined || ![width, height].every(n => Number.isInteger(n) && n >= 1 && n <= 320)) {
+      throw new Error('Supply both detail dimensions between 1 and 320, or just a center point.');
+    }
+    const x = centered ? Math.min(shot.width - width, Math.max(0, magnify.x - Math.floor(width / 2))) : magnify.x;
+    const y = centered ? Math.min(shot.height - height, Math.max(0, magnify.y - Math.floor(height / 2))) : magnify.y;
+    if (x + width > shot.width || y + height > shot.height) {
       throw new Error('Choose a region inside the screenshot with each side between 1 and 320 pixels.');
     }
     const detail = new PNG({width: 2 * width, height: 2 * height});

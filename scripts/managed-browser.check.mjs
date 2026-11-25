@@ -154,10 +154,17 @@ try {
   const after = await run('act_ui',{stateId:state(fresh),actions:[{action:'moveMouse',x:10,y:10}]},'C');
   assert.match(after,/Screenshot only/);
   assert.equal(images.length,imageCount+4);
+  const centered = await run('observe_ui',{root:root(picture), magnify:{x:1,y:1}},'C');
+  assert.doesNotMatch(centered, /first inspect the neighborhood/);
+  assert.match(centered,/at \(0,0\), size 256 × 160/);
+  await assert.rejects(run('observe_ui',{root:root(picture),magnify:{x:1,y:1,width:10}},'C'),/both detail dimensions/);
   const inspectArgs = {root:root(picture),mode:'pixels',magnify:{x:0,y:0,width:10,height:10}};
   let offered = 0;
   const capacity = await byName.get('observe_ui').execute(inspectArgs, {sessionId:'C',appId:'fixture',userId:'fixture',execMode:'host', collectImage:() => ++offered === 1});
   assert.match(capacity,/Magnified detail omitted/);
+  await assert.rejects(run('observe_ui',{...inspectArgs,root:{}},'C'),/exact root/);
+  const plain = await run('observe_ui',{root:root(picture),mode:'pixels'},'C');
+  assert.doesNotMatch(plain,/first inspect the neighborhood/);
   const imageCountBeforeError=images.length;
   await assert.rejects(run('observe_ui',{...inspectArgs,magnify:{x:99999,y:0,width:2,height:2}},'C'),/within the full screenshot/);
   assert.equal(images.length,imageCountBeforeError);

@@ -141,7 +141,7 @@ const SPECS: ToolSpec[] = [
     parameters: obj({
       root: S('Exact @r ref issued by find_roots'),
       samplePixels: { type: 'array', items: obj(point, ['x', 'y']), minItems: 1, maxItems: 8, description: 'Read RGB at these full screenshot coordinates to check swatches or edits. Requires an exact root. Implies pixels mode.' },
-      magnify: { ...obj({ ...point, width: N(), height: N() }, ['x', 'y', 'width', 'height']), description: 'Attach a 2× detail of a small screenshot rectangle (max 320 × 320) alongside the full image. Requires an exact root. Implies pixels mode.' },
+      magnify: { ...obj({ ...point, width: N(), height: N() }, ['x', 'y']), description: 'Attach a 2× detail. Give only x and y to center the detail on a point. With width and height, x and y specify the top-left of the rectangle (max 320 × 320). Requires an exact root. Implies pixels mode.' },
       mode: { type: 'string', enum: ['semantic', 'visual', 'fused', 'pixels'], description: 'pixels shows only the screenshot and its coordinates, including for a native desktop root. visual includes the outline as well. Default fused.' },
     }),
   },
@@ -388,7 +388,7 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
       }
       const inspectPixels = spec.name === 'observe_ui' && (args.samplePixels !== undefined || args.magnify !== undefined);
       if (inspectPixels) {
-        if (!args.root || (args.mode && args.mode !== 'pixels')) throw new Error('Use an exact root and pixels mode for screenshot details.');
+        if (typeof args.root !== 'string' || !/^@r\d+$/.test(args.root) || (args.mode && args.mode !== 'pixels')) throw new Error('Use an exact root and pixels mode for screenshot details.');
         args = { ...args, mode: 'pixels' };
       }
       let installNote;
@@ -425,6 +425,9 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
         detail = inspectScreenshot(screen, args);
       }
       let text = render(result, tcx, args);
+      if (args.mode === 'pixels' && spec.name === 'launch_browser') {
+        text += '\nFor a tiny icon or a tightly spaced row, first inspect the neighborhood with observe_ui on this root and magnify:{x,y}. Use full-image coordinates from the latest state to click.';
+      }
       if (detail?.text) text += '\n' + detail.text;
       if (detail?.crop) {
         const queued = tcx.collectImage && tcx.collectImage({url:'data:image/png;base64,' + detail.crop,name:'detail-2x.png'});
