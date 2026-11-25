@@ -1531,7 +1531,7 @@ async function withBrowserWrite<T>(contextId: string, work: () => Promise<T>): P
 }
 
 function browserClickHint(tool: string, detail: boolean, view?: string, region?: ObserveParams["region"], canClip?: boolean): string {
-	if (view) {
+	if (view && operationState().browserPanelZoom) {
 		if (tool === "act_ui") {
 			return `Input dispatched. Check the result in this screenshot. If only one click was requested, stop here. For a further requested step use {view:"${view}"}.`;
 		}
@@ -1542,6 +1542,17 @@ function browserClickHint(tool: string, detail: boolean, view?: string, region?:
 		}
 		if (canClip === false) return `At this page zoom, use ${click} in the full image or inspect it with magnify.`;
 		return `If you see the target, click with ${click}. For a small or crowded control, inspect its location with observe_ui({view:"${view}",focus:{x,y}}). If you can identify only the panel, use observe_ui({view:"${view}",region:POSITION}). POSITION is top-left, top, top-right, left, center, right, bottom-left, bottom or bottom-right. Use coordinates in the returned image.`;
+	}
+	if (view) {
+		const click = `act_ui({view:"${view}",click:[x,y]})`;
+		const focus = `observe_ui({view:"${view}",focus:{x,y}})`;
+		let hint = `Click with ${click}. For a small target, inspect its region with ${focus}.`;
+		if (detail) {
+			hint = `Detail view. Click the target with ${click} using pixels in this image. If absent, report not found or return to the full view.`;
+		} else if (tool === "launch_browser") {
+			hint = `For a first click in a desktop screenshot or dense toolbar, inspect the most likely region once with ${focus}. Click in the returned detail. For a large isolated control use ${click} directly.`;
+		}
+		return hint;
 	}
 	let hint = "Use act_ui with coordinates from this image. For a small or crowded target, inspect its region first with observe_ui, this root, stateId and focus:{x,y}.";
 	if (detail) {
@@ -2681,6 +2692,7 @@ async function executeTool<P, T>(tool: string, ctx: ExtensionContext, params: P,
 	}
 	const operation = savedStates.hydrate(stateRecord);
 	operation.compactBrowserControls = ctx.compactBrowserControls;
+	operation.browserPanelZoom = ctx.browserPanelZoom;
 	return await savedStates.operations.run(operation, async () => {
 		const surface = toolSurface(tool, params as Record<string, unknown>);
 		if (operation.pixelsOnly && tool !== "act_ui") throw new Error("Screenshot-only state. Use observe_ui in pixels mode for another image.");

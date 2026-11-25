@@ -294,7 +294,16 @@ try {
   await waitFor(()=>detailEvent);
   assert.ok(detailEvent[0]>=240 && detailEvent[0]<=242 && detailEvent[1]>=110 && detailEvent[1]<=112 && detailEvent[3],JSON.stringify(detailEvent));
   // Switch from the opposite corner to the top-left panel at fractional DPI.
+  const observeSchema = () => provider.tools().find(t => t.name === 'observe_ui').definition.function.parameters.properties;
+  assert.equal(observeSchema().region,undefined);
+  const compactOnly = await observePixels();
+  assert.doesNotMatch(compactOnly,/region:POSITION/);
+  await assert.rejects(run('observe_ui',{view:viewOf(compactOnly),region:'bottom-right'},'C'),/disabled/);
+  settings.compact_browser_controls = false;
+  settings.browser_panel_zoom = true;
+  assert.equal(observeSchema().region.enum.length,9);
   const regionBase = await observePixels();
+  assert.match(regionBase,/region:POSITION/);
   const regionArgs = {view:viewOf(regionBase),region:'bottom-right'};
   await assert.rejects(run('observe_ui',regionArgs,'B'),/another conversation/);
   await assert.rejects(run('observe_ui',{...regionArgs,focus:{x:0,y:0}},'C'),/one at a time/);
@@ -337,7 +346,7 @@ try {
   await run('act_ui',{stateId:state(pinched),actions:[{action:'click',...pinchPoint}]},'C');
   await waitFor(()=>detailEvent);
   assert.ok(detailEvent[0]>=240 && detailEvent[0]<=242 && detailEvent[1]>=110 && detailEvent[1]<=112 && detailEvent[3],JSON.stringify(detailEvent));
-  settings.compact_browser_controls = false;
+  settings.browser_panel_zoom = false;
   await assert.rejects(run('observe_ui',{stateId:state(pinched),region:'left'},'C'),/disabled/);
   assert.doesNotMatch(await observePixels(),/view:"v/);
   settings.browser_use = false;

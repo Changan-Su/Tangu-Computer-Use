@@ -32,6 +32,7 @@ export interface CurrentCapture {
 
 export interface OperationState {
 	compactBrowserControls?: boolean;
+	browserPanelZoom?: boolean;
 	pixelsOnly?: boolean;
 	currentTarget?: CurrentTarget;
 	currentCapture?: CurrentCapture;

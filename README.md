@@ -247,7 +247,8 @@ and their existing logins. For a canvas or a screenshot-only task, launch with `
 ## Settings
 
 - **browser_use** (default on) — allow the CDP browser tools.
-- **compact_browser_controls** (default off) — offer short screenshot handles for single browser clicks. To inspect a toolbar or panel, choose a viewport region with `observe_ui({view,region:"top-left"})`. The named regions overlap and are capped at 1600 px per side. A panel handle can zoom further with `focus:{x,y}` or open another region of the same viewport. At non-default page zoom use the full screenshot or `magnify`. Click using coordinates in the delivered image.
+- **compact_browser_controls** (default off) — offer short screenshot handles for single browser clicks with point focus.
+- **browser_panel_zoom** (default off) — include compact clicks and an optional wider view. To inspect a toolbar or panel, choose a viewport region with `observe_ui({view,region:"top-left"})`. The named regions overlap and are capped at 1600 px per side. A panel handle can zoom further with `focus:{x,y}` or open another region of the same viewport. At non-default page zoom use the full screenshot or `magnify`. Click using coordinates in the delivered image.
 - **managed_browser** (default Chrome) — which browser `launch_browser` starts.
 - **headless / 严格后台** (default on) — actions stay in the background; no foreground focus grab or
   cursor move. Things the background genuinely cannot do then fail instead of stealing focus.

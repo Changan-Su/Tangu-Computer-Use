@@ -102,7 +102,7 @@ interface ToolSpec {
   timeoutMs: number;
 }
 
-const toolSpecs = (compact: boolean): ToolSpec[] => [
+const toolSpecs = (compact: boolean, panels = false): ToolSpec[] => [
   {
     name: 'jev_ui', sideEffect: 'system', approval: 'command', darwinOnly: true, jevOnly: true, timeoutMs: 180_000,
     description: 'Experimental Jev acceleration for ONE native desktop root: you plan, Jev acts and checks. Plan the whole on-screen sequence yourself, then send it as 1–8 steps in one call. Actions: click; double_click (play a row, open a file); fill (atomic setText, native text fields only); type (clicks target when given, then types text at the caret; works on canvas, CEF and web windows where fill is refused, and does not clear the field; keys, e.g. ["return"], are pressed right after the text in the same input: for a search box or a form that applies on Return, never to send a message, which stays a step of its own after you checked the screenshot); key (keys such as ["return"] or ["cmd","a"], after clicking target when given, else to the current focus, which only works while that window is in front); scroll (target = the list or panel; Jev scrolls it, three quarters of the list per wheel and short wheels once part of the item shows, at most maxScrolls times (default 12, up to 30 for a long list), until `until` is fully in view, checking every frame itself; then click the item in the same call). Describe targets by what is drawn (a label, a row\'s title text), never by pixel coordinates; for a list row, target its title text, not the whole row. Give every other step that changes the screen an expect: what the window will certainly show once it worked (e.g. "the Daily picks song list is shown", "row 3 shows a playing icon"); do not guess text you have not seen, such as a page title. Jev locates each target on a fresh observation, sends the input, then looks for expect on new screenshots for up to 4 s (page loads included) and only then moves on, with no main-model round trip per step. It hands back early, with the latest screenshot, when a target is missing/ambiguous/low-confidence, an expect does not appear, a scroll does not reach until, or a step without expect cannot be confirmed natively (canvas/web windows never confirm natively, so always give expect there). A rejected target means Jev does not see it as described: describe it differently and call again. mode=elements selects accessibility refs and never takes screenshots (click and fill only; expect is then not checked); vision uses screenshot boxes; auto tries elements then vision. preview=true locates ONE target without acting. point in the report is in Jev\'s own capture; use pointFraction to compare with other screenshots. Unknown is an unverified input, not a failed one: inspect the returned screenshot before repeating anything with any tool, and continue only the unconfirmed steps. Same executor and foreground policy as act_ui; only drag needs act_ui. key ["return"] in a message field sends it: do not batch irreversible/outward-facing actions without the authorization the normal Computer Use rules require. Never put API keys in arguments.',
@@ -140,13 +140,14 @@ const toolSpecs = (compact: boolean): ToolSpec[] => [
   {
     name: 'observe_ui', exec: executeObserve as PiExecute, sideEffect: 'read', timeoutMs: 60_000,
     description: 'Capture the current/frontmost root or one exact @r root and return a bounded UI outline. Use mode=semantic to skip OCR and images, visual to force them, fused for automatic selection. For screenshot-only work use pixels. For '
-      + (compact ? 'a small browser target, use focus with a full screenshot or named panel handle and click in the returned image. For exact colors use samplePixels. For native windows use magnify' : 'small icons or exact colors, choose magnify or samplePixels on the target root')
+      + (panels ? 'a small browser target, use focus with a full screenshot or named panel handle and click in the returned image. For exact colors use samplePixels. For native windows use magnify' : compact ? 'a small browser target, use focus with the full screenshot handle and click in the returned image. For exact colors use samplePixels. For native windows use magnify' : 'small icons or exact colors, choose magnify or samplePixels on the target root')
       + '. Primary UI observation tool; follow with search_ui/expand_ui/inspect_ui/act_ui. Use @e outline refs from observe_ui/search_ui for act_ui; pictureOnly refs are coordinate-only.',
     parameters: obj({
       root: S('Exact @r ref issued by find_roots'),
-      ...(compact ? { view, region: { type: 'string', enum: browserRegions, description: 'Zoom a named position of the full browser viewport. Each region includes the surrounding panel. Use view or stateId and click in the returned image. You may inspect a different region from a detail.' } } : {}),
+      ...(compact ? { view } : {}),
+      ...(panels ? { region: { type: 'string', enum: browserRegions, description: 'Zoom a named position of the full browser viewport. Each region includes the surrounding panel. Use view or stateId and click in the returned image. You may inspect a different region from a detail.' } } : {}),
       stateId: S(compact ? 'Alternative to view. The full stateId of the browser screenshot.' : 'State owning the full browser screenshot when using focus.'),
-      focus: { ...obj({x:N(), y:N()}, ['x','y']), description: compact ? 'Render a high-resolution detail around x/y from the full screenshot or a named panel. Supply its view handle or stateId. Click directly in the returned detail.' : 'Inspect small controls in a fresh high-resolution browser detail centered on full-image x/y. Requires root and stateId from the full screenshot. Click directly in the returned detail.' },
+      focus: { ...obj({x:N(), y:N()}, ['x','y']), description: panels ? 'Render a high-resolution detail around x/y from the full screenshot or a named panel. Supply its view handle or stateId. Click directly in the returned detail.' : compact ? 'Inspect small controls in a fresh high-resolution browser detail centered on full-image x/y. Supply its view handle or stateId. Click directly in the returned detail.' : 'Inspect small controls in a fresh high-resolution browser detail centered on full-image x/y. Requires root and stateId from the full screenshot. Click directly in the returned detail.' },
       samplePixels: { type: 'array', items: obj(point, ['x', 'y']), minItems: 1, maxItems: 8, description: 'Read RGB at these full screenshot coordinates to check swatches or edits. Requires an exact root. Implies pixels mode.' },
       magnify: { ...obj({ ...point, width: N(), height: N() }, ['x', 'y']), description: 'Attach a 2× detail. Give only x and y to center the detail on a point. With width and height, x and y specify the top-left of the rectangle (max 320 × 320). Requires an exact root. Implies pixels mode.' },
       mode: { type: 'string', enum: ['semantic', 'visual', 'fused', 'pixels'], description: 'pixels shows only the screenshot and its coordinates, including for a native desktop root. visual includes the outline as well. Default fused.' },
@@ -399,7 +400,11 @@ function bindScreenshotArgs(tool: 'act_ui' | 'observe_ui', args: Record<string, 
 }
 
 export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowserUrl): ToolProvider {
-  const compactEnabled = () => store.getScopeSettings(PLUGIN_ID, 'global').compact_browser_controls === true;
+  const browserMode = () => {
+    const settings = store.getScopeSettings(PLUGIN_ID, 'global');
+    if (settings.browser_panel_zoom === true) return 'panels';
+    return settings.compact_browser_controls === true ? 'compact' : 'standard';
+  };
   const gate = (spec: ToolSpec) => (profile: AppProfile): boolean =>
     !!profile.capabilities.hostExec
     && store.isPluginEnabledSync(PLUGIN_ID)
@@ -426,7 +431,10 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
       }
       syncSettings(store);
       const pctx = makePiCtx(tcx, false);
-      pctx.compactBrowserControls = compactEnabled();
+      const mode = browserMode();
+      pctx.compactBrowserControls = mode !== 'standard';
+      pctx.browserPanelZoom = mode === 'panels';
+      if (args.region !== undefined && spec.name === 'observe_ui' && !pctx.browserPanelZoom) throw new Error('Browser panel zoom is disabled.');
       if ((spec.name === 'launch_browser' || spec.name === 'navigate_browser') && typeof args.url === 'string' && args.url.trim()) {
         args = { ...args, url: await validateUrl(args.url.trim()) };
       }
@@ -494,7 +502,6 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
     }),
   });
 
-  const defaults = toolSpecs(false);
-  const compact = toolSpecs(true);
-  return { id: 'plugin:computer-use', tools: () => (compactEnabled() ? compact : defaults).map(toTool) };
+  const specs = { standard: toolSpecs(false), compact: toolSpecs(true), panels: toolSpecs(true, true) };
+  return { id: 'plugin:computer-use', tools: () => specs[browserMode()].map(toTool) };
 }
