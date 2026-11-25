@@ -266,8 +266,12 @@ export function render(result: AgentToolResult, tcx: ToolContext, args?: Record<
       else attached = true;
     }
   }
+  const details = (result as { details?: { pixelsOnly?: boolean; tool?: string; root?: { ref?: string }; execution?: unknown; target?: { app?: string; bundleId?: string; pid?: number }; capture?: { stateId?: string } } }).details;
+  if (details?.pixelsOnly && !attached && details.root?.ref) {
+    const status = details.tool === 'act_ui' ? 'Input dispatched. ' : '';
+    return status + `Screenshot unavailable for ${details.root.ref}. Request a fresh image with observe_ui({root:"${details.root.ref}",mode:"pixels"}) before using coordinates.`;
+  }
   const body = parts.join('\n') || '(no output)';
-  const details = (result as { details?: { execution?: unknown; target?: { app?: string; bundleId?: string; pid?: number }; capture?: { stateId?: string } } }).details;
   const stateId = details?.capture?.stateId;
   if (stateId && (details?.target?.app || details?.target?.bundleId)) {
     targets.set(stateId, { app: details.target.app, bundleId: details.target.bundleId });

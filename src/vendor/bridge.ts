@@ -188,6 +188,7 @@ interface ListWindowsDetails {
 interface BrowserObservationDetails {
 	tool: string;
 	kind: "browser_page";
+	pixelsOnly?: true;
 	stateId: string;
 	baseStateId?: string;
 	view: "full" | "diff";
@@ -1530,15 +1531,19 @@ async function withBrowserWrite<T>(contextId: string, work: () => Promise<T>): P
 	return result.value;
 }
 
-function browserClickHint(tool: string, detail: boolean, view?: string, region?: ObserveParams["region"], canClip?: boolean): string {
+function browserClickHint(tool: string, detail: boolean, view?: string, region?: ObserveParams["region"], canClip?: boolean, inspectedPoint?: ObserveParams["focus"]): string {
 	if (view && operationState().browserPanelZoom) {
 		if (tool === "act_ui") {
 			return `Input dispatched. Check the result in this screenshot. If only one click was requested, stop here. For a further requested step use {view:"${view}"}.`;
 		}
 		const click = `act_ui({view:"${view}",click:[x,y]})`;
 		if (detail) {
-			const further = region ? " Use focus:{x,y} in this panel if nearby controls are hard to distinguish." : "";
-			return `Detail view.${region ? " Region: " + region + "." : ""} Click the target with ${click} in this image’s pixels.${further} If the target is absent, use this handle to inspect a different region.`;
+			if (inspectedPoint) {
+				const xy = `[${inspectedPoint.x},${inspectedPoint.y}]`;
+				return `Detail view. Fresh screenshot at maximum zoom. Your inspection point is ${xy}. If that point is on the requested control, click it with act_ui({view:"${view}",click:${xy}}). Otherwise use the control’s actual position in this image or inspect a different region.`;
+			}
+			const focus = region ? " You can focus on a point in this panel." : " This is the maximum zoom.";
+			return `Detail view.${region ? " Region: " + region + "." : ""}${focus} Identify small icons by their visible shape and neighboring controls. Click the requested control with ${click} using this image’s pixels. If it is absent, inspect a different region.`;
 		}
 		if (canClip === false) return `At this page zoom, use ${click} in the full image or inspect it with magnify.`;
 		return `If you see the target, click with ${click}. For a small or crowded control, inspect its location with observe_ui({view:"${view}",focus:{x,y}}). If you can identify only the panel, use observe_ui({view:"${view}",region:POSITION}). POSITION is top-left, top, top-right, left, center, right, bottom-left, bottom or bottom-right. Use coordinates in the returned image.`;
@@ -1563,17 +1568,17 @@ function browserClickHint(tool: string, detail: boolean, view?: string, region?:
 	return hint;
 }
 
-function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string, epoch: number, tool: string, base?: { stateId: string; outline: SerializedOutline }): AgentToolResult<BrowserObservationDetails> {
+function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string, epoch: number, tool: string, base?: { stateId: string; outline: SerializedOutline }, inspectedPoint?: ObserveParams["focus"]): AgentToolResult<BrowserObservationDetails> {
 	const { pixelImage, ...stored } = browser;
 	const view = operationState().compactBrowserControls && pixelImage && stored.viewport ? viewPrefix + (++nextView).toString(36) : undefined;
 	savedStates.set({ stateId: browser.snapshotId, resourceKey, epoch, value: { kind: "browser", view, snapshot: stored, outline: stored.outline } });
 	if (pixelImage && stored.viewport) {
 		const root = { ref:storeBrowserRootRef(stored.contextId), kind:"browser_page" as const, title:"", url:"" };
-		const hint = browserClickHint(tool, !!stored.viewport.origin, view, stored.viewport.region, stored.viewport.canClip);
+		const hint = browserClickHint(tool, !!stored.viewport.origin, view, stored.viewport.region, stored.viewport.canClip, inspectedPoint);
 		return { content: [
 			{ type:"text", text:`${tool} completed for ${root.ref}. State ${stored.snapshotId}. Screenshot only, ${stored.viewport.width} × ${stored.viewport.height} px. ${hint} Inspect the next image after each action.` },
 			{ type:"image", mimeType:"image/png", data:pixelImage },
-		], details:{ tool, kind:"browser_page", stateId:stored.snapshotId, view:"full", root, outline:stored.outline, renderedOutline:"" } };
+		], details:{ tool, kind:"browser_page", pixelsOnly:true, stateId:stored.snapshotId, view:"full", root, outline:stored.outline, renderedOutline:"" } };
 	}
 	const currentOutline = restoreOutline(browser.outline);
 	const transition = base ? changesBetween(restoreOutline(base.outline), currentOutline) : undefined;
@@ -1842,11 +1847,12 @@ async function performObserve(params: ObserveParams, signal?: AbortSignal): Prom
 			if (!base?.pixelsOnly || !base.viewport || base.contextId !== browserContextId || baseEpoch === undefined) {
 				throw new Error("Focus requires the full screenshot stateId belonging to this browser root.");
 			}
-			const focus = { center: params.focus, region: params.region, base: base.viewport };
+			const refreshDetail = !!(operationState().browserPanelZoom && params.focus && base.viewport.origin && !base.viewport.region);
+			const focus = { center: params.focus, region: params.region, base: base.viewport, refreshDetail };
 			const { value, epoch } = await resourceScheduler.readAt(resourceKey, baseEpoch,
 				() => cdpSnapshotForContext(browserContextId, true, focus));
 			if (!value) throw new Error("Browser root is no longer available.");
-			return browserObservationResult(value, resourceKey, epoch, "observe_ui");
+			return browserObservationResult(value, resourceKey, epoch, "observe_ui", undefined, refreshDetail ? params.focus : undefined);
 		}
 		const { value, epoch } = await resourceScheduler.read(resourceKey, async () => {
 			const browser = await cdpSnapshotForContext(browserContextId, params.mode === "pixels" || undefined);

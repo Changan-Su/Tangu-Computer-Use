@@ -50,6 +50,7 @@ interface BrowserImageGeometry {
 }
 
 interface FocusRequest {
+	refreshDetail?: boolean;
 	center?: { x: number; y: number };
 	region?: BrowserRegion;
 	base: BrowserImageGeometry;
@@ -175,10 +176,18 @@ export class CdpTab {
 
 	async viewportStamp(): Promise<string> { return (await this.viewportMetrics()).stamp; }
 
+	private async captureDetail(clip: { x: number; y: number; width: number; height: number; scale: number }, stamp: string) {
+		const { data } = await this.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, clip });
+		if (stamp !== await this.viewportStamp()) throw new Error("The viewport moved during capture. Observe the full image again.");
+		const header = Buffer.from(data.slice(0, 40), "base64");
+		const width = header.readUInt32BE(16), height = header.readUInt32BE(20);
+		return { data: String(data), width, height };
+	}
+
 	/** Render the visible region at twice the overview pixel density. The page keeps its viewport and zoom. */
-	async detailImage({ center, region, base: source }: FocusRequest) {
+	async detailImage({ center, region, refreshDetail, base: source }: FocusRequest) {
 		const base = source.overview ?? source;
-		if (!region && ((source.origin && !source.region) || !center || !Number.isInteger(center.x) || !Number.isInteger(center.y)
+		if (!region && ((source.origin && !source.region && !refreshDetail) || !center || !Number.isInteger(center.x) || !Number.isInteger(center.y)
 			|| center.x < 0 || center.y < 0 || center.x >= source.width || center.y >= source.height)) {
 			throw new Error("Choose a point inside a full screenshot or named panel to focus.");
 		}
@@ -186,6 +195,13 @@ export class CdpTab {
 		if (stamp !== base.stamp) throw new Error("The viewport moved. Observe the full image again.");
 		// CDP clip uses page-relative device-independent pixels. Avoid mixing units under pinch/browser zoom.
 		if (viewport.scale !== 1 || (viewport.zoom ?? 1) !== 1) throw new Error("Use the full image or magnify at this page zoom.");
+		if (refreshDetail && source.origin && !region && !source.region && source.captureScale) {
+			const clip = { x: viewport.pageX + source.origin.x, y: viewport.pageY + source.origin.y,
+				width: source.cssWidth, height: source.cssHeight, scale: source.captureScale };
+			const { data, width, height } = await this.captureDetail(clip, stamp);
+			if (width !== source.width || height !== source.height) throw new Error("Detail dimensions changed. Observe the full image again.");
+			return { data, geometry: source };
+		}
 		const scaleX = base.cssWidth / base.width, scaleY = base.cssHeight / base.height;
 		// The full screenshot can include classic scrollbars. CDP clips page content only.
 		const position = region === undefined ? -1 : browserRegions.indexOf(region);
@@ -208,12 +224,9 @@ export class CdpTab {
 		const cssWidth = x.size, cssHeight = y.size;
 		const scale = region ? Math.min(2, 1598 * scaleX / cssWidth, 1598 * scaleY / cssHeight) : 2 * (source.captureScale ?? 1);
 		const clip = { x: x.offset, y: y.offset, width: cssWidth, height: cssHeight, scale };
-		const { data } = await this.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false, clip });
-		if (stamp !== await this.viewportStamp()) throw new Error("The viewport moved during capture. Observe the full image again.");
-		const header = Buffer.from(data.slice(0, 40), "base64");
-		const width = header.readUInt32BE(16), height = header.readUInt32BE(20);
+		const { data, width, height } = await this.captureDetail(clip, stamp);
 		if ((region && Math.max(width, height) > 1600) || Math.abs(width - scale * cssWidth / scaleX) > 2 || Math.abs(height - scale * cssHeight / scaleY) > 2) throw new Error("Unexpected detail dimensions. Observe the full image again.");
-		return { data: String(data), geometry: { width, height, cssWidth, cssHeight, stamp, origin, overview: base, region, captureScale: scale } };
+		return { data, geometry: { width, height, cssWidth, cssHeight, stamp, origin, overview: base, region, captureScale: scale } };
 	}
 
 	async viewportImage() {

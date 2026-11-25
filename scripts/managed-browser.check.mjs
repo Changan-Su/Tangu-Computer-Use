@@ -47,6 +47,8 @@ const server = createServer(async (req, res) => {
     <div id="stripes" style="position:fixed;left:610px;top:370px;width:20px;height:20px;background:repeating-linear-gradient(90deg,black 0 .5px,white .5px 1px)"></div>
     <div style="height:200vh"></div>
     <script>
+    let fixturePointerDowns = 0;
+    document.addEventListener('pointerdown', () => { fixturePointerDowns++; }, true);
     probe.onpointerdown = cornerProbe.onpointerdown = stripes.onpointerdown = e => fetch('/detail-event', {method:'POST',body:JSON.stringify([e.clientX,e.clientY,scrollY,e.isTrusted])});
     redirect.select = () => field.focus();
     surface.onclick = e => { document.querySelector('output').textContent = e.isTrusted ? 'Canvas pressed' : 'Synthetic'; };
@@ -269,7 +271,7 @@ try {
       const msg=JSON.parse(data);
       if(msg.id!==id)return;
       clearTimeout(timer);geometrySocket.off('message',result);
-      if(msg.error)reject(Error(msg.error.message));else resolve();
+      if(msg.error)reject(Error(msg.error.message));else resolve(msg.result);
     };
     geometrySocket.on('message',result);geometrySocket.send(JSON.stringify({id,method,params}));
   });
@@ -327,15 +329,53 @@ try {
   const zoomed = PNG.sync.read(Buffer.from(images.at(-1).url.split(',')[1],'base64'));
   assert.ok(Math.abs(zoomed.width-640)<6 && Math.abs(zoomed.height-384)<6);
   detailEvent=undefined;
-  await run('act_ui',{view:viewOf(precise),click:[precisePoint.x,precisePoint.y]},'C');
+  const pointerCount = async () => (await emulation('Runtime.evaluate',{expression:'fixturePointerDowns',returnByValue:true})).result.value;
+  const beforeInspect = await pointerCount();
+  const inspectAgain = {view:viewOf(precise),focus:precisePoint};
+  await assert.rejects(run('observe_ui',inspectAgain,'B'),/another conversation/);
+  await assert.rejects(run('observe_ui',{...inspectAgain,focus:{x:zoomed.width,y:0}},'C'),/inside/);
+  settings.browser_panel_zoom = false;
+  settings.compact_browser_controls = true;
+  await assert.rejects(run('observe_ui',inspectAgain,'C'),/inside a full screenshot/);
+  settings.compact_browser_controls = false;
+  settings.browser_panel_zoom = true;
+  // Test-only repaint on a separate CDP connection. Reinspection must capture this change.
+  await emulation('Runtime.evaluate',{expression:"document.getElementById('probe').style.background='#e75f28'"});
+  const reviewed = await run('observe_ui',inspectAgain,'C');
+  assert.notEqual(viewOf(reviewed),viewOf(precise));
+  assert.notEqual(state(reviewed),state(precise));
+  assert.deepEqual(marker([231,95,40]),precisePoint);
+  const refreshedImage = PNG.sync.read(Buffer.from(images.at(-1).url.split(',')[1],'base64'));
+  assert.deepEqual([refreshedImage.width,refreshedImage.height],[zoomed.width,zoomed.height]);
+  assert.ok(reviewed.includes(`act_ui({view:"${viewOf(reviewed)}",click:[${precisePoint.x},${precisePoint.y}]})`));
+  assert.equal(await pointerCount(), beforeInspect);
+  assert.equal(detailEvent,undefined);
+  await run('act_ui',{view:viewOf(reviewed),click:[precisePoint.x,precisePoint.y]},'C');
   await waitFor(()=>detailEvent);
   assert.ok(detailEvent[0]>=240 && detailEvent[0]<=242 && detailEvent[1]>=110 && detailEvent[1]<=112 && detailEvent[3],JSON.stringify(detailEvent));
+  assert.equal(await pointerCount(), beforeInspect + 1);
   await assert.rejects(run('observe_ui',regionArgs,'C'),/stale|epoch/i);
+  await assert.rejects(run('observe_ui',inspectAgain,'C'),/stale|epoch/i);
+  await emulation('Runtime.evaluate',{expression:"document.getElementById('probe').style.background='#50b12c'"});
+  const retryBase = await observePixels();
+  const retryDetail = await run('observe_ui',{view:viewOf(retryBase),focus:{x:150,y:90}},'C');
+  const retryArgs = {view:viewOf(retryDetail),focus:{x:20,y:20}};
+  for (const collectImage of [undefined, () => false]) {
+    const undelivered = await byName.get('observe_ui').execute(retryArgs,{sessionId:'C',appId:'fixture',userId:'fixture',execMode:'host',collectImage});
+    assert.match(undelivered,/Screenshot unavailable.+observe_ui/);
+    assert.doesNotMatch(undelivered,/act_ui|view:"v/);
+  }
+  const beforeNav = await observePixels();
+  const beforeNavFine = await run('observe_ui',{view:viewOf(beforeNav),focus:{x:100,y:100}},'C');
+  await emulation('Runtime.evaluate',{expression:"history.pushState({}, '', '#new-view')"});
+  await assert.rejects(run('observe_ui',{view:viewOf(beforeNavFine),focus:{x:10,y:10}},'C'),/viewport moved/i);
   const beforeZoom = await observePixels();
   const beforeZoomPanel = await run('observe_ui',{view:viewOf(beforeZoom),region:'left'},'C');
+  const beforeZoomFine = await run('observe_ui',{view:viewOf(beforeZoomPanel),focus:{x:150,y:150}},'C');
   await emulation('Emulation.setPageScaleFactor',{pageScaleFactor:2});
   await sleep(80);
   await assert.rejects(run('observe_ui',{view:viewOf(beforeZoomPanel),region:'right'},'C'),/viewport moved/i);
+  await assert.rejects(run('observe_ui',{view:viewOf(beforeZoomFine),focus:{x:10,y:10}},'C'),/viewport moved/i);
   const pinched = await observePixels();
   assert.match(pinched,/magnify/);
   assert.doesNotMatch(pinched,/region:POSITION/);
