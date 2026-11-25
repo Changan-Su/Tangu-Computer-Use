@@ -236,7 +236,7 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
             inputPending = false;
             scrolls++;
             const after = last.details as ObservationDetails;
-            sentToForeground ||= Boolean(foregroundNote(after.execution));
+            sentToForeground ||= Boolean(foregroundNote(after.execution, after.target?.pid ?? d.target?.pid));
             item.execution = executionSummary(after);
             if (!after.capture?.stateId || (after.status && after.status !== 'ok') || after.execution?.error || after.execution?.outcome === 'didnt') { stopReason = 'input_failed'; break; }
             // ponytail: whole-frame comparison. An animating UI (a playing progress bar) never reads as unchanged, so
@@ -292,7 +292,7 @@ export async function runJev(args: Record<string, unknown>, settings: () => Reco
       inputPending = false;
       item.actionMs = Math.round(performance.now() - actStart);
       const after = last.details as ObservationDetails;
-      sentToForeground ||= Boolean(foregroundNote(after.execution));
+      sentToForeground ||= Boolean(foregroundNote(after.execution, after.target?.pid ?? d.target?.pid));
       item.execution = executionSummary(after);
       item.outcome = after.execution?.outcome ?? 'unknown';
       const nativeOk = after.execution?.outcome === 'worked' && !after.execution.error;
