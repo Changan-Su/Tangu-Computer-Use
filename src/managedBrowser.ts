@@ -13,13 +13,15 @@ export const browserOwner = () => browserConversation.getStore() ?? 'standalone'
 type ManagedBrowser = Awaited<ReturnType<typeof startBrowser>>;
 const sessions = new Map<string, ManagedBrowser>();
 
+export const managedPixelsOnly = () => sessions.get(browserOwner())?.pixelsOnly === true;
+
 export function browserPort(): string | undefined {
   const browser = sessions.get(browserOwner());
   browser?.touch();
   return browser?.port ?? process.env.PI_COMPUTER_USE_CDP_PORT;
 }
 
-async function startBrowser(executable: string, visible: boolean, signal?: AbortSignal) {
+async function startBrowser(executable: string, visible: boolean, pixelsOnly: boolean, signal?: AbortSignal) {
   signal?.throwIfAborted();
   const profile = await mkdtemp(path.join(tmpdir(), 'tangu-browser-'));
   const child = spawn(executable, [
@@ -62,7 +64,7 @@ async function startBrowser(executable: string, visible: boolean, signal?: Abort
       const [port, socket] = portFile.trim().split(/\r?\n/);
       if (/^\d+$/.test(port) && socket?.startsWith('/devtools/browser/')) {
         touch();
-        return { port, touch, stop, closed };
+        return { port, pixelsOnly, touch, stop, closed };
       }
       await delay(40, undefined, { signal });
     } while (Date.now() < deadline);
@@ -73,10 +75,10 @@ async function startBrowser(executable: string, visible: boolean, signal?: Abort
   }
 }
 
-export async function launchManagedBrowser<T>(executable: string, visible: boolean, signal: AbortSignal | undefined, observe: () => Promise<T>): Promise<T> {
+export async function launchManagedBrowser<T>(executable: string, visible: boolean, signal: AbortSignal | undefined, observe: () => Promise<T>, pixelsOnly = false): Promise<T> {
   const owner = browserOwner();
   const previous = sessions.get(owner);
-  const next = await startBrowser(executable, visible, signal);
+  const next = await startBrowser(executable, visible, pixelsOnly, signal);
   sessions.set(owner, next);
   void next.closed.then(() => { if (sessions.get(owner) === next) sessions.delete(owner); });
   try {

@@ -7,7 +7,7 @@
 // keeps the AX/CGEvent path, so with the env var unset this module is inert.
 
 import WebSocket from "ws";
-import { browserOwner, browserPort } from "../managedBrowser.ts";
+import { browserOwner, browserPort, managedPixelsOnly } from "../managedBrowser.ts";
 import { randomUUID } from "node:crypto";
 import { parseLookResponse, serializeOutline, type SerializedOutline } from "./outline.ts";
 
@@ -35,6 +35,8 @@ export interface CdpSnapshotTarget {
 
 export interface CdpPageSnapshot {
 	owner?: string;
+	pixelImage?: string; // Only carried to the result; never stored in the observation cache.
+	pixelsOnly?: boolean;
 	viewport?: { width: number; height: number; cssWidth: number; cssHeight: number; stamp: string };
 	contextId: string;
 	snapshotId: string;
@@ -74,15 +76,18 @@ export class CdpTab {
 	private nextId = 1;
 	private readonly pending = new Map<number, { resolve: (result: any) => void; reject: (error: Error) => void }>();
 	private consoleBuffer: CdpConsoleEntry[] = [];
+	private readonly connectionId = randomUUID();
+	private pageRevision = 0;
 	private loadFired: (() => void) | undefined;
 
 	private constructor(
 		private readonly ws: WebSocket,
 		readonly targetId: string,
 		public title: string,
+		readonly pixelsOnly: boolean,
 	) {}
 
-	static async connect(wsUrl: string, targetId: string, title: string): Promise<CdpTab> {
+	static async connect(wsUrl: string, targetId: string, title: string, pixelsOnly = false): Promise<CdpTab> {
 		const ws = new WebSocket(wsUrl);
 		try {
 			await new Promise<void>((resolve, reject) => {
@@ -97,11 +102,12 @@ export class CdpTab {
 				};
 			});
 
-			const tab = new CdpTab(ws, targetId, title);
+			const tab = new CdpTab(ws, targetId, title, pixelsOnly);
 			ws.onmessage = (event) => tab.handleMessage(String(event.data));
 			ws.onclose = () => tab.rejectAllPending(new Error("CDP connection closed."));
 			ws.onerror = () => tab.rejectAllPending(new Error("CDP connection error."));
-			await Promise.all([tab.send("Runtime.enable"), tab.send("Page.enable"), tab.send("Accessibility.enable")]);
+			if (pixelsOnly) await tab.send("Page.enable");
+			else await Promise.all([tab.send("Runtime.enable"), tab.send("Page.enable"), tab.send("Accessibility.enable")]);
 			return tab;
 		} catch (error) {
 			try {
@@ -139,18 +145,24 @@ export class CdpTab {
 		return result?.result?.value;
 	}
 
-	async viewportStamp(): Promise<string> {
-		return String(await this.evaluate("JSON.stringify([performance.timeOrigin, location.href, visualViewport.pageLeft, visualViewport.pageTop, visualViewport.width, visualViewport.height, visualViewport.scale, devicePixelRatio])"));
+	private async viewportMetrics() {
+		const { cssVisualViewport: viewport, visualViewport: device } = await this.send("Page.getLayoutMetrics");
+		const stamp = JSON.stringify([this.connectionId, this.pageRevision, viewport.pageX, viewport.pageY, viewport.clientWidth, viewport.clientHeight, viewport.scale, viewport.zoom, device.clientWidth, device.clientHeight]);
+		return { viewport, stamp };
 	}
 
+	async viewportStamp(): Promise<string> { return (await this.viewportMetrics()).stamp; }
+
 	async viewportImage() {
-		const stamp = await this.viewportStamp();
-		const { cssVisualViewport: viewport } = await this.send("Page.getLayoutMetrics");
-		const { data } = await this.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
-		if (stamp !== await this.viewportStamp()) throw new Error("The viewport changed during the screenshot. Observe the page again.");
-		const header = Buffer.from(data.slice(0, 40), "base64");
-		return { data: String(data), geometry: { width: header.readUInt32BE(16), height: header.readUInt32BE(20),
-			cssWidth: Number(viewport.clientWidth), cssHeight: Number(viewport.clientHeight), stamp } };
+		for (let attempt = 0; attempt < 3; attempt++) {
+			const { viewport, stamp } = await this.viewportMetrics();
+			const { data } = await this.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false });
+			if (stamp !== await this.viewportStamp()) continue;
+			const header = Buffer.from(data.slice(0, 40), "base64");
+			return { data: String(data), geometry: { width: header.readUInt32BE(16), height: header.readUInt32BE(20),
+				cssWidth: Number(viewport.clientWidth), cssHeight: Number(viewport.clientHeight), stamp } };
+		}
+		throw new Error("The viewport kept changing during capture. Observe the page again.");
 	}
 
 	async accessibilityTree(): Promise<unknown[]> {
@@ -246,7 +258,12 @@ export class CdpTab {
 		}
 	}
 
-	async scrollBy(deltaX: number, deltaY: number, backendNodeId?: number): Promise<void> {
+	async scrollBy(deltaX: number, deltaY: number, backendNodeId?: number, point?: {x:number; y:number}): Promise<void> {
+		if (point || this.pixelsOnly) {
+			if (!point) throw new Error("Scroll at x/y from the latest screenshot.");
+			await this.send("Input.dispatchMouseEvent", { type: "mouseWheel", ...point, deltaX, deltaY });
+			return;
+		}
 		if (backendNodeId) {
 			await this.withBackendNode(backendNodeId, "function(dx, dy){ this.scrollIntoView({block:'center', inline:'center'}); this.scrollBy(dx, dy); }", [deltaX, deltaY]);
 			return;
@@ -362,6 +379,10 @@ export class CdpTab {
 		}
 
 		switch (message.method) {
+			case "Page.frameNavigated":
+			case "Page.navigatedWithinDocument":
+				this.pageRevision++;
+				break;
 			case "Page.loadEventFired":
 				this.loadFired?.();
 				break;
@@ -467,13 +488,14 @@ interface CdpPageTarget {
 	webSocketDebuggerUrl?: string;
 }
 
-export async function listCdpPageContexts(): Promise<CdpPageContext[]> {
+export async function listCdpPageContexts(initialBlankOnly = false): Promise<CdpPageContext[]> {
+	const hideLabels = managedPixelsOnly();
 	const pages = await cdpPages();
-	return pages.map((page) => ({
+	return pages.filter(page => !initialBlankOnly || page.url === "about:blank").map((page) => ({
 		contextId: cdpContextId(page.id),
 		targetId: page.id,
-		title: page.title,
-		url: page.url ?? "",
+		title: hideLabels ? "" : page.title,
+		url: hideLabels ? "" : page.url ?? "",
 	}));
 }
 
@@ -491,9 +513,9 @@ export async function cdpTypeForContext(contextId: string, backendNodeId: number
 	})) === true;
 }
 
-export async function cdpScrollForContext(contextId: string, deltaX: number, deltaY: number, backendNodeId?: number): Promise<boolean> {
+export async function cdpScrollForContext(contextId: string, deltaX: number, deltaY: number, backendNodeId?: number, point?: {x:number; y:number}): Promise<boolean> {
 	return (await withCdpContextTab(contextId, async (tab) => {
-		await tab.scrollBy(deltaX, deltaY, backendNodeId);
+		await tab.scrollBy(deltaX, deltaY, backendNodeId, point);
 		return true;
 	})) === true;
 }
@@ -533,8 +555,15 @@ export async function cdpViewportForContext(contextId: string) {
 	return withCdpContextTab(contextId, tab => tab.viewportImage());
 }
 
-export async function cdpSnapshotForContext(contextId: string): Promise<CdpPageSnapshot | undefined> {
+export async function cdpSnapshotForContext(contextId: string, pixelsOnly = managedPixelsOnly()): Promise<CdpPageSnapshot | undefined> {
 	return withCdpContextTab(contextId, async tab => {
+		if (tab.pixelsOnly || pixelsOnly) {
+			const image = await tab.viewportImage();
+			const snapshotId = randomUUID();
+			return { owner: browserOwner(), contextId, targetId: tab.targetId, snapshotId, capturedAt: Date.now(),
+				title: "", url: "", text: "", ...cdpSnapshotOutline(snapshotId, []), pixelsOnly: true,
+				viewport: image.geometry, pixelImage: image.data, diagnostics: { cdp: "connected", targetCount: 0 } };
+		}
 		const [documentInfo, nodes] = await Promise.all([
 			tab.evaluate("({text:document.body?.innerText ?? '',title:document.title,url:location.href})") as Promise<{text:string; title:string; url:string}>,
 			tab.accessibilityTree(),
@@ -562,13 +591,14 @@ const pageConnections = new Map<string, Promise<CdpTab | undefined>>();
 async function withCdpContextTab<T>(contextId: string, run: (tab: CdpTab) => Promise<T>): Promise<T | undefined> {
 	const port = browserPort();
 	if (!port || !contextId.startsWith(CDP_CONTEXT_PREFIX)) return undefined;
-	const key = JSON.stringify([browserOwner(), port, contextId]);
+	const pixelsOnly = managedPixelsOnly();
+	const key = JSON.stringify([browserOwner(), port, contextId, pixelsOnly]);
 	let connection = pageConnections.get(key);
 	if (!connection) {
 		const targetId = contextId.slice(CDP_CONTEXT_PREFIX.length);
 		connection = cdpPages(port).then(pages => {
 			const page = pages.find(candidate => candidate.id === targetId);
-			return page?.webSocketDebuggerUrl ? CdpTab.connect(page.webSocketDebuggerUrl, page.id, page.title) : undefined;
+			return page?.webSocketDebuggerUrl ? CdpTab.connect(page.webSocketDebuggerUrl, page.id, page.title, pixelsOnly) : undefined;
 		});
 		pageConnections.set(key, connection);
 		const forget = () => { if (pageConnections.get(key) === connection) pageConnections.delete(key); };

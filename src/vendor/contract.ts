@@ -24,6 +24,7 @@ export interface NavigateBrowserParams extends StateTargetParams {
 }
 
 export interface LaunchBrowserParams {
+	mode?: "auto" | "pixels";
 	visible?: boolean;
 	url?: string;
 }
@@ -34,7 +35,7 @@ export interface EvaluateBrowserParams {
 }
 
 export interface ObserveParams extends ObserveTargetParams {
-	mode?: "semantic" | "visual" | "fused";
+	mode?: "semantic" | "visual" | "fused" | "pixels";
 	/** Internal capture override; not part of the model-facing schema. */
 	readText?: "auto" | "always" | "never";
 }

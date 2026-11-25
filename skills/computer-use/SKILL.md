@@ -15,6 +15,8 @@ Forsion's own windows are not a Computer Use target. To change a Forsion setting
 pages, use `list_ui_commands` and then `run_ui_command` / `set_ui_setting`; a tool result marked
 `[forsion]` means you are looking at Forsion itself.
 
+For a canvas, remote display, or screenshot-only request, open the browser with `launch_browser({url, mode:"pixels"})`. Ground each coordinate in the returned image, use `act_ui` to click or drag, and inspect its successor image. Coordinates use the reported image dimensions. Screenshots work in the background. For an existing desktop window, use `observe_ui({root,mode:"pixels"})` and pass its state to `act_ui`. On dense toolbars, move the pointer to an uncertain icon or swatch and check its tooltip before committing. Select the tool and intended color before touching the document. If an edit changes the wrong pixels, undo it before trying again. Compare the whole result with the original image before claiming the other objects survived.
+
 For a fresh interactive web task, use `launch_browser({url})`. Each conversation gets a separate
 Chrome or Helium profile. The default opens in the background, without a Chrome extension or desktop
 Accessibility and Screen Recording permissions. Use the returned state and control refs with

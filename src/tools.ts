@@ -139,7 +139,7 @@ const SPECS: ToolSpec[] = [
     description: 'Capture the current/frontmost root or one exact @r root and return a bounded UI outline. Use mode=semantic to skip OCR and images, visual to force them, fused for automatic selection. Primary UI observation tool; follow with search_ui/expand_ui/inspect_ui/act_ui. Use @e outline refs from observe_ui/search_ui for act_ui; pictureOnly refs are coordinate-only.',
     parameters: obj({
       root: S('Exact @r ref issued by find_roots'),
-      mode: { type: 'string', enum: ['semantic', 'visual', 'fused'], description: 'Observation mode, default fused' },
+      mode: { type: 'string', enum: ['semantic', 'visual', 'fused', 'pixels'], description: 'pixels shows only the screenshot and its coordinates, including for a native desktop root. visual includes the outline as well. Default fused.' },
     }),
   },
   {
@@ -187,7 +187,7 @@ const SPECS: ToolSpec[] = [
   {
     name: 'launch_browser', exec: executeLaunchBrowser as PiExecute, sideEffect: 'browser', approval: 'command', browserOnly: true, timeoutMs: 60_000,
     description: 'Open a fresh background browser for this conversation. No Chrome extension or desktop permissions are needed. For a URL or web form, start here and use the returned state with act_ui. This separate profile has no personal tabs or logins. Use browser_tabs when the user needs their existing browser.',
-    parameters: obj({ url: S('Initial URL', 8192), visible: { type: 'boolean', description: 'Show the window only when requested. Requires strict background to be off.' } }),
+    parameters: obj({ url: S('Initial URL', 8192), mode: { type:'string', enum:['auto','pixels'], description:'pixels for screenshot-only control (canvas, remote desktop, or when explicitly requested). Launch and each action return an image. Click or drag at image coordinates.' }, visible: { type: 'boolean', description: 'Show a window on the user’s desktop only when requested. Screenshots work without this flag. Requires strict background to be off.' } }),
   },
   {
     name: 'navigate_browser', exec: executeNavigateBrowser as PiExecute, sideEffect: 'browser', approval: 'command', browserOnly: true, timeoutMs: 60_000,

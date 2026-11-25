@@ -129,6 +129,25 @@ try {
     await observe();
     observations.push(performance.now() - t);
   }
+  const imageCount = images.length;
+  const picture = await run('launch_browser',{url,mode:'pixels'},'C');
+  assert.match(picture,/Screenshot only/);
+  assert.doesNotMatch(picture,/Blue Finch|Controls in this state|@e\d+|Page text/);
+  assert.equal(images.length,imageCount+1);
+  assert.match(images.at(-1).url,/^data:image\/png;base64,/);
+  for (const [tool,args] of [
+    ['evaluate_browser',{expression:'document.title'}], ['search_ui',{role:'button'}],
+    ['read_text',{ref:'@e1'}], ['wait_for',{text:'Draft saved'}],
+    ['act_ui',{actions:[{action:'click',ref:'@e1'}]}],
+    ['act_ui',{actions:[{action:'click',x:1,y:1}],expect:{text:'Draft saved'}}],
+  ]) await assert.rejects(run(tool,{...args,stateId:state(picture)},'C'),/Screenshot-only/);
+  const discovery = await run('find_roots',{kind:'browser_page'},'C');
+  assert.doesNotMatch(discovery, /Editor|127\.0\.0\.1/);
+  await assert.rejects(run('act_ui',{stateId:state(picture),actions:[{action:'click',x:1,y:1},{action:'click',x:1,y:1}]},'C'),/one screenshot-grounded action/);
+  const fresh = await run('observe_ui',{root:root(picture)},'C');
+  const after = await run('act_ui',{stateId:state(fresh),actions:[{action:'moveMouse',x:10,y:10}]},'C');
+  assert.match(after,/Screenshot only/);
+  assert.equal(images.length,imageCount+3);
   settings.browser_use = false;
   await assert.rejects(observe(), /disabled/);
   sampling = false;
