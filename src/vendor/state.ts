@@ -12,6 +12,7 @@ interface StateTargetSnapshot {
 }
 
 export interface CurrentTarget {
+	provisionalId?: boolean;
 	appName: string;
 	bundleId?: string;
 	pid: number;

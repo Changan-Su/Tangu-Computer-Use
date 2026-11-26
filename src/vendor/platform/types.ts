@@ -155,6 +155,8 @@ type PlatformActDeliveryParam = { delivery?: NativeInputDelivery };
 export type PlatformPoint = { x: number; y: number };
 
 export interface PlatformActRequestBase {
+	/** Only send the recovered physical click if this exact window still holds the focus and point. */
+	recoveredWindow?: number;
 	lookId: string;
 	pid?: number;
 	target: PlatformActTarget;
@@ -237,7 +239,7 @@ export interface ComputerUsePlatformBackend {
 	getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult>;
 	focusWindow(target: PlatformTarget, signal?: AbortSignal): Promise<PlatformFocusWindowResult>;
 	/** Forsion patch, see UPSTREAM.md. Activates the app and raises this window; false if the app could not be activated. focusWindow alone leaves a covered page hidden. */
-	activateWindow?(target: { pid: number; windowId: number; windowRef?: string }, signal?: AbortSignal): Promise<boolean>;
+	activateWindow?(target: { pid: number; windowId: number; windowRef?: string; recoverBackgroundClick?: boolean }, signal?: AbortSignal): Promise<boolean>;
 	observe(request: PlatformObserveRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<LookResponse>;
 	act(request: PlatformActRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<HelperActResult>;
 	/** Execute one-resource actions with one root baseline and one final settle. */

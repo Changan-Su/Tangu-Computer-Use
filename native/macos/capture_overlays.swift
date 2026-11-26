@@ -61,11 +61,15 @@ struct DisplayArea {
 /// 只有它在左 / 右 / 下三边让出来的 Dock 条挡点击。只认 Dock 进程(dockPid)的:别的 App 铺满整屏的 20 层窗口照样算挡着。
 /// ponytail: 自动隐藏的 Dock 被鼠标叫出来那一会儿看不出来;要防就在这一点上对 Dock 做 AX 命中测试。
 func topWindowPid(at point: CGPoint, candidates: [OverlayCandidate], helperPid: Int32, displays: [DisplayArea] = [], dockPid: Int32? = nil) -> Int32? {
+	topWindow(at: point, candidates: candidates, helperPid: helperPid, displays: displays, dockPid: dockPid)?.pid
+}
+
+func topWindow(at point: CGPoint, candidates: [OverlayCandidate], helperPid: Int32, displays: [DisplayArea] = [], dockPid: Int32? = nil) -> OverlayCandidate? {
 	candidates.first { window in
 		guard window.onScreen, window.pid != helperPid, window.layer < 24, window.frame.contains(point) else { return false }
 		guard window.layer == 20, window.pid == dockPid, let display = displays.first(where: { $0.frame == window.frame }) else { return true }
 		return point.y >= display.visible.maxY || point.x < display.visible.minX || point.x >= display.visible.maxX
-	}?.pid
+	}
 }
 
 /// 两张截图有多少像素变了:都缩到最长边 ≤ maxDimension 再逐像素比(任一通道差 > 24 算变)。

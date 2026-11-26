@@ -123,7 +123,10 @@ export async function launchFixture(app, statePath, { frame, page, play, sent, b
   if (page) argv.push('--page', page)
   if (play != null) argv.push('--play', String(play))
   if (sent != null) argv.push('--sent', String(sent))
-  if (behind) argv.push('--behind')
+  const otherSpace = ['1', 'foreground-only'].includes(process.env.TANGU_CU_FIXTURE_OTHER_SPACE) && path.basename(app) === 'MelodyFixture.app'
+  if (behind || otherSpace) argv.push('--behind')
+  if (otherSpace && !args.includes('--inactive-space')) argv.push('--inactive-space')
+  if (otherSpace && process.env.TANGU_CU_FIXTURE_OTHER_SPACE === 'foreground-only') argv.push('--foreground-navigation')
   argv.push(...args)
   await execFileP('open', ['-g', '-n', app, '--args', ...argv])
   try {

@@ -44,6 +44,8 @@ debugging port from that profile and cleans it up on close. The managed browser 
 clicks and editing. The first observation includes control refs and successful conditions return
 the snapshot used for verification. Keep these adaptations when resyncing upstream.
 
+On macOS, preserve exact WindowServer IDs across Spaces. Keep geometry-derived AX pairings tied to the original AX window ref. Coordinate clicks try the app’s hit-tested accessibility action or window-addressed PID input. A per-run receipt limits unconfirmed repeats. When foreground recovery is enabled, `ensure_app` can raise the exact window after an unconfirmed click. The next physical click requires a fresh capture and rechecks window ownership, focus, coverage, frame and cancellation before each mouse-down. `scripts/mac-spaces.check.mjs` exercises background and foreground delivery across two real desktops, including `--strict` and `--recover`.
+
 ### Tangu adaptation layer (NOT vendored — hand-written)
 - `src/pi-compat.ts` — the pi shim (only the shapes vendor actually uses).
 - `src/tools.ts` — upstream's 11 `defineTool` → Tangu `ToolDef[]`; typebox schema hand-translated

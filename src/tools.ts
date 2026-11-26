@@ -1,3 +1,4 @@
+import { clickReceipt, recoveryExhausted } from './backgroundRecovery.ts';
 /**
  * 上游与 Tangu 的工具通过同一套执行策略注册。翻译要点:
  *   - parameters:上游 typebox schema 手翻成纯 JSON Schema 字面量(零依赖,不引 typebox)。
@@ -191,7 +192,7 @@ const toolSpecs = (compact: boolean, panels = false): ToolSpec[] => [
     parameters: obj({
       app: S('Installed app name in the user’s language, or an app bundle path'),
       bundleId: S('Exact bundle identifier, if already known'),
-      foregroundRoot: S('Only when the user explicitly asks to bring a window forward. Supply its exact onscreen root from discovery. Omit for ordinary clicks and observation.'),
+      foregroundRoot: S('Use the exact root indicated by a background click only after its screenshot shows the requested result is missing. May switch Spaces. Also supports an explicit user request to raise an onscreen window.'),
       mode: { type: 'string', enum: ['visual', 'pixels', 'roots'], description: 'Default visual. Use roots to list windows without capturing an image.' },
     }),
   },
@@ -325,10 +326,14 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
   if (!bundleId && !wasRunning && !app.startsWith('/')) {
     // Some running bundles expose an executable name while the user knows the
     // window title. A title alone is insufficient to identify its owner.
-    const candidates = await discovery.find('', { text: app, kind: 'window' }, tcx.signal, undefined, pctx);
+    const nameTokens = (name: string) => name.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[\s._-]+/);
+    const namedOwners = running.filter(a => nameTokens(a.appName).includes(app.toLowerCase()));
+    // A title-only WindowServer query misses windows on other Spaces. Verify the window title inside a unique potential owner.
+    const query = namedOwners.length === 1 ? { pid: namedOwners[0].pid } : { text: app, kind: 'window' as const };
+    const candidates = await discovery.find('', query, tcx.signal, undefined, pctx);
     const exact = candidates.details.windows.filter(w => w.windowTitle.localeCompare(app, undefined, { sensitivity: 'accent' }) === 0);
     const owners = new Set(exact.map(w => w.bundleId));
-    const ownerNames = exact[0]?.app.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase().split(/[\s._-]+/) ?? [];
+    const ownerNames = exact[0] ? nameTokens(exact[0].app) : [];
     if (owners.size === 1 && exact[0]?.bundleId && ownerNames.includes(app.toLowerCase())) {
       bundleId = exact[0].bundleId;
       wasRunning = true;
@@ -371,7 +376,41 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
     if (found) {
       if (foregroundRoot) {
         const window = found.windows.find(w => w.windowRef === foregroundRoot);
-        if (!window?.windowId || !window.isOnscreen) return 'The requested window is unavailable on the current desktop.';
+        if (!window?.windowId) return 'Window unavailable. Stop the blocked step.';
+        const target = { pid: window.pid, windowId: window.windowId };
+        const receipt = clickReceipt(target);
+        if (receipt) {
+          if (!receipt.verifiedWindow) return 'Original window identity unavailable. Stop the blocked step.';
+          if (receipt.phase === 'blocked' || receipt.phase === 'sent') throw recoveryExhausted('Recovery was already attempted. No further input was sent. Report the blocked step.');
+          if (receipt.phase !== 'background') return 'The window is already being recovered. Inspect the latest screenshot before acting.';
+          receipt.phase = 'raising';
+          try {
+            const raised = await discovery.activate?.({ ...target, recoverBackgroundClick: true }, tcx.signal);
+            if (!raised) return 'macOS could not focus this exact window. Stop the blocked step. No click was replayed.';
+            // During a Space transition AX can withdraw the old root before publishing the visible one.
+            // Retry only the observation, on this pid/windowId, while the target still owns the foreground.
+            const until = Date.now() + 2_000;
+            do {
+              tcx.signal?.throwIfAborted();
+              if (!(await apps()).some(a => a.pid === target.pid && a.isFrontmost)) return 'Foreground changed during recovery. Stop the blocked step. No click was replayed.';
+              try {
+                const image = await discovery.observe('', { root: foregroundRoot, mode: 'pixels' }, tcx.signal, undefined, pctx);
+                if (!('target' in image.details) || image.details.target.pid !== target.pid || image.details.target.windowId !== target.windowId) return 'The recovered window changed. Stop the blocked step.';
+                const seen = render(image, tcx);
+                if (seen.startsWith('Screenshot unavailable')) return 'Screenshot unavailable after recovery. Stop the blocked step.';
+                receipt.freshCapture = image.details.capture;
+                receipt.phase = 'foreground';
+                return `[foreground] Mini recovery brought ${name} forward. The earlier click was not replayed. Inspect the current image, then click only if still needed.\n${seen}`;
+              } catch (error) {
+                tcx.signal?.throwIfAborted();
+                if (!/stale|no longer available|root_not_found|window_not_found/i.test(String(error))) throw error;
+              }
+              await sleep(120);
+            } while (Date.now() < until);
+            return 'The recovered window did not provide a fresh screenshot. Stop the blocked step. No click was replayed.';
+          } finally { if (receipt.phase === 'raising') receipt.phase = 'blocked'; }
+        }
+        if (!window.isOnscreen) return 'This off-Space window must be tried in the background first.';
         const raised = await discovery.activate?.({ pid: window.pid, windowId: window.windowId }, tcx.signal);
         return raised ? `[foreground] Brought ${name} ${foregroundRoot} forward.` : 'The requested window could not be brought forward on this desktop.';
       }

@@ -17,6 +17,7 @@
  */
 
 interface ExecStep {
+  recoveryHint?: string;
   outcome?: string;
   error?: { code?: string; message?: string };
   performed?: { delivery?: string; grounding?: string; verification?: string };
@@ -39,6 +40,7 @@ export function executionSummary(details: unknown) {
   if (!exec || (!exec.outcome && !exec.error)) return undefined;
   // 「没有再按」的那次结果没有送出任何动作,不列步骤。
   const steps = (exec.earlierPressTookEffect ? [] : exec.steps?.length ? exec.steps : [exec]).map(s => ({
+    recoveryHint: s.recoveryHint,
     outcome: s.outcome ?? 'unknown',
     delivery: s.delivery ?? s.performed?.delivery ?? 'unknown',
     policy: s.deliveryPolicy ?? 'unknown',
@@ -84,7 +86,7 @@ export function executionNote(details: unknown): string {
       ? 'The input was attempted; its effect is UNVERIFIED, not proven failed. A canvas can change without accessibility confirmation. Inspect the returned state before any retry, including a retry with another tool.'
       : 'The native executor confirmed this action; still verify the requested task result.';
   return `[execution] ${JSON.stringify(summary)}\n${meaning} Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\n`
-    + accessibilityPressNote(summary.steps)
+    + (summary.steps.at(-1)?.recoveryHint ? summary.steps.at(-1)!.recoveryHint + '\n' : accessibilityPressNote(summary.steps))
     + strict;
 }
 

@@ -805,7 +805,14 @@ final class Canvas: NSView {
 		// 点在了哪儿:按点下去那一刻屏幕上的 layout 找(最小的那个包含这个点的条目)
 		log("click", "\(Int(p.x.rounded())),\(Int(p.y.rounded())) x\(count) → \(hitLabel(p))")
 		defer { changed() }
+		if CommandLine.arguments.contains("--foreground-navigation"), !NSApp.isActive, page == .home {
+			log("requiresForeground", "home"); return
+		}
 		// The cross-Space regression opens another real window without repainting the source.
+		if options.inactiveSpace && p.x > W * 0.90 && p.y >= H * 0.10 && p.y <= H * 0.14 {
+			if NSApp.isActive { log("foregroundClick", "pressed") }
+			return
+		}
 		if options.inactiveSpace && p.x > W * 0.90 && p.y > H * 0.15 && p.y < H * 0.20 {
 			if detailsWindow == nil {
 				detailsWindow = NSWindow(contentRect: NSRect(x: 120, y: 140, width: 280, height: 120),
@@ -1295,6 +1302,13 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 		window.isRestorable = false
 		window.isReleasedWhenClosed = false
 		window.contentView = canvas
+		if options.inactiveSpace && CommandLine.arguments.contains("--test-button") {
+			let button = NSButton(title: "Background test", target: self, action: #selector(testPress))
+			button.frame = NSRect(x: 550, y: 58, width: 140, height: 27)
+			canvas.addSubview(button)
+			canvas.extra["testButton"] = rectDict(button.frame)
+			canvas.extra["originalFrontPid"] = NSWorkspace.shared.frontmostApplication?.processIdentifier
+		}
 		window.delegate = self
 		if let f = options.frame, let ph = NSScreen.screens.first?.frame.height {
 			window.setFrame(NSRect(x: f.minX, y: ph - f.minY - f.height, width: f.width, height: f.height), display: false)
@@ -1324,7 +1338,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 		canvas.save()
 	}
 	// Test setup only. The window owner can place its own fixture on an existing Space.
-	// The product helper never moves windows or changes the user's active Space.
+	// Background delivery leaves this placement unchanged.
 	func prepareInactiveSpace() {
 		guard let library = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY),
 			let connection = dlsym(library, "SLSMainConnectionID"), let list = dlsym(library, "SLSCopyManagedDisplaySpaces"),
@@ -1338,6 +1352,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 		let ids = [NSNumber(value: window.windowNumber)] as CFArray
 		unsafeBitCast(move, to: (@convention(c) (Int32, CFArray, UInt64) -> Void).self)(cid, ids, other)
 		let actual = unsafeBitCast(membership, to: (@convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>).self)(cid, 7, ids).takeRetainedValue()
+		canvas.extra["activeTestSpace"] = current
 		canvas.extra["spaceTest"] = ["current": current, "target": other, "membership": actual]
 		// A test can move its own window back without activating this process or changing the user's Space.
 		signal(SIGUSR2, SIG_IGN)
@@ -1351,6 +1366,8 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 		returnToSpace?.resume()
 		let center = NSWorkspace.shared.notificationCenter
 		center.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+			let managed = unsafeBitCast(list, to: (@convention(c) (Int32) -> Unmanaged<CFArray>).self)(cid).takeRetainedValue() as NSArray
+			self?.canvas.extra["activeTestSpace"] = ((managed.firstObject as? [String: Any])?["Current Space"] as? [String: Any])?["ManagedSpaceID"]
 			self?.canvas.log("spaceChanged", ""); self?.canvas.save()
 		}
 		center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
@@ -1358,6 +1375,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 			self?.canvas.log("frontChanged", String(app.processIdentifier)); self?.canvas.save()
 		}
 	}
+	@objc func testPress() { canvas.log("axButton", "pressed"); canvas.changed() }
 	func show() {
 		if options.behind { window.orderBack(nil) } else { window.orderFrontRegardless() }
 		if options.inactiveSpace { prepareInactiveSpace() }
