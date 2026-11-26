@@ -1,3 +1,4 @@
+import { clickReceipt, forgetClick, recoveryExhausted, rememberClick, sameClick } from "../backgroundRecovery.ts";
 import { reportLaunchForeground } from "../overlayState.ts";
 import { browserConversation, browserOwner, launchManagedBrowser, closeManagedBrowsers } from "../managedBrowser.ts";
 import { randomUUID } from "node:crypto";
@@ -6,7 +7,7 @@ import { access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { canRetryInForeground, isBackgroundPointer, keysFollow, needsFrontmostProbe, pointerMissesAfter, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
+import { canRetryInForeground, isBackgroundPointer, keysFollow, needsFrontmostProbe, backgroundPointerOutcome, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpViewportForContext, cdpViewportStamp, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
 import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig, operationConfig } from "./config.ts";
 import { applyWheelFix, wheelFix } from "../wheel.ts"; // Forsion patch, see UPSTREAM.md
@@ -56,6 +57,7 @@ interface ExecutionTrace {
 	steps?: ExecutionTrace[];
 	actionCount?: number;
 	stoppedAt?: number;
+	recoveryHint?: string;
 	backgroundFirst?: boolean;
 	accessibilityPress?: boolean;
 	/** Forsion patch. This press showed no change in the page: "current_screenshot" after its window was brought forward, "no_screenshot" when it could not be. */
@@ -266,6 +268,7 @@ interface ResolvedTarget extends CurrentTarget {
 }
 
 interface WindowRefRecord {
+	provisionalId?: boolean;
 	ref: string;
 	appName: string;
 	bundleId?: string;
@@ -649,8 +652,8 @@ function assertBrowserUseAllowed(target: { appName: string; bundleId?: string })
 	}
 }
 
-function windowRecordIdentity(record: Pick<WindowRefRecord, "pid" | "windowId" | "nativeWindowRef" | "windowTitle" | "framePoints">): string {
-	if (record.windowId && record.windowId > 0) {
+function windowRecordIdentity(record: Pick<WindowRefRecord, "pid" | "windowId" | "nativeWindowRef" | "windowTitle" | "framePoints" | "provisionalId">): string {
+	if (!record.provisionalId && record.windowId && record.windowId > 0) {
 		return `pid:${record.pid}|id:${record.windowId}`;
 	}
 	if (record.nativeWindowRef) {
@@ -695,6 +698,8 @@ function storeWindowRefForTarget(target: ResolvedTarget): string {
 		pid: target.pid,
 		windowTitle: target.windowTitle,
 		windowId: target.windowId > 0 ? target.windowId : undefined,
+		nativeWindowRef: target.nativeWindowRef,
+		provisionalId: target.provisionalId,
 		framePoints: target.framePoints,
 		scaleFactor: target.scaleFactor,
 		isMinimized: target.isMinimized,
@@ -702,6 +707,10 @@ function storeWindowRefForTarget(target: ResolvedTarget): string {
 		isMain: target.isMain,
 		isFocused: target.isFocused,
 	}).ref;
+}
+
+function provisionalWindowId(window: HelperWindow): boolean {
+	return currentPlatformBackend.name === "macos" && !!window.windowRef?.startsWith("w") && platformRootPairing(window)?.confidence !== "exact";
 }
 
 function storeWindowRefForAppWindow(app: HelperApp, window: HelperWindow): WindowRefRecord {
@@ -712,6 +721,7 @@ function storeWindowRefForAppWindow(app: HelperApp, window: HelperWindow): Windo
 		windowTitle: window.title || "(untitled)",
 		windowId: window.windowId,
 		nativeWindowRef: window.windowRef,
+		provisionalId: provisionalWindowId(window),
 		framePoints: window.framePoints,
 		scaleFactor: window.scaleFactor,
 		isMinimized: window.isMinimized,
@@ -767,6 +777,7 @@ function toResolvedTarget(app: HelperApp, window: HelperWindow): ResolvedTarget 
 		windowTitle: window.title || "(untitled)",
 		windowId: typeof window.windowId === "number" ? window.windowId : 0,
 		nativeWindowRef: window.windowRef,
+		provisionalId: provisionalWindowId(window),
 		framePoints: window.framePoints,
 		scaleFactor: window.scaleFactor,
 		isMinimized: window.isMinimized,
@@ -792,6 +803,7 @@ function setCurrentTarget(target: ResolvedTarget): void {
 		windowId: target.windowId,
 		windowRef,
 		nativeWindowRef: target.nativeWindowRef,
+		provisionalId: target.provisionalId,
 	};
 }
 
@@ -816,10 +828,10 @@ async function resolveTargetByWindowSelector(selector: RootSelector, signal?: Ab
 	if (fromRef) {
 		const app: HelperApp = { appName: fromRef.appName, bundleId: fromRef.bundleId, pid: fromRef.pid };
 		const windows = await listWindows(fromRef.pid, signal);
-		const match =
-			(fromRef.windowId ? windows.find((window) => window.windowId === fromRef.windowId) : undefined) ??
-			(fromRef.nativeWindowRef ? windows.find((window) => window.windowRef === fromRef.nativeWindowRef) : undefined) ??
-			windows.find((window) => normalizeText(window.title || "(untitled)") === normalizeText(fromRef.windowTitle));
+		const match = fromRef.provisionalId ? windows.find(window => window.windowRef === fromRef.nativeWindowRef)
+			: fromRef.windowId ? windows.find(window => window.windowId === fromRef.windowId)
+			: fromRef.nativeWindowRef ? windows.find(window => window.windowRef === fromRef.nativeWindowRef)
+			: windows.find(window => normalizeText(window.title || "(untitled)") === normalizeText(fromRef.windowTitle));
 		if (!match) {
 			throw new Error(`Root ref '${normalized}' is stale. Call find_roots again and choose a current window.`);
 		}
@@ -872,9 +884,10 @@ async function resolveCurrentTarget(signal?: AbortSignal): Promise<ResolvedTarge
 
 	const hadStableWindowId = current.windowId > 0;
 	const titleQuery = normalizeText(current.windowTitle);
-	let match = current.nativeWindowRef ? windows.find((window) => window.windowRef === current.nativeWindowRef || window.rootRef === current.nativeWindowRef) : undefined;
-	match ??= hadStableWindowId ? windows.find((window) => window.windowId !== undefined && window.windowId === current.windowId) : undefined;
-	if (!match) {
+	let match = current.provisionalId ? windows.find(window => window.windowRef === current.nativeWindowRef)
+		: hadStableWindowId ? windows.find(window => window.windowId === current.windowId)
+		: current.nativeWindowRef ? windows.find(window => window.windowRef === current.nativeWindowRef || window.rootRef === current.nativeWindowRef) : undefined;
+	if (!match && !hadStableWindowId) {
 		const exactTitleMatches = titleQuery && titleQuery !== "(untitled)" ? windows.filter((window) => normalizeText(window.title) === titleQuery) : [];
 		if (exactTitleMatches.length === 1) {
 			match = exactTitleMatches[0];
@@ -1052,7 +1065,9 @@ async function buildToolResult(
 	if (state.pixelsOnly) {
 		const image = result.look.image;
 		if (!image?.jpegBase64) throw new Error("The target window did not supply a screenshot. Observe it again before acting.");
-		const message = `Screenshot only for ${result.target.windowRef ?? result.target.appName}. State ${result.capture.stateId}. Use one action with the image coordinates. Check the next image for the outcome.`;
+		const opened = (execution.rootDelta ?? []).filter(delta => delta.change === "appeared" && delta.pid === result.target.pid && delta.ref);
+		const nextWindows = opened.map(delta => `New root: ${delta.kind} (${delta.ref}). Use observe_ui with this root and mode "pixels" to inspect its screenshot before another click.`);
+		const message = `Screenshot only for ${result.target.windowRef ?? result.target.appName}. State ${result.capture.stateId}. Use one action with the image coordinates. Check the next image for the outcome.` + (nextWindows.length ? "\n" + nextWindows.join("\n") : "");
 		return { content:[{type:"text", text:message}, {type:"image", mimeType:image.mimeType ?? "image/jpeg", data:image.jpegBase64}],
 			details:{tool, pixelsOnly:true, root:{ref:result.target.windowRef || result.target.appName}, target:{app:result.target.appName, pid:result.target.pid, windowId:result.target.windowId, windowTitle:result.target.windowTitle, windowRef:result.target.windowRef},
 				capture:{...result.capture, coordinateSpace:"window-relative-screenshot-pixels"}, view:"full", activation:result.activation,
@@ -1217,17 +1232,6 @@ async function wheelAction(target: ResolvedTarget, action: NativePreparedAction,
 }
 
 /**
- * Background pointer input that changed nothing on screen, in a row, per pid + kind ("click" / "scroll"). At two,
- * later ones go straight to the foreground instead of paying the helper's screenshot wait again (CEF apps such as
- * NetEase Cloud Music ignore it every time). One miss is not enough: a click that legitimately changes nothing
- * (an already-selected row) would otherwise take the whole app to the foreground for good.
- * ponytail: per-process count for the life of the engine. Chromium apps swallow only the first background click
- * (it makes the window key) and take later ones; a second miss gives that up. Upgrade to "retry background after
- * N foreground actions" if it matters.
- */
-const backgroundPointerMisses = new Map<string, number>();
-
-/**
  * Forsion patch, see UPSTREAM.md. The element the last AXPress went to. An AXPress that lands can look exactly like one
  * that did nothing, and replaying it could submit twice, so nothing is retried here: the press stays one press, and the
  * model pressing the same element again is what sends a real click. That click stays the route for the element until
@@ -1310,7 +1314,45 @@ async function helperAct(
 	const timeoutMs = Math.max(COMMAND_TIMEOUT_MS, textTimeout);
 	if (currentPlatformBackend.name === "macos" && !target.isOnscreen) headless = true;
 	const pointer = isBackgroundPointer(action);
-	const pointerKey = `${target.pid}:${action.action === "scroll" ? "scroll" : "click"}`;
+	const look = currentLookOrThrow();
+	const point = currentPlatformBackend.name === "macos" && pointer && action.action !== "scroll" && "x" in action.target && look.image
+		? { x: action.target.x / look.image.width, y: action.target.y / look.image.height } : undefined;
+	let receipt = clickReceipt(target);
+	if (receipt?.phase === "blocked") throw recoveryExhausted("No input sent. The exact window could not be recovered. Report the blocked step.");
+	if (receipt?.phase === "raising") throw new Error("No input sent. Recovery for this window is unavailable. Stop and report the blocked step.");
+	if (receipt && receipt.phase !== "foreground" && point && look.image && "x" in action.target
+		&& pictureChangedNear(receipt.picture, look.image.grid, { x: action.target.x, y: action.target.y, w: 1, h: 1 })) {
+		forgetClick(target);
+		receipt = undefined;
+	}
+	const same = point && receipt && sameClick(point, receipt.point);
+	const recoveryCall = `ensure_app(${JSON.stringify({ ...(target.bundleId ? {bundleId: target.bundleId} : {app: target.appName}), foregroundRoot: target.windowRef })})`;
+	const strict = isHeadlessMode();
+	if (same && receipt?.phase === "sent") throw recoveryExhausted("No input sent. Foreground recovery for this control is unavailable. Stop and report the blocked step.");
+	if (same && receipt?.phase === "background" && receipt.retries >= 2) {
+		if (strict || !receipt.verifiedWindow || receipt.repeatRefused) throw recoveryExhausted("No input sent. Repeated background click could not be verified. Stop and report the blocked step.");
+		receipt.repeatRefused = true;
+		throw new Error(`No input sent. This control has already been clicked twice without confirmation. If the requested change is absent, use ${recoveryCall} once, then inspect the new screenshot. Do not try more nearby coordinates.`);
+	}
+	if (point && receipt?.phase === "foreground") {
+		const snapshot = operationState().currentCapture;
+		if (!snapshot || !receipt.freshCapture || (snapshot.stateId !== receipt.freshCapture.stateId && snapshot.timestamp <= receipt.freshCapture.timestamp)) {
+			throw new Error("No click sent. Use the new screenshot stateId returned by foreground recovery, or observe the window again.");
+		}
+		receipt.phase = "blocked";
+		if (headless || !await targetHoldsFocus(target, signal)) throw new Error("No input sent. The recovered window lost focus. Stop and report the blocked step.");
+		const sent = checked(await currentPlatformBackend.act({ ...helperActRequest(target, action, "foreground"), recoveredWindow: target.windowId }, { signal, timeoutMs }));
+		const trace = executionTraceFromAct(sent, "foreground");
+		if (!trace.error) { receipt.phase = "sent"; receipt.point = point; receipt.picture = look.image?.grid; }
+		trace.backgroundFirst = true;
+		trace.escalatedToForeground = true;
+		trace.escalationReason = "verified_window_recovery";
+		if (trace.outcome === "worked") forgetClick(target);
+		else trace.recoveryHint = "Inspect the returned screenshot. If the requested result is still missing, stop and report the blocked step.";
+		return trace;
+	}
+	if (!point || !same) forgetClick(target);
+
 	const pressKey = currentPlatformBackend.name === "macos" && (action.action === "press" || action.action === "click") && action.accessibilityPress !== undefined
 		? `${target.pid}:${target.windowId}:${action.accessibilityPress}`
 		: undefined;
@@ -1318,7 +1360,7 @@ async function helperAct(
 	const accessibilityPress = pressKey !== undefined && (inCall ? inCall === "accessibility" : pressKey !== lastAccessibilityPress);
 	// The repeat is the real click the result promised. Through background first it can land as a hover-less pid click and then be replayed.
 	const repeatedPress = pressKey !== undefined && !accessibilityPress;
-	if ((action.usesCurrentFocus || action.needsForeground || repeatedPress || (pointer && (backgroundPointerMisses.get(pointerKey) ?? 0) >= 2)) && !headless) {
+	if ((action.usesCurrentFocus || action.needsForeground || repeatedPress) && !headless) {
 		const sent = await wheelAction(target, action, signal);
 		const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, sent, "foreground"), { signal, timeoutMs }));
 		if (repeatedPress && !inCall) pressedInCall?.set(pressKey!, "real");
@@ -1334,8 +1376,8 @@ async function helperAct(
 			lastAccessibilityPress = pressKey;
 			if (!inCall) pressedInCall?.set(pressKey!, "accessibility");
 		}
-		if (pointer) backgroundPointerMisses.set(pointerKey, pointerMissesAfter(backgroundPointerMisses.get(pointerKey) ?? 0, result.outcome));
-		if (canRetryInForeground(action, result.outcome, headless)) {
+		if (pointer) result.outcome = backgroundPointerOutcome(result, target.pid);
+		if (!point && canRetryInForeground(action, result.outcome, headless)) {
 			const retry = pointer ? await wheelAction(target, action, signal) : action;
 			const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, retry, "foreground"), { signal, timeoutMs }));
 			const trace = executionTraceFromAct(foreground, "foreground");
@@ -1350,6 +1392,15 @@ async function helperAct(
 		const trace = executionTraceFromAct(result, "background");
 		trace.backgroundFirst = true;
 		trace.accessibilityPress = accessibilityPress;
+		if (point && !trace.error && trace.outcome !== "worked" && (trace.delivery === "pid" || trace.delivery === "ax")
+			&& !trace.rootDelta?.some(delta => delta.change === "appeared" || delta.change === "closed")) {
+			const exact = look.window.windowId === target.windowId && (look.window.rootRef === `cgwindow:${target.pid}:${target.windowId}`
+				|| (look.window.metadata?.pairing as {confidence?: string} | undefined)?.confidence === "exact");
+			rememberClick(target, point, look.image?.grid, exact);
+			trace.recoveryHint = !exact ? "The original window identity could not be verified. If the requested result is missing, stop the blocked step." : strict
+				? "If the requested change is absent after observing, stop and report the blocked step. Strict background is enabled."
+				: `If the requested change is absent on the successor screenshot, use ${recoveryCall} once. It can switch Spaces and shows Mini. Inspect the fresh image before clicking. If recovery fails, stop and report the blocked step.`;
+		} else if (point) forgetClick(target);
 		return trace;
 	} catch (error) {
 		const code = (error as Error & { code?: string })?.code;
@@ -2106,12 +2157,20 @@ async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget
 	// Strict-headless batches have one immutable delivery class. When foreground
 	// fallback is permitted, decide independently per action so a completed
 	// background prefix is never replayed as part of a foreground batch.
-	if (headless && currentPlatformBackend.actBatch) {
+	const singleMacClick = currentPlatformBackend.name === "macos" && actions.length === 1 && actions[0].action === "click" && actions[0].x !== undefined;
+	if (headless && currentPlatformBackend.actBatch && !singleMacClick) {
 		const actionState: ActionState = { currentFocus: false };
 		const requests = actions.map((action) => helperActRequest(target, scrollInPoints(prepareUiAction(action, actionState, look, true) as NativePreparedAction, target, look), "ax_only"));
 		const textLength = actions.reduce((sum, action) => sum + (action.text?.length ?? 0), 0);
 		const result = await currentPlatformBackend.actBatch(requests, { signal, timeoutMs: Math.max(COMMAND_TIMEOUT_MS, textLength * 25 + 6_000) });
 		if (!result.steps || result.steps.length === 0) throw new Error("Native action transaction returned no checked steps.");
+		// The helper collects window changes once per transaction. Only a single dispatched
+		// step can inherit that evidence without attributing another action's effect to it.
+		if (result.steps.length === 1 && requests[0] && ["press", "click", "scroll"].includes(requests[0].action) && "x" in requests[0].target) {
+			const step = result.steps[0];
+			const outcome = backgroundPointerOutcome({ ...step, rootDelta: result.rootDelta, performed: { ...step.performed, deltaSource: result.performed?.deltaSource } }, target.pid);
+			if (step.outcome !== outcome) step.outcome = result.outcome = outcome;
+		}
 		const execution = aggregateExecutions(result.steps.map((step) => executionTraceFromAct(step, "ax_only")));
 		const batchTrace = executionTraceFromAct(result, "ax_only");
 		if (result.outcome !== "worked") execution.outcome = result.outcome;

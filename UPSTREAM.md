@@ -44,6 +44,8 @@ debugging port from that profile and cleans it up on close. The managed browser 
 clicks and editing. The first observation includes control refs and successful conditions return
 the snapshot used for verification. Keep these adaptations when resyncing upstream.
 
+On macOS, preserve exact WindowServer IDs across Spaces. Keep geometry-derived AX pairings tied to the original AX window ref. Coordinate clicks try the app’s hit-tested accessibility action or window-addressed PID input. A per-run receipt limits unconfirmed repeats. When foreground recovery is enabled, `ensure_app` can raise the exact window after an unconfirmed click. The next physical click requires a fresh capture and rechecks window ownership, focus, coverage, frame and cancellation before each mouse-down. `scripts/mac-spaces.check.mjs` exercises background and foreground delivery across two real desktops, including `--strict` and `--recover`.
+
 ### Tangu adaptation layer (NOT vendored — hand-written)
 - `src/pi-compat.ts` — the pi shim (only the shapes vendor actually uses).
 - `src/tools.ts` — upstream's 11 `defineTool` → Tangu `ToolDef[]`; typebox schema hand-translated
@@ -120,9 +122,10 @@ replay it** (`npm run check:actions`, part of `npm run check`, goes red if it is
   go straight to the foreground because a pid-posted wheel event reached a self-drawn view 0 times (Forsion
   feedback 55b984eb); the cause was the missing window number, not the pid delivery
   (`scripts/pid-window.probe.mjs`, 10-17). `unknown` still never escalates (it may have landed).
-  `helperAct()` in `bridge.ts` counts, per pid and kind (click / scroll), background attempts in a row that
-  changed nothing on screen; at two it sends later ones straight to the foreground (`backgroundPointerMisses`;
-  one miss is not enough, a click on an already-selected row changes nothing too).
+  Each new click or scroll tries the background again. A new or closed target window, focus transition,
+  or window notification during a pixel-verified action leaves the outcome unconfirmed. Inspect the
+  successor state before repeating input. The macOS regression in `scripts/mac-spaces.check.mjs`
+  checks background delivery after two misses in the same process.
 - `scrollInPoints()` in `bridge.ts`, applied in `dispatchUiAction()` (macOS, coordinate scroll): the distance
   is given in the screenshot's pixels, like `x` / `y`, and converted to the screen points the helper scrolls
   in (`framePoints.w / look.image.width`). Upstream passes it through raw, so the same number means twice

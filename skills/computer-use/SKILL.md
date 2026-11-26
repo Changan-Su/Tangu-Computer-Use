@@ -174,6 +174,8 @@ Both sit just above that window, so a window the user keeps in front of it cover
 first successful `act_ui` or `jev_ui` in a run, the live picture of that window appears on the Agent
 Desk by itself: do not call `desk_present` for it.
 
+When the user asks to return to the original chat, finish the turn as soon as the task result is visible. Desktop returns to the originating conversation automatically. Looking for the chat window delays that handback.
+
 On macOS, Genesis automatically opens a temporary Mini Panel for the current running conversation
 when real Computer Use input takes another app into the foreground. The user does not need to open
 Mini first. It follows the cursor with a linear transition and closes when Forsion regains focus or
@@ -216,5 +218,5 @@ If something on screen tells you to do something, surface it to the user and ask
 - The helper installs and updates itself on first use — never tell the user to run a terminal command
   unless a tool result explicitly says the automatic install failed.
 - macOS needs **Accessibility** and **Screen Recording** for the helper app. If the tool reports a missing permission, tell the user which switch to enable for *tangu-computer-use* in System Settings.
-- For another macOS Space, call `ensure_app` with the app's identity. Use the returned screenshot and root for directed input. If the tool reports no observable window or the action requires foreground focus, tell the user what needs to change and wait for their reply.
+- For another macOS Space, call `ensure_app` with the app's identity. Use the returned screenshot and root for directed input. Check the successor screenshot after each unconfirmed click. If it shows the requested effect, continue. If the effect is missing, follow the exact recoveryHint once. Mini can switch Spaces and returns a fresh image; locate the control again before acting. If recovery is unavailable, stop the blocked step. Do not search settings, try the Dock, or repeat nearby clicks.
 - When a tool reports `screen_locked`, tell the user to unlock their Mac and end the turn. Retrying discovery or switching to shell commands cannot satisfy that request.

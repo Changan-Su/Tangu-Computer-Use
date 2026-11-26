@@ -1,5 +1,10 @@
 # 更新日志
 
+## 0.7.6
+
+- macOS 跨桌面时按目标窗口匹配可后台触发的按钮，自绘区域继续按窗口投递。两次相同位置的后台点击仍未确认时停止重复，允许前台的任务可用 Mini 切到目标窗口，重新看图再操作。
+- macOS resolves background controls inside the target window across Spaces. Unconfirmed clicks have a bounded retry, with a fresh screenshot when foreground recovery is allowed.
+
 ## 0.7.4 — 2026-11-18
 
 - 操控电脑时的显示效果改版。macOS 的 helper 协议号从 19 升到 20，插件更新后会换上新 helper。要配合桌面 2.14.2 起的版本才看得到实时画面卡和对话里的新写法；老桌面上照常能用，只是看不到这几处。

@@ -10,7 +10,7 @@ import type { PlatformDiagnostics } from "../types.ts";
 import { resolveMacosHelperAppPath } from "./helper-path.mjs";
 
 const COMMAND_TIMEOUT_MS = 15_000;
-const HELPER_PROTOCOL_VERSION = 21;
+const HELPER_PROTOCOL_VERSION = 22;
 const HELPER_SETUP_TIMEOUT_MS = 60_000;
 
 export const HELPER_BUNDLE_ID = "com.forsion.tangu-computer-use";
@@ -175,6 +175,7 @@ export class MacosHelperClient {
 	}
 
 	async daemonCommand<T>(cmd: string, args: Record<string, unknown>, timeoutMs: number, signal?: AbortSignal): Promise<T> {
+		throwIfAborted(signal);
 		return await new Promise<T>((resolve, reject) => {
 			const id = `req_${++this.requestSequence}`;
 			const socket = net.createConnection(HELPER_SOCKET_PATH);

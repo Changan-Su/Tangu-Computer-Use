@@ -101,8 +101,9 @@ export const macosBackend: Pick<ComputerUsePlatformBackend, "listApps" | "listRo
 		return await macosHelper.command<PlatformFocusWindowResult>("focusWindow", { ...target }, { signal });
 	},
 
-	async activateWindow(target: { pid: number; windowId: number; windowRef?: string }, signal?: AbortSignal): Promise<boolean> {
-		const activated = await macosHelper.command<{ appRestored?: boolean; offSpace?: boolean }>("restoreUserFocus", { pid: target.pid, windowId: target.windowId, runId: currentOverlayRunId() }, { signal });
+	async activateWindow(target: { pid: number; windowId: number; windowRef?: string; recoverBackgroundClick?: boolean }, signal?: AbortSignal): Promise<boolean> {
+		const activated = await macosHelper.command<{ appRestored?: boolean; offSpace?: boolean }>("restoreUserFocus", { pid: target.pid, windowId: target.windowId, recoverBackgroundClick: target.recoverBackgroundClick, runId: currentOverlayRunId() }, { signal });
+		if (target.recoverBackgroundClick) return activated.appRestored === true;
 		if (activated.offSpace) return false;
 		await macosHelper.command("focusWindow", { ...target, requireOnscreen: true }, { signal });
 		return activated.appRestored === true;

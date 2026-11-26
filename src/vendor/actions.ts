@@ -1,4 +1,5 @@
 import type { MouseButtonName, UiAction } from "./contract.ts";
+import type { HelperActResult } from "./platform/types.ts";
 import type { OutlineNode } from "./outline.ts";
 import { toFiniteNumber } from "./platform/coerce.ts";
 
@@ -205,13 +206,18 @@ export function canRetryInForeground(action: PreparedAction, outcome: "worked" |
 }
 
 /** A coordinate left click or scroll that goes to the background first (see needsForeground in prepareAction). */
-/** Background pointer misses in a row once this outcome is in: "didnt" adds one, anything else ("worked", or "unknown", which may have landed) starts over. */
-export function pointerMissesAfter(misses: number, outcome: string): number {
-	return outcome === "didnt" ? misses + 1 : 0;
-}
-
 export function isBackgroundPointer(action: PreparedAction): boolean {
 	return (action.action === "click" || action.action === "press" || action.action === "scroll") && "x" in action.target && !action.needsForeground;
+}
+
+/** A click can open a second window without repainting the source window. */
+export function backgroundPointerOutcome(result: HelperActResult, pid: number): HelperActResult["outcome"] {
+	if (!result.error && result.outcome === "didnt" && result.performed?.delivery === "pid" && result.performed.verification === "pixels" &&
+		(result.performed.deltaSource === "cg-poll" || result.performed.deltaSource === "events" ||
+		result.rootDelta?.some(root => root.change === "focused" || (root.pid === pid && (root.change === "appeared" || root.change === "closed"))))) {
+		return "unknown";
+	}
+	return result.outcome;
 }
 
 export function outcomeAfterCheck(current: "worked" | "didnt" | "unknown", check: "verified" | "preexisting" | "failed"): "worked" | "didnt" | "unknown" {

@@ -17,6 +17,7 @@
  */
 
 interface ExecStep {
+  recoveryHint?: string;
   outcome?: string;
   error?: { code?: string; message?: string };
   performed?: { delivery?: string; grounding?: string; verification?: string };
@@ -39,6 +40,7 @@ export function executionSummary(details: unknown) {
   if (!exec || (!exec.outcome && !exec.error)) return undefined;
   // 「没有再按」的那次结果没有送出任何动作,不列步骤。
   const steps = (exec.earlierPressTookEffect ? [] : exec.steps?.length ? exec.steps : [exec]).map(s => ({
+    recoveryHint: s.recoveryHint,
     outcome: s.outcome ?? 'unknown',
     delivery: s.delivery ?? s.performed?.delivery ?? 'unknown',
     policy: s.deliveryPolicy ?? 'unknown',
@@ -79,12 +81,13 @@ export function executionNote(details: unknown): string {
     return `[execution] ${JSON.stringify(summary)}\nNothing was sent this time. The earlier press of this element showed no change in its result; since then ${moved}, so that press most likely took effect late. Check the returned state before anything else: if it shows the result you wanted, continue. If it shows the press did nothing, press the element once more; that one goes out as a real click.\n` + strict;
   }
   const meaning = summary.error || summary.outcome === 'didnt'
-    ? 'The executor reported a failure. Check the error and current state before deciding what to do.'
+    ? 'The executor reported a failure. Check any new window and the current screenshot before another action. Keep input in Computer Use so its native helper can manage foreground fallback. Do not use shell commands to activate the application.'
     : summary.outcome === 'unknown'
       ? 'The input was attempted; its effect is UNVERIFIED, not proven failed. A canvas can change without accessibility confirmation. Inspect the returned state before any retry, including a retry with another tool.'
       : 'The native executor confirmed this action; still verify the requested task result.';
   return `[execution] ${JSON.stringify(summary)}\n${meaning} Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\n`
-    + accessibilityPressNote(summary.steps)
+    + (summary.steps.at(-1)?.recoveryHint ? summary.steps.at(-1)!.recoveryHint + '\n' : accessibilityPressNote(summary.steps))
+    + (summary.strictBackground === false ? 'When the requested result is visible, finish the turn. Desktop automatically returns to the originating conversation.\n' : '')
     + strict;
 }
 
