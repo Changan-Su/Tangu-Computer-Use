@@ -202,7 +202,7 @@ References: [Images](https://docs.typesafe.ai/images), [Box](https://docs.typesa
 [Choice](https://docs.typesafe.ai/primitives/choice), [Noul](https://docs.typesafe.ai/primitives/noul).
 
 `find_roots` · `observe_ui` · `search_ui` · `expand_ui` · `inspect_ui` · `act_ui` · `ensure_app` ·
-`read_text` · `wait_for` · `launch_browser` · `navigate_browser` · `evaluate_browser`
+`allow_foreground_for_this_task` · `jev_ui` (optional) · `read_text` · `wait_for` · `launch_browser` · `navigate_browser` · `evaluate_browser`
 
 All are host-only (require `hostExec`) and gated on the plugin being enabled + a supported platform.
 Action tools (`act_ui`, `launch/navigate/evaluate_browser`) require approval (same tier as `run_bash`);
@@ -252,6 +252,8 @@ and their existing logins. For a canvas or a screenshot-only task, launch with `
 - **managed_browser** (default Chrome) — which browser `launch_browser` starts.
 - **headless / 严格后台** (default on) — actions stay in the background; no foreground focus grab or
   cursor move. Things the background genuinely cannot do then fail instead of stealing focus.
+  Turning strict background off makes foreground approval available. The user approves it in the current task before the plugin may activate a window, start a native app that could activate itself, or use foreground input. Older hosts that cannot confirm the approval keep background-only behavior.
+  关闭严格后台后，仍需在本次用户任务里批准接管。已运行的 macOS 应用可以用中文名调用 `ensure_app`，只有一个窗口时会一并返回首张截图。应用还未启动或窗口收起时，也可以手动打开后继续。
 - **cursor_overlay / 操作可视化** (default on) — the agent cursor *and* the controlled-window edge glow.
 
 ## Development
@@ -260,6 +262,7 @@ and their existing logins. For a canvas or a screenshot-only task, launch with `
 npm install
 npm run build          # esbuild → tangu-plugins/computer-use/dist/index.js  +  tsc --noEmit
 npm run check          # foreground note · helper path · highlight geometry · desktop plugin
+npm run check:mac-app -- 网易云音乐 com.netease.163music  # sample focus while observing a running app
 npm run check:live     # real machine, needs an authorized helper:
                        #   check:blindclick  background click lands without taking the foreground
                        #   check:liveview    the live view really streams, at the window's aspect

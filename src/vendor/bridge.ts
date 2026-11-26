@@ -77,6 +77,8 @@ interface ExecutionTrace {
 }
 
 interface ComputerUseDetails {
+	pixelsOnly?: true;
+	root?: { ref: string };
 	tool: string;
 	target: {
 		app: string;
@@ -1051,7 +1053,7 @@ async function buildToolResult(
 		if (!image?.jpegBase64) throw new Error("The target window did not supply a screenshot. Observe it again before acting.");
 		const message = `Screenshot only for ${result.target.windowRef ?? result.target.appName}. State ${result.capture.stateId}. Use one action with the image coordinates. Check the next image for the outcome.`;
 		return { content:[{type:"text", text:message}, {type:"image", mimeType:image.mimeType ?? "image/jpeg", data:image.jpegBase64}],
-			details:{tool, target:{app:result.target.appName, pid:result.target.pid, windowId:result.target.windowId, windowTitle:result.target.windowTitle, windowRef:result.target.windowRef},
+			details:{tool, pixelsOnly:true, root:{ref:result.target.windowRef || result.target.appName}, target:{app:result.target.appName, pid:result.target.pid, windowId:result.target.windowId, windowTitle:result.target.windowTitle, windowRef:result.target.windowRef},
 				capture:{...result.capture, coordinateSpace:"window-relative-screenshot-pixels"}, view:"full", activation:result.activation,
 				execution, config:getComputerUseConfig()} };
 	}
@@ -2755,7 +2757,9 @@ function makeToolExecutor<P, D>(tool: string, perform: (params: P, signal?: Abor
 		_onUpdate: AgentToolUpdateCallback<D> | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<D>> => {
-		return operationConfig.run(loadComputerUseConfig(ctx.cwd), () => browserConversation.run(ctx.browserOwner ?? "standalone", async () => {
+		const loaded = loadComputerUseConfig(ctx.cwd);
+		const policy = ctx.foregroundAllowed === false ? { ...loaded, config: { ...loaded.config, headless: true } } : loaded;
+		return operationConfig.run(policy, () => browserConversation.run(ctx.browserOwner ?? "standalone", async () => {
 			const browser = toolSurface(tool, params as Record<string, unknown>) === "browser";
 			try {
 				return applyOutputEnvelope(tool, await executeTool(tool, ctx, params, signal, () => perform(params, signal)), browser);

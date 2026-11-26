@@ -288,7 +288,10 @@ try {
   assert.match(refused, /strict background setting forbids/, `④ 严格后台下 ensure_app 不该激活,实得:${refused}`)
   assert.ok(!state().visible && (await frontmost()).pid !== boot.pid, '④ 严格后台下窗口不该回来、前台不该变')
   // 按路径给(临时目录里的 App 没在 LaunchServices 登记,open -b 找不到它);ensure_app 按名字那一段认出它已经在跑。
-  const back = await cu.runEnsureApp({ app: APP }, tcx, pctx)
+  const withoutGrant = await cu.runEnsureApp({ app: APP }, tcx, pctx)
+  assert.match(withoutGrant, /allow_foreground_for_this_task/)
+  assert.ok(!state().visible && (await frontmost()).pid !== boot.pid, 'No activation without a task grant even when strict background is off')
+  const back = await cu.runEnsureApp({ app: APP }, tcx, { ...pctx, foregroundAllowed: true })
   assert.match(back, /@r\d/, `④ ensure_app 应把窗口带回来,实得:${back}`)
   assert.match(back, /brought to the foreground/, `④ 后台打开不管用时应激活并如实说,实得:${back}`)
   assert.ok(state().visible, '④ 窗口真的回来了')

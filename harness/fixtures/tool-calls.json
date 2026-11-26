@@ -617,6 +617,14 @@
         "app": "Notes"
       },
       "result": "Opened Notes, but no window is observable yet. Give it a moment and call observe_ui.\nNo roots matched the supplied filters."
+    },
+    {
+      "id": "foregroundGrant",
+      "tool": "allow_foreground_for_this_task",
+      "args": {
+        "reason": "Show the hidden music player window."
+      },
+      "result": "Foreground control is approved for this task only. Continue with the target app."
     }
   ]
 }

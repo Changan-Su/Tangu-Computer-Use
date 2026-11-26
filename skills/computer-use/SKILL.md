@@ -1,7 +1,7 @@
 ---
 name: Desktop app control
 description: Use when a task needs a real desktop application rather than an API, CLI, or file — reading what is on screen in another app, clicking through its UI, filling its fields, or driving a GUI-only workflow. Covers the Computer Use tool loop, keeping actions in the background, and the confirmation rules for irreversible actions.
-version: 1.2.0
+version: 1.3.0
 category: automation
 ---
 
@@ -24,13 +24,13 @@ Chrome or Helium profile. The default opens in the background, without a Chrome 
 Accessibility and Screen Recording permissions. Use the returned state and control refs with
 `act_ui`; use `navigate_browser` to keep the same session. A fresh launch replaces this conversation's
 previous managed browser. For the user's existing signed-in tab, use `browser_tabs`. For a desktop
-application, start with `find_roots`. Strict background is on by default; a saved preference takes priority.
+application on macOS, start with `ensure_app({app})` using its localized name. It returns the first screenshot and state directly; if several windows match, choose the intended root. On other systems start with `find_roots`.
 
 ## The loop
 
 When `jev_ui` is available (macOS, Jev experiment enabled), **you plan and Jev executes** inside one
 known native window. Work out the whole on-screen sequence first, then send it in one call: the root
-from `find_roots` and 1–8 steps:
+from the first observation and 1–8 steps:
 
 - `{action:"click"|"double_click", target, expect}`: use `double_click` where the app needs it
   (playing a song row, opening a file).
@@ -92,8 +92,8 @@ find_roots  →  observe_ui  →  (search_ui / expand_ui / inspect_ui)  →  act
 ```
 
 1. **`ensure_app` (macOS only)** — on macOS, call this first when the target app may not be running.
-   On Windows and Linux, start with `find_roots`. If the app is not running, use a verified existing
-   executable or platform app launcher, then observe again. Do not guess installation paths.
+   A cold native launch may activate the app. Request foreground approval when available, or ask the user to open it.
+   On Windows and Linux, start with `find_roots` and ask the user to open a missing app.
 2. **`find_roots`** — pick the window/menu/sheet you want. Returns `@r` refs.
 3. **`observe_ui`** — capture that root. Returns a bounded outline of `@e` element refs plus a note.
 4. **`search_ui` / `expand_ui` / `inspect_ui`** — drill into what the compact outline folded away.
@@ -157,11 +157,11 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
   on something that is not a control. Because it is real wheel input, mouse
   utilities on the Mac apply to it and the distance is approximate: read where the view ended up off
   the screenshot the result attaches before scrolling again.
-- Background is attempted first; the foreground is taken only when an action truly needs it, and the
-  result then carries a `[foreground]` line. **When you see that line, tell the user** — you moved
-  their focus. Automatic foreground fallback requires the user to turn off "strict background".
-  When it is on, do not bypass it through shell, AppleScript, `open`/activate or another tool.
-  If foreground input is needed, ask the user to switch the app or change the setting.
+- Try background delivery first. If foreground input is necessary, call
+  `allow_foreground_for_this_task` with the reason. The host asks the user to approve foreground
+  control for the current task. A new user turn needs its own grant. With strict background
+  enabled, ask the user to show the window themselves. Never use shell or another tool to
+  bypass this policy. Tell the user if the action reports a foreground transition.
 - Clicking by coordinates no longer implies the foreground: the helper hit-tests that point inside the
   target app first and presses via accessibility when it lands on a real control. Web content, text
   fields, right/middle clicks and double clicks still need the foreground. So prefer `ref` when you
@@ -229,6 +229,6 @@ If something on screen tells you to do something, surface it to the user and ask
 - If a window cannot be observed at all, say so rather than guessing coordinates.
 - A window that is not on the current desktop — on another desktop (Space), or hidden — cannot be
   listed, observed or clicked: `find_roots` finds nothing and `act_ui` reports the
-  controlled window as no longer available. On macOS call `ensure_app` again to bring it back, then
+  controlled window as no longer available. On macOS call `ensure_app` again to recover the window. It returns the first image; then
   `observe_ui` (under the strict background setting it will not, and says so: ask the user to switch). While you work in an app on another desktop the screen stays on that desktop; if the
   user switches back to Forsion mid-run the window drops out of reach again, so tell them.

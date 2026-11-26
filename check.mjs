@@ -864,6 +864,7 @@ for (const legacy of [false, true]) {
     ['jev', R, '正在 Chatter 中点击「Zhang San」', 'Clicking “Zhang San” in Chatter'],
     ['jev', D, '已在 Chatter 中点击「Send」(共 3 步)', 'Clicked “Send” in Chatter (3 steps)'],
     ['jevStopped', D, '没能在 Chatter 中点击「Pinned files」(第 2 步,共 2 步)', "Couldn't click “Pinned files” in Chatter (step 2 of 2)"],
+    ['foregroundGrant', D, '已允许本次任务控制前台', 'Foreground control approved for this task'],
     ['ensure', R, '正在打开 Notes', 'Opening Notes'],
     ['ensure', D, '已打开 Notes', 'Opened Notes'],
     ['ensure', E, '没能打开 Notes', "Couldn't open Notes"],

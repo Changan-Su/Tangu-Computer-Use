@@ -21,6 +21,8 @@ export interface ExtensionUI {
 export interface ExtensionContext {
   cwd: string;
   browserOwner?: string;
+  foregroundAllowed?: boolean;
+  jevEnabled?: boolean;
   compactBrowserControls?: boolean;
   browserPanelZoom?: boolean;
   hasUI: boolean;
