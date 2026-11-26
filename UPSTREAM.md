@@ -120,9 +120,10 @@ replay it** (`npm run check:actions`, part of `npm run check`, goes red if it is
   go straight to the foreground because a pid-posted wheel event reached a self-drawn view 0 times (Forsion
   feedback 55b984eb); the cause was the missing window number, not the pid delivery
   (`scripts/pid-window.probe.mjs`, 10-17). `unknown` still never escalates (it may have landed).
-  `helperAct()` in `bridge.ts` counts, per pid and kind (click / scroll), background attempts in a row that
-  changed nothing on screen; at two it sends later ones straight to the foreground (`backgroundPointerMisses`;
-  one miss is not enough, a click on an already-selected row changes nothing too).
+  Each new click or scroll tries the background again. A new or closed target window, focus transition,
+  or window notification during a pixel-verified action leaves the outcome unconfirmed. Inspect the
+  successor state before repeating input. The macOS regression in `scripts/mac-spaces.check.mjs`
+  checks background delivery after two misses in the same process.
 - `scrollInPoints()` in `bridge.ts`, applied in `dispatchUiAction()` (macOS, coordinate scroll): the distance
   is given in the screenshot's pixels, like `x` / `y`, and converted to the screen points the helper scrolls
   in (`framePoints.w / look.image.width`). Upstream passes it through raw, so the same number means twice

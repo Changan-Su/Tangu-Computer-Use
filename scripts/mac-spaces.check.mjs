@@ -59,8 +59,55 @@ try {
   assert.equal(events.filter(e => e.kind === 'spaceChanged').length, 0);
   assert.equal(events.filter(e => e.kind === 'frontChanged' && e.detail === String(boot.pid)).length, 0);
   assert.match(result, /"delivery":"pid"/);
+  // Miss twice on an inert part of this off-Space window, then use a different control in the same process.
+  const pixelStateId = text => /State ([\da-f-]{36})/i.exec(text)?.[1];
+  const ensurePixels = () => tools.get('ensure_app').execute({ app, mode: 'pixels' }, context);
+  const click = (stateId, x, y, clickCount = 1) => tools.get('act_ui').execute({
+    stateId, actions: [{ action: 'click', x, y, clickCount }],
+  }, context);
+  let missFrame = await ensurePixels();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const stateId = pixelStateId(missFrame);
+    assert.ok(stateId);
+    missFrame = await click(stateId, Math.round(Number(size[1]) * 0.96), Math.round(Number(size[2]) * 0.12));
+    assert.match(missFrame, /"outcome":"(?:didnt|unknown)"/);
+    assert.match(missFrame, /"delivery":"pid"/);
+  }
+  const afterMisses = readState(stateFile);
+  assert.equal(afterMisses.clicks, after.clicks + 2);
+  assert.equal(afterMisses.playing?.index, after.playing.index);
+  process.kill(boot.pid, 'SIGUSR2');
+  for (let i = 0; i < 35 && !readState(stateFile).returnedSpaces?.includes(placement.current); i++) await delay(100);
+  assert.ok(readState(stateFile).returnedSpaces?.includes(placement.current));
+  const again = await ensurePixels();
+  const stateId = pixelStateId(again);
+  const nextRow = before.layout.filter(item => item.kind === 'row' && !item.partial)[1];
+  const nextSize = /attached screenshot is (\d+)x(\d+)/.exec(again);
+  assert.ok(stateId && nextRow && nextSize);
+  const next = await click(stateId,
+    Math.round((nextRow.rect.x + nextRow.rect.w / 2) * Number(nextSize[1]) / before.window.w),
+    Math.round((nextRow.rect.y + nextRow.rect.h / 2) * Number(nextSize[2]) / before.window.h), 2);
+  assert.match(next, /"delivery":"pid"/, 'An earlier miss must not route a different button straight to foreground');
+  const ended = readState(stateFile);
+  assert.equal(ended.playing?.index, 2);
+  const nextState = pixelStateId(next);
+  assert.ok(nextState);
+  const popup = await click(nextState, Math.round(Number(nextSize[1]) * 0.94), Math.round(Number(nextSize[2]) * 0.17));
+  const opened = /New root: window \((@r\d+)\)/.exec(popup);
+  assert.ok(opened, popup);
+  assert.ok(!popup.includes('Melody Track Details'), 'Screenshot-only results must not reveal the window title from accessibility.');
+  const details = await tools.get('observe_ui').execute({ root: opened[1], mode: 'pixels' }, context);
+  assert.ok(pixelStateId(details), details);
+  assert.match(popup, /"delivery":"pid"/);
+  assert.doesNotMatch(popup, /"outcome":"didnt"|\[foreground\]/);
+  const final = readState(stateFile);
+  assert.equal(final.clicks, ended.clicks + 1, 'Opening the details window must send exactly one click.');
+  const endEvents = final.events.slice(before.events.length);
+  assert.equal(endEvents.filter(e => e.kind === 'play').length, 2);
+  assert.equal(endEvents.filter(e => e.kind === 'spaceChanged' || (e.kind === 'frontChanged' && e.detail === String(boot.pid))).length, 0);
   console.log(JSON.stringify({ activeSpace: placement.current, windowSpace: placement.target, image: size.slice(1),
-    click: [x,y], played: after.playing.index, spaceChanges: 0, targetActivations: 0, ms: Math.round(performance.now()-start) }));
+    click: [x,y], played: after.playing.index, playedAfterMisses: ended.playing.index, popupClicks: final.clicks - ended.clicks,
+    spaceChanges: 0, targetActivations: 0, ms: Math.round(performance.now() - start) }));
 } finally {
   if (helperPid) { try { process.kill(helperPid, 'SIGTERM'); } catch {} }
   await quitFixture(boot.pid);

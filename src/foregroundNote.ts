@@ -79,7 +79,7 @@ export function executionNote(details: unknown): string {
     return `[execution] ${JSON.stringify(summary)}\nNothing was sent this time. The earlier press of this element showed no change in its result; since then ${moved}, so that press most likely took effect late. Check the returned state before anything else: if it shows the result you wanted, continue. If it shows the press did nothing, press the element once more; that one goes out as a real click.\n` + strict;
   }
   const meaning = summary.error || summary.outcome === 'didnt'
-    ? 'The executor reported a failure. Check the error and current state before deciding what to do.'
+    ? 'The executor reported a failure. Check any new window and the current screenshot before another action. Keep input in Computer Use so its native helper can manage foreground fallback. Do not use shell commands to activate the application.'
     : summary.outcome === 'unknown'
       ? 'The input was attempted; its effect is UNVERIFIED, not proven failed. A canvas can change without accessibility confirmation. Inspect the returned state before any retry, including a retry with another tool.'
       : 'The native executor confirmed this action; still verify the requested task result.';

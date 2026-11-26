@@ -352,6 +352,7 @@ final class Canvas: NSView {
 	var events: [[String: Any]] = []
 	var drawn = false
 	var extra: [String: Any] = [:]
+	var detailsWindow: NSWindow?
 
 	override var isFlipped: Bool { true }
 	override var acceptsFirstResponder: Bool { true }
@@ -804,6 +805,16 @@ final class Canvas: NSView {
 		// 点在了哪儿:按点下去那一刻屏幕上的 layout 找(最小的那个包含这个点的条目)
 		log("click", "\(Int(p.x.rounded())),\(Int(p.y.rounded())) x\(count) → \(hitLabel(p))")
 		defer { changed() }
+		// The cross-Space regression opens another real window without repainting the source.
+		if options.inactiveSpace && p.x > W * 0.90 && p.y > H * 0.15 && p.y < H * 0.20 {
+			if detailsWindow == nil {
+				detailsWindow = NSWindow(contentRect: NSRect(x: 120, y: 140, width: 280, height: 120),
+					styleMask: [.titled], backing: .buffered, defer: false)
+				detailsWindow?.title = "Melody Track Details"
+			}
+			detailsWindow?.orderBack(nil)
+			return
+		}
 		if searchRect.contains(p) {
 			if !focused { focused = true; log("focus", "search") }
 			selectAll = false
@@ -1260,6 +1271,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 	let window: NSWindow
 	let canvas = Canvas()
 	var hide: DispatchSourceSignal?
+	var returnToSpace: DispatchSourceSignal?
 	var activity: NSObjectProtocol?
 	var selfTest: SelfTest?
 
@@ -1327,6 +1339,16 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 		unsafeBitCast(move, to: (@convention(c) (Int32, CFArray, UInt64) -> Void).self)(cid, ids, other)
 		let actual = unsafeBitCast(membership, to: (@convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>).self)(cid, 7, ids).takeRetainedValue()
 		canvas.extra["spaceTest"] = ["current": current, "target": other, "membership": actual]
+		// A test can move its own window back without activating this process or changing the user's Space.
+		signal(SIGUSR2, SIG_IGN)
+		returnToSpace = DispatchSource.makeSignalSource(signal: SIGUSR2, queue: .main)
+		returnToSpace?.setEventHandler { [weak self] in
+			unsafeBitCast(move, to: (@convention(c) (Int32, CFArray, UInt64) -> Void).self)(cid, ids, current)
+			let spaces = unsafeBitCast(membership, to: (@convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>).self)(cid, 7, ids).takeRetainedValue()
+			self?.canvas.extra["returnedSpaces"] = spaces
+			self?.canvas.save()
+		}
+		returnToSpace?.resume()
 		let center = NSWorkspace.shared.notificationCenter
 		center.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
 			self?.canvas.log("spaceChanged", ""); self?.canvas.save()

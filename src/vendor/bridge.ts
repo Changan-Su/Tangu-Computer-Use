@@ -6,7 +6,7 @@ import { access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { canRetryInForeground, isBackgroundPointer, keysFollow, needsFrontmostProbe, pointerMissesAfter, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
+import { canRetryInForeground, isBackgroundPointer, keysFollow, needsFrontmostProbe, backgroundPointerOutcome, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpViewportForContext, cdpViewportStamp, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
 import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig, operationConfig } from "./config.ts";
 import { applyWheelFix, wheelFix } from "../wheel.ts"; // Forsion patch, see UPSTREAM.md
@@ -1052,7 +1052,9 @@ async function buildToolResult(
 	if (state.pixelsOnly) {
 		const image = result.look.image;
 		if (!image?.jpegBase64) throw new Error("The target window did not supply a screenshot. Observe it again before acting.");
-		const message = `Screenshot only for ${result.target.windowRef ?? result.target.appName}. State ${result.capture.stateId}. Use one action with the image coordinates. Check the next image for the outcome.`;
+		const opened = (execution.rootDelta ?? []).filter(delta => delta.change === "appeared" && delta.pid === result.target.pid && delta.ref);
+		const nextWindows = opened.map(delta => `New root: ${delta.kind} (${delta.ref}). Use observe_ui with this root and mode "pixels" to inspect its screenshot before another click.`);
+		const message = `Screenshot only for ${result.target.windowRef ?? result.target.appName}. State ${result.capture.stateId}. Use one action with the image coordinates. Check the next image for the outcome.` + (nextWindows.length ? "\n" + nextWindows.join("\n") : "");
 		return { content:[{type:"text", text:message}, {type:"image", mimeType:image.mimeType ?? "image/jpeg", data:image.jpegBase64}],
 			details:{tool, pixelsOnly:true, root:{ref:result.target.windowRef || result.target.appName}, target:{app:result.target.appName, pid:result.target.pid, windowId:result.target.windowId, windowTitle:result.target.windowTitle, windowRef:result.target.windowRef},
 				capture:{...result.capture, coordinateSpace:"window-relative-screenshot-pixels"}, view:"full", activation:result.activation,
@@ -1217,17 +1219,6 @@ async function wheelAction(target: ResolvedTarget, action: NativePreparedAction,
 }
 
 /**
- * Background pointer input that changed nothing on screen, in a row, per pid + kind ("click" / "scroll"). At two,
- * later ones go straight to the foreground instead of paying the helper's screenshot wait again (CEF apps such as
- * NetEase Cloud Music ignore it every time). One miss is not enough: a click that legitimately changes nothing
- * (an already-selected row) would otherwise take the whole app to the foreground for good.
- * ponytail: per-process count for the life of the engine. Chromium apps swallow only the first background click
- * (it makes the window key) and take later ones; a second miss gives that up. Upgrade to "retry background after
- * N foreground actions" if it matters.
- */
-const backgroundPointerMisses = new Map<string, number>();
-
-/**
  * Forsion patch, see UPSTREAM.md. The element the last AXPress went to. An AXPress that lands can look exactly like one
  * that did nothing, and replaying it could submit twice, so nothing is retried here: the press stays one press, and the
  * model pressing the same element again is what sends a real click. That click stays the route for the element until
@@ -1310,7 +1301,6 @@ async function helperAct(
 	const timeoutMs = Math.max(COMMAND_TIMEOUT_MS, textTimeout);
 	if (currentPlatformBackend.name === "macos" && !target.isOnscreen) headless = true;
 	const pointer = isBackgroundPointer(action);
-	const pointerKey = `${target.pid}:${action.action === "scroll" ? "scroll" : "click"}`;
 	const pressKey = currentPlatformBackend.name === "macos" && (action.action === "press" || action.action === "click") && action.accessibilityPress !== undefined
 		? `${target.pid}:${target.windowId}:${action.accessibilityPress}`
 		: undefined;
@@ -1318,7 +1308,7 @@ async function helperAct(
 	const accessibilityPress = pressKey !== undefined && (inCall ? inCall === "accessibility" : pressKey !== lastAccessibilityPress);
 	// The repeat is the real click the result promised. Through background first it can land as a hover-less pid click and then be replayed.
 	const repeatedPress = pressKey !== undefined && !accessibilityPress;
-	if ((action.usesCurrentFocus || action.needsForeground || repeatedPress || (pointer && (backgroundPointerMisses.get(pointerKey) ?? 0) >= 2)) && !headless) {
+	if ((action.usesCurrentFocus || action.needsForeground || repeatedPress) && !headless) {
 		const sent = await wheelAction(target, action, signal);
 		const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, sent, "foreground"), { signal, timeoutMs }));
 		if (repeatedPress && !inCall) pressedInCall?.set(pressKey!, "real");
@@ -1334,7 +1324,7 @@ async function helperAct(
 			lastAccessibilityPress = pressKey;
 			if (!inCall) pressedInCall?.set(pressKey!, "accessibility");
 		}
-		if (pointer) backgroundPointerMisses.set(pointerKey, pointerMissesAfter(backgroundPointerMisses.get(pointerKey) ?? 0, result.outcome));
+		if (pointer) result.outcome = backgroundPointerOutcome(result, target.pid);
 		if (canRetryInForeground(action, result.outcome, headless)) {
 			const retry = pointer ? await wheelAction(target, action, signal) : action;
 			const foreground = checked(await currentPlatformBackend.act(helperActRequest(target, retry, "foreground"), { signal, timeoutMs }));
@@ -2112,6 +2102,13 @@ async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget
 		const textLength = actions.reduce((sum, action) => sum + (action.text?.length ?? 0), 0);
 		const result = await currentPlatformBackend.actBatch(requests, { signal, timeoutMs: Math.max(COMMAND_TIMEOUT_MS, textLength * 25 + 6_000) });
 		if (!result.steps || result.steps.length === 0) throw new Error("Native action transaction returned no checked steps.");
+		// The helper collects window changes once per transaction. Only a single dispatched
+		// step can inherit that evidence without attributing another action's effect to it.
+		if (result.steps.length === 1 && requests[0] && ["press", "click", "scroll"].includes(requests[0].action) && "x" in requests[0].target) {
+			const step = result.steps[0];
+			const outcome = backgroundPointerOutcome({ ...step, rootDelta: result.rootDelta, performed: { ...step.performed, deltaSource: result.performed?.deltaSource } }, target.pid);
+			if (step.outcome !== outcome) step.outcome = result.outcome = outcome;
+		}
 		const execution = aggregateExecutions(result.steps.map((step) => executionTraceFromAct(step, "ax_only")));
 		const batchTrace = executionTraceFromAct(result, "ax_only");
 		if (result.outcome !== "worked") execution.outcome = result.outcome;

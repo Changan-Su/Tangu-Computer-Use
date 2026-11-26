@@ -191,6 +191,7 @@ const toolSpecs = (compact: boolean, panels = false): ToolSpec[] => [
     parameters: obj({
       app: S('Installed app name in the user’s language, or an app bundle path'),
       bundleId: S('Exact bundle identifier, if already known'),
+      foregroundRoot: S('Only when the user explicitly asks to bring a window forward. Supply its exact onscreen root from discovery. Omit for ordinary clicks and observation.'),
       mode: { type: 'string', enum: ['visual', 'pixels', 'roots'], description: 'Default visual. Use roots to list windows without capturing an image.' },
     }),
   },
@@ -288,7 +289,7 @@ export function render(result: AgentToolResult, tcx: ToolContext, args?: Record<
 }
 
 /** Inspect a running app in place. Cold starts use a background launch when settings allow it. */
-const nativeDiscovery = { screenLocked: macScreenLocked, listApps: (signal?: AbortSignal) => currentPlatformBackend.listApps(signal), find: executeFind, observe: executeObserve };
+const nativeDiscovery = { activate: currentPlatformBackend.activateWindow, screenLocked: macScreenLocked, listApps: (signal?: AbortSignal) => currentPlatformBackend.listApps(signal), find: executeFind, observe: executeObserve };
 export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, pctx: ExtensionContext, discovery = nativeDiscovery): Promise<string> {
   if (process.platform !== 'darwin') {
     return 'ensure_app (background launch) is macOS-only. On other platforms, launch the app yourself, then use observe_ui.';
@@ -296,6 +297,9 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
   let bundleId = typeof args.bundleId === 'string' ? args.bundleId.trim() : '';
   const app = typeof args.app === 'string' ? args.app.trim() : '';
   if (!bundleId && !app) return 'ensure_app requires "app" or "bundleId".';
+  const foregroundRoot = args.foregroundRoot;
+  if (foregroundRoot !== undefined && (typeof foregroundRoot !== 'string' || !/^@r\d+$/.test(foregroundRoot))) return 'Choose an exact window root returned by discovery.';
+  if (foregroundRoot && (!tcx.runId || !pctx.foregroundAllowed)) return 'Foreground access is unavailable for this run.';
   const mode = args.mode ?? 'visual';
   if (!['visual', 'pixels', 'roots'].includes(mode)) throw new Error('Choose visual, pixels, or roots.');
   const absolute = app.startsWith('/');
@@ -339,6 +343,7 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
   const openInBackground = () => execFileP('open', ['-g', ...(bundleId && !absolute ? ['-b', bundleId] : ['-a', app])], { timeout: 8000, signal: tcx.signal });
   const strict = loadComputerUseConfig(pctx.cwd).config.headless;
   // 查找已运行的 App 时不重复发送 open 事件，有的 App 收到它会自己跳到前台。
+  if (foregroundRoot && (strict || !wasRunning)) return 'The requested window cannot be raised in this run.';
   if (!wasRunning) {
     if (await discovery.screenLocked(tcx.signal)) return lockedMessage;
     if (absolute && running.some(a => bundleId && a.bundleId === bundleId)) return 'Another installed copy is running. Open the requested copy manually and retry with its path.';
@@ -364,6 +369,12 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
     const found = !absolute || pathPids.length === 1 ? await spec_executeFind(pctx, tcx, appName, bundleId, discovery.find, pathPids[0]) : undefined;
     // 查找本身失败(helper 没应答)不说明窗口在哪,不据此升级到激活。
     if (found) {
+      if (foregroundRoot) {
+        const window = found.windows.find(w => w.windowRef === foregroundRoot);
+        if (!window?.windowId || !window.isOnscreen) return 'The requested window is unavailable on the current desktop.';
+        const raised = await discovery.activate?.({ pid: window.pid, windowId: window.windowId }, tcx.signal);
+        return raised ? `[foreground] Brought ${name} ${foregroundRoot} forward.` : 'The requested window could not be brought forward on this desktop.';
+      }
       if (found.windows.length) {
         const running = await apps();
         const fm = running.find((a) => a.isFrontmost);
@@ -402,11 +413,11 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
 }
 
 /** Exact app identities keep the first captured window tied to the requested application. */
-async function spec_executeFind(pctx: ExtensionContext, tcx: ToolContext, app: string, bundleId: string, find: typeof executeFind, pid?: number): Promise<{ text: string; windows: { pid: number; windowRef: string; windowId?: number }[] } | undefined> {
+async function spec_executeFind(pctx: ExtensionContext, tcx: ToolContext, app: string, bundleId: string, find: typeof executeFind, pid?: number): Promise<{ text: string; windows: { pid: number; windowRef: string; windowId?: number; isOnscreen?: boolean }[] } | undefined> {
   try {
     const params = pid ? { pid } : bundleId ? { bundleId } : { app };
     const r = await find('', params, tcx.signal, undefined, pctx);
-    const windows = (r.details as { windows?: Array<{ pid: number; windowRef: string; windowId?: number }> } | undefined)?.windows ?? [];
+    const windows = (r.details as { windows?: Array<{ pid: number; windowRef: string; windowId?: number; isOnscreen?: boolean }> } | undefined)?.windows ?? [];
     // 不走 render:那边会在「没有 root」时附一句「去调 ensure_app」,而这里就是 ensure_app 自己。
     return { text: r.content.map((block) => block.type === 'text' ? block.text : '').join('\n') + selfWindowNote(r.details), windows };
   } catch {
