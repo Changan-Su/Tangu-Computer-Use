@@ -529,9 +529,15 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
     definition: { type: 'function', function: { name: spec.name, description: spec.description, parameters: spec.parameters } },
     // 叠层(helper 协议 20):这次调用里发出的每条 act / actBatch 都带这一轮的 runId(AsyncLocalStorage,见 overlayState.ts);
     // 这一轮被中止时尽力发一次 overlayTurn end(工具自己超时不算;返回时摘掉监听)。工具说明和结果文字不受影响。
-    execute: (args: Record<string, any>, tcx: ToolContext): Promise<string> => withOverlayRun(tcx.runId, async (): Promise<string> => {
-      const unwatch = watchRunAbort(tcx.runId, tcx.signal, undefined, undefined, { timeoutMs: spec.timeoutMs });
+    execute: (args: Record<string, any>, context: ToolContext): Promise<string> => withOverlayRun(context.runId, async (): Promise<string> => {
+      const turn = spec.approval === 'command' && (context.userConfirmedCall || context.userTurnSignal?.aborted)
+        ? context.userTurnSignal
+        : undefined;
+      const unwatch = watchRunAbort(context.runId, context.signal, undefined, undefined, { timeoutMs: spec.timeoutMs });
       try { return await (async (): Promise<string> => {
+      turn?.throwIfAborted();
+      const signal = turn && context.signal ? AbortSignal.any([turn, context.signal]) : turn ?? context.signal;
+      const tcx = signal === context.signal ? context : { ...context, signal };
       if (spec.jevOnly) {
         if (!gate(spec)({ capabilities: { hostExec: tcx.execMode !== 'sandbox' } } as AppProfile)) return 'Jev is disabled or unavailable on this platform.';
         parseJevArgs(args);
@@ -609,7 +615,12 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
           : detail.detailDescription);
       }
       return prefix + presentLiveViewOnce(spec.name, tcx, text);
-      })(); } finally { unwatch(); }
+      })(); } catch (error) {
+        if (turn?.aborted && !context.signal?.aborted) {
+          throw new Error('The user turn has changed. Observe the current state before requesting another Computer Use action.');
+        }
+        throw error;
+      } finally { unwatch(); }
     }),
   });
 
