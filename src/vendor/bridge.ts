@@ -1,3 +1,4 @@
+import { reportLaunchForeground } from "../overlayState.ts";
 import { browserConversation, browserOwner, launchManagedBrowser, closeManagedBrowsers } from "../managedBrowser.ts";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
@@ -2659,7 +2660,8 @@ async function performLaunchBrowser(params: LaunchBrowserParams, signal?: AbortS
 	if (visible && config.headless) throw new Error("Strict background is enabled. Launch without visible to keep the browser in the background.");
 	const executable = await managedBrowserExecutable(config.managed_browser);
 	const launch = await resourceScheduler.read(`managed-browser:${browserOwner()}`, () =>
-		launchManagedBrowser(executable, visible, signal, async () => {
+		launchManagedBrowser(executable, visible, signal, async (pid) => {
+			if (visible && pid) await reportLaunchForeground(pid);
 			const [page] = await listCdpPageContexts(true);
 			if (!page) throw new Error("Managed browser launched without its initial blank page.");
 			if (url && !await cdpNavigateContext(page.contextId, url)) throw new Error("The initial browser page closed during navigation.");

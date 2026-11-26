@@ -28,7 +28,7 @@ import { autoInstallFailed, ensureHelperCurrent, guideMissingPermissions } from 
 import { executionNote, expectNote, foregroundNote, goneHint, imageNote, noRootsHint, scrollNote, selfWindowNote } from './foregroundNote.ts';
 import { runJev, parseJevArgs } from './jevRun.ts';
 import { inspectScreenshot } from './pixelInspection.ts';
-import { watchRunAbort, withOverlayRun } from './overlayState.ts';
+import { reportLaunchForeground, watchRunAbort, withOverlayRun } from './overlayState.ts';
 
 const execFileP = promisify(execFile);
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -356,9 +356,7 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
     if (!wasRunning && !launchSignalled && tcx.runId && Date.now() - started < 2000) {
       const launched = (await apps()).find(a => mine(a) && a.isFrontmost);
       if (launched) {
-        const { macosHelper } = await import('./vendor/platform/macos/helper.ts');
-        const reply = await macosHelper.daemonCommand('reportLaunchForeground', { pid: launched.pid, runId: tcx.runId }, 800).catch(() => null);
-        launchSignalled = !!reply;
+        launchSignalled = await reportLaunchForeground(launched.pid);
       }
     }
     const found = !absolute || pathPids.length === 1 ? await spec_executeFind(pctx, tcx, appName, bundleId, discovery.find, pathPids[0]) : undefined;

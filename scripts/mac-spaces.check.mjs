@@ -46,8 +46,14 @@ try {
   const x = Math.round((row.rect.x + row.rect.w/2) * Number(size[1])/before.window.w);
   const y = Math.round((row.rect.y + row.rect.h/2) * Number(size[2])/before.window.h);
   const result = await tools.get('act_ui').execute({ stateId: id, actions: [{ action: 'click', x, y, clickCount: 2 }] }, context);
+  const successor = /State ([\da-f-]{36})/i.exec(result)?.[1];
+  assert.ok(successor, 'Expected the successor screenshot after the background click. ' + result.slice(0,500));
+  const key = await tools.get('act_ui').execute({ stateId: successor, actions: [{action: 'keypress', keys: ['return']}] }, context)
+    .catch(error => String(error));
+  assert.match(key, /focus|foreground_required/i, key.slice(0,500));
   await delay(300);
   const after = readState(stateFile), events = after.events.slice(before.events.length);
+  assert.equal(after.keys, before.keys, 'A keyboard gesture needing focus must stay undelivered');
   assert.equal(after.playing?.index, 1, result.slice(0,700));
   assert.equal(events.filter(e => e.kind === 'play').length, 1);
   assert.equal(events.filter(e => e.kind === 'spaceChanged').length, 0);

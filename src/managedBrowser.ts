@@ -64,7 +64,7 @@ async function startBrowser(executable: string, visible: boolean, pixelsOnly: bo
       const [port, socket] = portFile.trim().split(/\r?\n/);
       if (/^\d+$/.test(port) && socket?.startsWith('/devtools/browser/')) {
         touch();
-        return { port, pixelsOnly, touch, stop, closed };
+        return { port, pid: child.pid, pixelsOnly, touch, stop, closed };
       }
       await delay(40, undefined, { signal });
     } while (Date.now() < deadline);
@@ -75,14 +75,14 @@ async function startBrowser(executable: string, visible: boolean, pixelsOnly: bo
   }
 }
 
-export async function launchManagedBrowser<T>(executable: string, visible: boolean, signal: AbortSignal | undefined, observe: () => Promise<T>, pixelsOnly = false): Promise<T> {
+export async function launchManagedBrowser<T>(executable: string, visible: boolean, signal: AbortSignal | undefined, observe: (pid?: number) => Promise<T>, pixelsOnly = false): Promise<T> {
   const owner = browserOwner();
   const previous = sessions.get(owner);
   const next = await startBrowser(executable, visible, pixelsOnly, signal);
   sessions.set(owner, next);
   void next.closed.then(() => { if (sessions.get(owner) === next) sessions.delete(owner); });
   try {
-    const result = await observe();
+    const result = await observe(next.pid);
     await previous?.stop();
     return result;
   } catch (error) {
