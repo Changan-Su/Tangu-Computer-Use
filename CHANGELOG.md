@@ -1,8 +1,16 @@
 # 更新日志
 
-## 0.7.6
+## 0.7.6 — 2026-11-26
 
+- 网页任务可以在每个对话单独的无界面 Chrome / Helium 里后台进行，不需要浏览器扩展或桌面授权；要用已登录的账号时，连接你自己的浏览器。严格后台模式默认开启，你改过的设置照旧。
+- macOS 上能操作在别的桌面（Space）里运行的应用，后台点击直接投给目标窗口；按「审批」档位走：完全访问时允许必要时切到前台。
+- 审批绑定发起它的那一轮对话：你发了新消息之后，旧的「允许」不会再让操作发出去（配合桌面 2.14.3-beta.3 起的版本）。
+- 插件里的圆角改用宿主的圆角档位，跟随桌面端外观。
 - macOS 跨桌面时按目标窗口匹配可后台触发的按钮，自绘区域继续按窗口投递。两次相同位置的后台点击仍未确认时停止重复，允许前台的任务可用 Mini 切到目标窗口，重新看图再操作。
+- Web tasks can run in the background in a separate headless Chrome or Helium for each conversation, without the browser extension or desktop permissions; connect your own browser when a task needs an account you are signed in to. Strict background mode is on by default, and settings you changed are kept.
+- On macOS, apps running in another Space can be operated, with background clicks sent straight to the target window. Actions follow the approval tier: Full access allows switching to the foreground when needed.
+- Approvals are bound to the chat turn that asked for them: after you send a new message, an earlier Allow no longer lets an action through (with desktop 2.14.3-beta.3 or later).
+- Corner radii in the plugin use the host's radius tiers and follow the desktop appearance.
 - macOS resolves background controls inside the target window across Spaces. Unconfirmed clicks have a bounded retry, with a fresh screenshot when foreground recovery is allowed.
 
 ## 0.7.4 — 2026-11-18
