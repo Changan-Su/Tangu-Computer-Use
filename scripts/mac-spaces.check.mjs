@@ -91,7 +91,8 @@ try {
     Math.round(Number(size[2]) * 0.12), 2).catch(String);
   assert.match(blocked, /No input sent/, blocked);
   assert.equal(readState(stateFile).clicks, misses);
-  await assert.rejects(click(pixelStateId(missFrame), Math.round(Number(size[1]) * 0.96), Math.round(Number(size[2]) * 0.12)),
+  const retryFrame = await ensurePixels();
+  await assert.rejects(click(pixelStateId(retryFrame), Math.round(Number(size[1]) * 0.96), Math.round(Number(size[2]) * 0.12)),
     error => error?.code === 'computer_use_recovery_exhausted');
   assert.equal(readState(stateFile).clicks, misses, 'Alternating a double and single click cannot extend the retry budget');
   if (strict) {
