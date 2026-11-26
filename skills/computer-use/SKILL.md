@@ -92,7 +92,7 @@ find_roots  →  observe_ui  →  (search_ui / expand_ui / inspect_ui)  →  act
 ```
 
 1. **`ensure_app` (macOS only)** — on macOS, call this first when the target app may not be running.
-   A cold native launch may activate the app. Request foreground approval when available, or ask the user to open it.
+   A cold native launch may activate the app. The normal host tool permission applies. In strict background mode ask the user to open it.
    On Windows and Linux, start with `find_roots` and ask the user to open a missing app.
 2. **`find_roots`** — pick the window/menu/sheet you want. Returns `@r` refs.
 3. **`observe_ui`** — capture that root. Returns a bounded outline of `@e` element refs plus a note.
@@ -157,11 +157,7 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
   on something that is not a control. Because it is real wheel input, mouse
   utilities on the Mac apply to it and the distance is approximate: read where the view ended up off
   the screenshot the result attaches before scrolling again.
-- Try background delivery first. If foreground input is necessary, call
-  `allow_foreground_for_this_task` with the reason. The host asks the user to approve foreground
-  control for the current task. A new user turn needs its own grant. With strict background
-  enabled, ask the user to show the window themselves. Never use shell or another tool to
-  bypass this policy. Tell the user if the action reports a foreground transition.
+- Use the normal host permission tier. On macOS leave off-Space windows where they are. Observe the window by ID, use directed input, and verify the result on its next screenshot. If the app rejects background input, report that limitation.
 - Clicking by coordinates no longer implies the foreground: the helper hit-tests that point inside the
   target app first and presses via accessibility when it lands on a real control. Web content, text
   fields, right/middle clicks and double clicks still need the foreground. So prefer `ref` when you

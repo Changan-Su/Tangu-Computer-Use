@@ -6,6 +6,9 @@ final class ForegroundActivity {
     static let shared = ForegroundActivity()
     private let lock = NSLock()
     private var depth = 0
+    private var takeId = 0
+    private var targetPid: Int32?
+    private var runId: String?
     private var active = false
     private var file: URL?
     private var timer: DispatchSourceTimer?
@@ -26,10 +29,15 @@ final class ForegroundActivity {
 
     // Called inside the recursive physical-input lock. A permitted foreground policy
     // alone does not activate the signal: successful AX/background paths stay silent.
-    func enter() { lock.lock(); depth += 1; lock.unlock() }
+    func enter(targetPid: Int32? = nil, runId: String? = nil) {
+        lock.lock(); defer { lock.unlock() }
+        depth += 1
+        if let targetPid { self.targetPid = targetPid; self.runId = runId }
+    }
     func physicalInput() {
         lock.lock(); defer { lock.unlock() }
         guard !active else { return } // HID movement can emit 120 events/s; the heartbeat renews the lease.
+        takeId += 1
         active = true
         publish(active: true, until: now() + 2500)
     }
@@ -38,9 +46,12 @@ final class ForegroundActivity {
     /// conversation while the run goes on and hands Forsion back when it ends. One second and not the 350ms a finished
     /// click leaves: activation is asynchronous, and Desktop only acts on a lease it reads after its own window lost
     /// focus. Not renewed by the heartbeat; while input is in progress the longer lease already says so.
-    func tookForeground() {
+    func tookForeground(targetPid: Int32? = nil, runId: String? = nil) {
         lock.lock(); defer { lock.unlock() }
         guard !active else { return }
+        takeId += 1
+        self.targetPid = targetPid
+        self.runId = runId
         publish(active: true, until: now() + 1000)
     }
     func leave() {
@@ -58,8 +69,11 @@ final class ForegroundActivity {
     }
     private func publish(active: Bool, until: Double) {
         guard let file else { return }
-        let payload: [String: Any] = ["v": 1, "active": active, "expiresAt": until,
+        var payload: [String: Any] = ["v": 1, "active": active, "expiresAt": until,
                                      "updatedAt": now(), "helperPid": ProcessInfo.processInfo.processIdentifier]
+        payload["takeId"] = takeId
+        payload["targetPid"] = targetPid
+        payload["runId"] = runId
         guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
         try? data.write(to: file, options: .atomic)
     }

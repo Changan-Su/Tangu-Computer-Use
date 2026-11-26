@@ -368,14 +368,6 @@
       "done.en": null,
       "error.zh": "没能打开 Notes",
       "error.en": "Couldn't open Notes"
-    },
-    "foregroundGrant": {
-      "running.zh": "请求本次任务的前台控制权",
-      "running.en": "Requesting foreground control for this task",
-      "done.zh": "已允许本次任务控制前台",
-      "done.en": "Foreground control approved for this task",
-      "error.zh": "未获得本次任务的前台控制权",
-      "error.en": "Foreground control was not granted for this task"
     }
   }
 }

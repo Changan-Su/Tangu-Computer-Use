@@ -1307,6 +1307,7 @@ async function helperAct(
 	};
 	const textTimeout = "text" in action.params ? action.params.text.length * 25 + 4_000 : COMMAND_TIMEOUT_MS;
 	const timeoutMs = Math.max(COMMAND_TIMEOUT_MS, textTimeout);
+	if (currentPlatformBackend.name === "macos" && !target.isOnscreen) headless = true;
 	const pointer = isBackgroundPointer(action);
 	const pointerKey = `${target.pid}:${action.action === "scroll" ? "scroll" : "click"}`;
 	const pressKey = currentPlatformBackend.name === "macos" && (action.action === "press" || action.action === "click") && action.accessibilityPress !== undefined
@@ -2415,7 +2416,7 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 			const pressedSteps = execution.steps?.length ? execution.steps : [execution];
 			const pressed = pressedSteps.filter((step) => step.accessibilityPress);
 			if (pressed.length > 0 && !execution.rootDelta?.length && (!execution.error || execution.error.code === "postcondition_failed") && !webContentChanged(baseView.outline, capture.outline)) {
-				const activated = !isHeadlessMode() && await currentPlatformBackend.activateWindow?.(nativeWindowRequest(target), signal);
+				const activated = target.isOnscreen && !isHeadlessMode() && await currentPlatformBackend.activateWindow?.(nativeWindowRequest(target), signal);
 				if (activated) {
 					await sleep(COVERED_PAGE_REPAINT_MS, signal);
 					capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);

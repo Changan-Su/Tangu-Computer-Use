@@ -410,7 +410,7 @@
         "app": "Notes",
         "bundleId": "com.apple.Notes"
       },
-      "result": "Opened com.apple.Notes in the background; it did not take the foreground.\nFound 1 matching root; returned 1. Use @r refs with observe_ui({ root: \"@rN\" }).\n- @r2 window Notes pid 812 — All iCloud (z 1, windowId 77, frame 0,0 900x600, onscreen)",
+      "result": "Observed com.apple.Notes in the background; it did not take the foreground.\nFound 1 matching root; returned 1. Use @r refs with observe_ui({ root: \"@rN\" }).\n- @r2 window Notes pid 812 — All iCloud (z 1, windowId 77, frame 0,0 900x600, onscreen)",
       "errorResult": "Could not launch com.apple.Notes: not found. Check the app/bundleId is installed."
     },
     {
@@ -617,14 +617,6 @@
         "app": "Notes"
       },
       "result": "Opened Notes, but no window is observable yet. Give it a moment and call observe_ui.\nNo roots matched the supplied filters."
-    },
-    {
-      "id": "foregroundGrant",
-      "tool": "allow_foreground_for_this_task",
-      "args": {
-        "reason": "Show the hidden music player window."
-      },
-      "result": "Foreground control is approved for this task only. Continue with the target app."
     }
   ]
 }

@@ -22,6 +22,7 @@ import AppKit
 struct Options {
 	var statePath = "/dev/null"
 	var frame: NSRect?
+	var inactiveSpace = false
 	var page: String?
 	var play: Int?
 	var behind = false, selftest = false, hold = false, noActivate = false
@@ -40,6 +41,7 @@ let options: Options = {
 			i += 1
 		case "--page": o.page = next; i += 1
 		case "--play": o.play = Int(next ?? ""); i += 1
+		case "--inactive-space": o.inactiveSpace = true
 		case "--behind": o.behind = true
 		case "--no-activate": o.noActivate = true
 		case "--selftest": o.selftest = true
@@ -1309,8 +1311,34 @@ final class Delegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 		}
 		canvas.save()
 	}
+	// Test setup only. The window owner can place its own fixture on an existing Space.
+	// The product helper never moves windows or changes the user's active Space.
+	func prepareInactiveSpace() {
+		guard let library = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY),
+			let connection = dlsym(library, "SLSMainConnectionID"), let list = dlsym(library, "SLSCopyManagedDisplaySpaces"),
+			let move = dlsym(library, "SLSMoveWindowsToManagedSpace"), let membership = dlsym(library, "SLSCopySpacesForWindows")
+		else { return }
+		let cid = unsafeBitCast(connection, to: (@convention(c) () -> Int32).self)()
+		let displays = unsafeBitCast(list, to: (@convention(c) (Int32) -> Unmanaged<CFArray>).self)(cid).takeRetainedValue() as NSArray
+		guard let display = displays.firstObject as? [String: Any], let spaces = display["Spaces"] as? [[String: Any]],
+			let current = (display["Current Space"] as? [String: Any])?["ManagedSpaceID"] as? UInt64,
+			let other = spaces.first(where: { ($0["type"] as? Int) == 0 && ($0["ManagedSpaceID"] as? UInt64) != current })?["ManagedSpaceID"] as? UInt64 else { return }
+		let ids = [NSNumber(value: window.windowNumber)] as CFArray
+		unsafeBitCast(move, to: (@convention(c) (Int32, CFArray, UInt64) -> Void).self)(cid, ids, other)
+		let actual = unsafeBitCast(membership, to: (@convention(c) (Int32, Int32, CFArray) -> Unmanaged<CFArray>).self)(cid, 7, ids).takeRetainedValue()
+		canvas.extra["spaceTest"] = ["current": current, "target": other, "membership": actual]
+		let center = NSWorkspace.shared.notificationCenter
+		center.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+			self?.canvas.log("spaceChanged", ""); self?.canvas.save()
+		}
+		center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
+			guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+			self?.canvas.log("frontChanged", String(app.processIdentifier)); self?.canvas.save()
+		}
+	}
 	func show() {
 		if options.behind { window.orderBack(nil) } else { window.orderFrontRegardless() }
+		if options.inactiveSpace { prepareInactiveSpace() }
 		canvas.save()
 	}
 	func windowDidMove(_ notification: Notification) { canvas.save() }

@@ -101,6 +101,7 @@ private struct CapturedWindowImage {
 	let frame: CGRect
 	/// 一起画进这张图的、同一个 App 叠在上面的窗口(全局屏幕点),见 capture_overlays.swift
 	var overlays: [CGRect] = []
+	var ownerPID: Int32? = nil
 }
 
 private struct LookRecord {
@@ -110,6 +111,7 @@ private struct LookRecord {
 	let imageWidth: Int
 	let imageHeight: Int
 	let hasImage: Bool
+	var parentWindowId: UInt32? = nil
 }
 
 private struct RootAXEvent {
@@ -414,7 +416,7 @@ final class ArrivalBudgetBox {
 }
 
 final class Bridge {
-	private let protocolVersion = 20
+	private let protocolVersion = 21
 	/// 截图里变了超过这么多像素(缩到最长边 800 后)才算「画面变了」:光标闪烁、JPEG 噪声在这之下。
 	static let pixelChangeThreshold = 12
 	/// NSEvent 带窗口号造出来的 CGEvent 里,窗口号在这个字段(CGEventTypes.h 没有它)。
@@ -939,7 +941,13 @@ final class Bridge {
 		case "listRoots":
 			return try listRoots(pid: optionalIntArg(request, "pid").map { Int32($0) }, title: optionalStringArg(request, "title"))
 		case "getFrontmost":
+			if boolArg(request, "pidOnly") == true { return ["pid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0] }
 			return try getFrontmost()
+		case "reportLaunchForeground":
+			let pid = Int32(try intArg(request, "pid"))
+			guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return ["active": false] }
+			ForegroundActivity.shared.tookForeground(targetPid: pid, runId: optionalStringArg(request, "runId"))
+			return ["active": true]
 		case "getUserContext":
 			return try getUserContext()
 		case "beginInputSuppression":
@@ -1438,10 +1446,14 @@ final class Bridge {
 			throw BridgeFailure(message: "App with pid \(pid) is no longer running", code: "app_not_found")
 		}
 
+		if let id = optionalIntArg(request, "windowId"), !appWindowIds(pid: pid).contains(UInt32(clamping: id)) {
+			return ["appRestored": false, "offSpace": true]
+		}
 		// Tangu: only the adapter sends this (to bring a covered page forward); Desktop's own window switching uses
 		// focusWindow. Putting an app the user was not in on top takes the screen like a real click does, so say so.
-		if !app.isActive { ForegroundActivity.shared.tookForeground() }
+		let wasActive = app.isActive
 		let appRestored = app.activate()
+		if !wasActive && appRestored { ForegroundActivity.shared.tookForeground(targetPid: pid, runId: optionalStringArg(request, "runId")) }
 		var restoredWindowTitle = ""
 		var windowRestored = false
 
@@ -1511,6 +1523,9 @@ final class Bridge {
 		let pid = Int32(try intArg(request, "pid"))
 		let windowId = optionalIntArg(request, "windowId").map { UInt32($0) }
 		let windowRef = optionalStringArg(request, "windowRef")
+		if boolArg(request, "requireOnscreen") == true, let windowId, !appWindowIds(pid: pid).contains(windowId) {
+			return ["focused": false, "reason": "off_space"]
+		}
 		guard let window = windowElement(pid: pid, windowId: windowId, windowRef: windowRef) else {
 			return ["focused": false, "reason": "window_not_found"]
 		}
@@ -1609,6 +1624,10 @@ final class Bridge {
 				if let bundleId { root["bundleId"] = bundleId }
 				roots.append(root)
 			}
+			if pid != nil && CGPreflightScreenCaptureAccess() && NSRunningApplication(processIdentifier: appPid)?.isHidden == false {
+				let known = Set(roots.compactMap { ($0["windowId"] as? NSNumber)?.uint32Value })
+				roots.append(contentsOf: offscreenRoots(pid: appPid, excluding: known))
+			}
 			let popupCandidates = cgPopupMenuCandidates(pid: appPid, entries: entries)
 			let menuElements = popupCandidates.isEmpty ? [] : openMenuElements(pid: appPid, messagingTimeout: isBroadDiscovery ? 0.25 : 1.0)
 			for (index, candidate) in popupCandidates.enumerated() {
@@ -1640,6 +1659,27 @@ final class Bridge {
 		}
 		roots.sort { (($0["zOrder"] as? Int) ?? Int.max) < (($1["zOrder"] as? Int) ?? Int.max) }
 		return ["roots": roots]
+	}
+
+	/// AXWindows can omit windows on inactive Spaces. Keep their window-server identities
+	/// without raising the app or pairing them to an unrelated AX element by geometry.
+	private func offscreenRoots(pid: Int32, excluding known: Set<UInt32>) -> [[String: Any]] {
+		guard #available(macOS 14.0, *) else { return [] }
+		let ready = DispatchSemaphore(value: 0)
+		let found = Box<[[String: Any]]>([])
+		SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: false) { content, _ in
+			defer { ready.signal() }
+			found.value = (content?.windows ?? []).compactMap { w in
+				guard w.owningApplication?.processID == pid, !w.isOnScreen, w.windowLayer == 0,
+					!known.contains(w.windowID), w.frame.width >= 100, w.frame.height >= 80 else { return nil }
+				let ref = "cgwindow:\(pid):\(w.windowID)"
+				return ["kind": "window", "windowRef": ref, "rootRef": ref, "windowId": Int(w.windowID), "pid": Int(pid),
+					"appName": w.owningApplication?.applicationName ?? "", "bundleId": w.owningApplication?.bundleIdentifier ?? "",
+					"title": w.title ?? "", "isOnscreen": false, "role": "AXWindow", "zOrder": 9999,
+					"framePoints": ["x": w.frame.minX, "y": w.frame.minY, "w": w.frame.width, "h": w.frame.height]]
+			}
+		}
+		return ready.wait(timeout: .now() + 2) == .success ? found.value : []
 	}
 
 	private func listWindows(pid: Int32, cgEntries: [[String: Any]]? = nil, messagingTimeout: Float = 1.0) throws -> [[String: Any]] {
@@ -1688,7 +1728,7 @@ final class Bridge {
 				],
 				"scaleFactor": scale,
 				"isMinimized": isMinimized,
-				"isOnscreen": candidate?.isOnscreen ?? !isMinimized,
+				"isOnscreen": candidate?.isOnscreen ?? false,
 				"isMain": isMain,
 				"isFocused": isFocused,
 				"metadata": rootMetadata(pairing: pairing, sheetCount: sheetCount),
@@ -1714,7 +1754,7 @@ final class Bridge {
 					"framePoints": ["x": sheetFrame.origin.x, "y": sheetFrame.origin.y, "w": sheetFrame.width, "h": sheetFrame.height],
 					"scaleFactor": displayScaleFactor(for: sheetFrame),
 					"isMinimized": false,
-					"isOnscreen": sheetCandidate?.isOnscreen ?? candidate?.isOnscreen ?? !isMinimized,
+					"isOnscreen": sheetCandidate?.isOnscreen ?? candidate?.isOnscreen ?? false,
 					"isMain": false,
 					"isFocused": isFocused,
 					"metadata": ["pairing": ["confidence": sheetCandidate == nil ? pairing.confidence : "high", "score": sheetCandidate == nil ? pairing.score : 100], "sheetCount": 0],
@@ -1760,12 +1800,12 @@ final class Bridge {
 		let requestedRole = requestedRoot.flatMap { stringAttribute($0, attribute: kAXRoleAttribute as CFString) } ?? ""
 		let isMenuRoot = requestedRole == "AXMenu" || (windowRef?.hasPrefix("cgmenu:") == true)
 		let captureStart = Date()
-		let shouldCapture = !isMenuRoot && (includeImage || readText == "always")
+		let shouldCapture = !isMenuRoot && (includeImage || readText == "always" || windowRef?.hasPrefix("cgwindow:") == true)
 		let capture = try shouldCapture ? windowId.map { try captureWindow(windowId: $0) } : nil
 		let captureMs = capture.map { _ in elapsedMs(captureStart) } ?? 0
 
 		let pid: Int32
-		if let windowId, let ownerPid = pidForWindowId(windowId) {
+		if let windowId, let ownerPid = capture?.ownerPID ?? pidForWindowId(windowId) {
 			pid = ownerPid
 		} else if let requestedRoot, let owner = pidForElement(requestedRoot) {
 			pid = owner
@@ -1785,6 +1825,24 @@ final class Bridge {
 				"outline": outline.payload(),
 				"timings": ["captureMs": 0, "describeMs": 0, "readTextMs": 0],
 			]
+		}
+		if let ref = windowRef, ref.hasPrefix("cgwindow:") {
+			guard let capture, let windowId, ref == "cgwindow:\(pid):\(windowId)", capture.ownerPID == pid,
+				optionalStringArg(request, "scopeRef") == nil else {
+				throw BridgeFailure(message: "This window requires a fresh visual or pixels observation.", code: "root_not_found")
+			}
+			let frame = capture.frame
+			let image = downscaledImage(capture.image, maxDimension: maxDimension) ?? capture.image
+			guard let jpeg = jpegData(image: image, quality: 0.8) else { throw BridgeFailure(message: "Window image unavailable", code: "encoding_failed") }
+			let width = image.width, height = image.height, lookId = freshLookId()
+			storeLookRecord(LookRecord(lookId: lookId, windowId: windowId, windowFrame: frame, imageWidth: width, imageHeight: height, hasImage: true))
+			let outline = LookNode(element: nil, ref: ref, role: "AXWindow", subrole: "", identifier: "", title: "", description: "", value: "", actions: [], canPress: false, canFocus: false, canSetValue: false, canScroll: false, canIncrement: false, canDecrement: false, isTextInput: false, rect: CGRect(x: 0, y: 0, width: width, height: height), pictureOnly: true)
+			var picture: [String: Any] = ["jpegBase64": jpeg.base64EncodedString(), "width": width, "height": height]
+			if let grid = pictureGrid(image) { picture["grid"] = grid }
+			return ["lookId": lookId, "capturedAt": captureStart.timeIntervalSince1970, "outline": outline.payload(), "image": picture,
+				"window": ["windowId": Int(windowId), "rootRef": ref, "kind": "window", "role": "AXWindow", "isModal": false,
+					"framePoints": ["x": frame.minX, "y": frame.minY, "w": frame.width, "h": frame.height], "scaleFactor": Double(width) / max(1, frame.width)],
+				"timings": ["captureMs": captureMs, "describeMs": 0, "readTextMs": 0]]
 		}
 		guard let window = windowElement(pid: pid, windowId: windowId, windowRef: windowRef) else {
 			throw BridgeFailure(message: "Root is not available through Accessibility", code: "root_not_found")
@@ -1847,13 +1905,19 @@ final class Bridge {
 
 		let lookId = freshLookId()
 		let baseRecord = baseLookId.flatMap { lookRecord(for: $0) }
+		var parentWindowId = baseRecord?.parentWindowId
+		if windowId == nil && parentWindowId == nil, let parent = parentElement(window),
+			stringAttribute(parent, attribute: kAXRoleAttribute as CFString) == "AXWindow" {
+			let pairing = pairingForWindow(parent, pid: pid)
+			if pairing.confidence != "low" { parentWindowId = pairing.candidate?.windowId }
+		}
 		storeLookRecord(LookRecord(
 			lookId: lookId,
 			windowId: windowId ?? baseRecord?.windowId ?? 0,
 			windowFrame: baseRecord?.windowFrame ?? capture?.frame ?? rootFrame,
 			imageWidth: baseRecord?.imageWidth ?? imageWidth,
 			imageHeight: baseRecord?.imageHeight ?? imageHeight,
-			hasImage: baseRecord?.hasImage ?? (capture != nil)
+			hasImage: baseRecord?.hasImage ?? (capture != nil), parentWindowId: parentWindowId
 		))
 		let scale = (capture?.frame.width ?? rootFrame.width) > 0 ? Double(imageWidth) / (capture?.frame.width ?? rootFrame.width) : displayScaleFactor(for: rootFrame)
 		let pairing = pairingForWindow(window, pid: pid)
@@ -2347,24 +2411,30 @@ final class Bridge {
 		let action = try stringArg(request, "action")
 		let target = request["target"] as? [String: Any] ?? [:]
 		let params = request["params"] as? [String: Any] ?? [:]
-		let policy = optionalStringArg(request, "policy") ?? "default"
+		let inputWindowId = record.parentWindowId ?? record.windowId
+		let onDesktop = appWindowIds(pid: pid).contains(inputWindowId)
+		let policy = onDesktop ? (optionalStringArg(request, "policy") ?? "default") : "ax_only"
+		if !onDesktop && ["keypress", "typeText", "drag", "moveMouse"].contains(action) {
+			throw BridgeFailure(message: "This input needs a focused window. The target stayed in its Space.", code: "foreground_required")
+		}
 		// Tangu:登记"正在操控这个窗口"(供 liveView),并按设置点亮边缘光效。放在最前面 —— 后面任何
 		// 一步抛错都不该让用户失去"agent 正在动这个窗口"的可见信号。
 		// 复用 cursorOverlay 这一个开关(vendor 的 act 请求里本就带着它),不为光效另开配置键:
 		// 二者是同一件事——"把 agent 的动作画出来给人看"。要拆开时再加键不迟。
 		// 协议 20:overlayStyle / reduceMotion / runId / clickAfterArrival 都是可选的,缺了走缺省(柔蓝、旧时长)。
-		let overlay = OverlayActOptions.parse(request)
+		var overlay = OverlayActOptions.parse(request)
+		if !onDesktop { overlay.enabled = false }
 		noteControlledWindow(windowId: record.windowId, pid: pid, overlay: overlay)
+		var holdsPhysicalInput = false
 		// 下面有一堆提前 return / throw 的路,act 结束一律从这里报。
 		defer { noteActFinished() }
 		let deferRootDelta = boolArg(request, "deferRootDelta") ?? false
-		let delivery = policy == "background" ? "pid" : ((params["delivery"] as? String) == "pid" ? "pid" : "hid")
+		let delivery = !onDesktop || policy == "background" ? "pid" : ((params["delivery"] as? String) == "pid" ? "pid" : "hid")
 		// pid 投递的坐标点击 / 滚轮投完看画面:变了多少像素(-1 = 截不到图),nil = 没走这条路。
 		var pixelsChanged: Int?
-		var holdsPhysicalInput = false
 		func acquirePhysicalInputIfNeeded() {
 			if delivery == "hid" && !holdsPhysicalInput {
-				physicalInputLock.lock(); ForegroundActivity.shared.enter()
+				physicalInputLock.lock(); ForegroundActivity.shared.enter(targetPid: pid, runId: overlay.runId)
 				holdsPhysicalInput = true
 			}
 		}
@@ -2384,7 +2454,7 @@ final class Bridge {
 		/// reply(先到再点):主线程 perform 完把这段飞行的到达时刻报回来。返回 false = 什么都没投(不画),别去等 reply。
 		@discardableResult
 		func cue(_ requested: AgentCursor.Cue, at point: CGPoint, viaAx: Bool = false, reply: ArrivalReply? = nil) -> Bool {
-			guard supportsAgentCursor, overlay.enabled else { return false }
+			guard onDesktop, supportsAgentCursor, overlay.enabled else { return false }
 			var cue = requested
 			if !viaAx && delivery == "hid" {
 				switch cue {
@@ -2561,6 +2631,14 @@ final class Bridge {
 		/// ⚠️命中测试的根**必须是目标 App**,不能用 systemWide:目标窗口在后台时,那个屏幕坐标上压着的
 		/// 是别人的窗口,systemWide 会把别人窗口里的控件返回给我们 —— 那一下就点到别的 App 上了。
 		/// 再加一道窗口子树校验:同一个 App 开多个窗口时,同样会点错窗口。
+		func press(_ element: AXUIElement) -> AXError {
+			let wasActive = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+			let result = AXUIElementPerformAction(element, kAXPressAction as CFString)
+			if !wasActive && NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
+				ForegroundActivity.shared.tookForeground(targetPid: pid, runId: overlay.runId)
+			}
+			return result
+		}
 		func backgroundPressAtPoint(_ point: CGPoint) -> Bool {
 			guard action == "press" || action == "click" else { return false }
 			// 右键/中键/双击的语义 AXPress 表达不了,老实走物理事件。
@@ -2581,7 +2659,7 @@ final class Bridge {
 			let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXTextView", "AXSearchField", "AXComboBox", "AXEditableText", "AXSecureTextField"]
 			guard !hasAncestorRole(hit, role: "AXWebArea"), !textRoles.contains(hitRole) else { return false }
 			guard supportsAction(hit, action: kAXPressAction as CFString) else { return false }
-			guard AXUIElementPerformAction(hit, kAXPressAction as CFString) == .success else { return false }
+			guard press(hit) == .success else { return false }
 			performed["grounding"] = "hit_test"
 			performed["delivery"] = "ax"
 			performed["hitRole"] = hitRole
@@ -2592,8 +2670,9 @@ final class Bridge {
 			return true
 		}
 
-		func focusTargetForPhysicalInput() {
+		func focusTargetForPhysicalInput() throws {
 			guard delivery == "hid" else { return }
+			guard appWindowIds(pid: pid).contains(inputWindowId) else { throw BridgeFailure(message: "The window left the current Space before input.", code: "foreground_required") }
 			if let app = NSRunningApplication(processIdentifier: pid), !app.isActive {
 				ForegroundActivity.shared.physicalInput()
 				performed["activated"] = app.activate()
@@ -2614,7 +2693,7 @@ final class Bridge {
 				let role = stringAttribute(hit, attribute: kAXRoleAttribute as CFString) ?? ""
 				if role == "AXWindow" || role == "AXApplication" { preflightCapsUnknown = true; return }
 				if delivery == "hid" && attempt < 3 {
-					focusTargetForPhysicalInput()
+					try focusTargetForPhysicalInput()
 					usleep(20_000)
 					continue
 				}
@@ -2631,7 +2710,7 @@ final class Bridge {
 			for attempt in 0..<3 {
 				top = topWindowPid(at: point, candidates: onScreenWindows(), helperPid: getpid(), displays: displays, dockPid: dock)
 				if top == pid { return }
-				if attempt < 2 { focusTargetForPhysicalInput(); usleep(80_000) }
+				if attempt < 2 { try focusTargetForPhysicalInput(); usleep(80_000) }
 			}
 			let owner = top.flatMap { NSRunningApplication(processIdentifier: $0)?.localizedName }.map { " (\($0))" } ?? ""
 			throw BridgeFailure(message: "Another window\(owner) covers this point and macOS did not let the target app come forward, so the click was NOT sent (it would have hit that window). Bring the target window to the front, or use a point where it is not covered.", code: "occluded_target")
@@ -2644,7 +2723,7 @@ final class Bridge {
 			// 纯坐标点击先试后台 AX 按压。带 element 的路径不试:那边刚判过 AXPress 支不支持,
 			// 走到这里就是已经失败过一次,再试一遍只是重复同一个失败。
 			// 走物理事件(前台)的不试:要的就是一次真实点击 —— 它让系统把目标 App 拿到前面,后面的打字才进得去(keysFollow)。
-			if element == nil, delivery != "hid", backgroundPressAtPoint(point) { return }
+			if onDesktop, element == nil, delivery != "hid", backgroundPressAtPoint(point) { return }
 			performed["grounding"] = "coordinates"
 			if delivery == "pid" { performed["verification"] = "caller_required" }
 			// pid 投递的事件带上窗口号(没带的 AppKit 一律丢掉,见 postEvent)。拖拽还没在真机上验过,照旧不带。
@@ -2653,6 +2732,9 @@ final class Bridge {
 			// 投给后台窗口的点击 / 滚轮,App 不回话:投之前隔 150ms 截两张(两张之间就在变的格子 = 播放进度、动图,不算),
 			// 再记下 App 有哪些窗口;投完比画面和窗口表(零位移的滚轮是垫的,不比)。截图慢(> 1.5s)就不判,免得拖过整个动作的超时。
 			let scrolls = ((params["scrollX"] as? NSNumber)?.intValue ?? 0) != 0 || ((params["scrollY"] as? NSNumber)?.intValue ?? 0) != 0
+			if !onDesktop && window == nil {
+				throw BridgeFailure(message: "Cannot address this off-Space window. No input sent.", code: "window_not_found")
+			}
 			var pixelsBefore: PixelsBefore?
 			if window != nil && (action == "press" || action == "click" || (action == "scroll" && scrolls)) {
 				let started = Date()
@@ -2669,7 +2751,7 @@ final class Bridge {
 			}
 			defer { if let pixelsBefore { pixelsChanged = pixelsChangedAfterInput(windowId: record.windowId, pid: pid, before: pixelsBefore) } }
 			acquirePhysicalInputIfNeeded()
-			focusTargetForPhysicalInput()
+			try focusTargetForPhysicalInput()
 			if delivery == "hid" { try preflight(point); try requireUncovered(point) }
 			switch action {
 			case "press", "click":
@@ -2720,9 +2802,9 @@ final class Bridge {
 				}
 			} else if elementPressable(element) {
 				let cursorPoint = try? coordinatePoint()
-				var status = AXUIElementPerformAction(element, kAXPressAction as CFString)
+				var status = press(element)
 				if status != .success, let refreshed = refreshElement(), supportsAction(refreshed, action: kAXPressAction as CFString) {
-					status = AXUIElementPerformAction(refreshed, kAXPressAction as CFString)
+					status = press(refreshed)
 				}
 				if status == .success {
 					performed["grounding"] = "description"
@@ -2737,8 +2819,9 @@ final class Bridge {
 		} else if let element, action == "setText" {
 			let text = params["text"] as? String ?? ""
 			if hasAncestorRole(element, role: "AXWebArea") {
+				guard onDesktop else { throw BridgeFailure(message: "This web field needs keyboard focus.", code: "foreground_required") }
 				acquirePhysicalInputIfNeeded()
-				focusTargetForPhysicalInput()
+				try focusTargetForPhysicalInput()
 				_ = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
 				cueField(element)
 				let currentValue = stringAttribute(element, attribute: kAXValueAttribute as CFString) ?? ""
@@ -2783,7 +2866,7 @@ final class Bridge {
 				if focused == .success { performed["focused"] = true }
 			}
 			acquirePhysicalInputIfNeeded()
-			if delivery == "hid" && !preserveFocus { focusTargetForPhysicalInput() }
+			if delivery == "hid" && !preserveFocus { try focusTargetForPhysicalInput() }
 			let text = params["text"] as? String ?? ""
 			if !text.isEmpty { cueField(element) }
 			try postUnicodeText(text, pid: pid, delivery: delivery)
@@ -2817,7 +2900,7 @@ final class Bridge {
 				}
 			}
 			acquirePhysicalInputIfNeeded()
-			if delivery == "hid" && !preserveFocus { focusTargetForPhysicalInput() }
+			if delivery == "hid" && !preserveFocus { try focusTargetForPhysicalInput() }
 			try postKeyPress(keys: keys, pid: pid, delivery: delivery)
 			performed["grounding"] = "coordinates"
 		} else if let element, action == "scroll" {
@@ -3930,7 +4013,7 @@ final class Bridge {
 			}
 
 			let title = (entry[kCGWindowName as String] as? String) ?? ""
-			let isOnscreen = (entry[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? true
+			let isOnscreen = (entry[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? false
 			candidates.append(
 				CGWindowCandidate(
 					windowId: windowNumber,
@@ -4125,6 +4208,7 @@ final class Bridge {
 			let capturedImage = Box<CGImage?>(nil)
 			let capturedError = Box<Error?>(nil)
 			let capturedOverlays = Box<[CGRect]>([])
+			let selectedWindow = Box<SCWindow?>(nil)
 
 			let task = Task {
 				defer { semaphore.signal() }
@@ -4137,6 +4221,7 @@ final class Bridge {
 						throw BridgeFailure(message: "Window \(windowId) is not available for capture", code: "window_not_found")
 					}
 
+					selectedWindow.value = window
 					let config = SCStreamConfiguration()
 					// Avoid ScreenCaptureKit's default 1920x1080 canvas for window captures.
 					let scale = displayScaleFactor(for: window.frame)
@@ -4195,7 +4280,7 @@ final class Bridge {
 				throw BridgeFailure(message: "Capture failed", code: "capture_failed")
 			}
 
-			return CapturedWindowImage(image: image, windowId: windowId, frame: currentWindowBounds(windowId: windowId) ?? CGRect(x: 0, y: 0, width: image.width, height: image.height), overlays: capturedOverlays.value)
+			return CapturedWindowImage(image: image, windowId: windowId, frame: selectedWindow.value?.frame ?? CGRect(x: 0, y: 0, width: image.width, height: image.height), overlays: capturedOverlays.value, ownerPID: selectedWindow.value?.owningApplication?.processID)
 		}
 		if let payload = try cgWindowScreenshotFallback(windowId: windowId) {
 			return payload
@@ -4304,7 +4389,10 @@ final class Bridge {
 	private func pointerWindow(target windowId: UInt32, pid: Int32, at point: CGPoint) -> PidWindow? {
 		guard Self.setWindowLocation != nil else { return nil }
 		let candidates = onScreenWindows()
-		guard let target = candidates.first(where: { $0.id == windowId && $0.pid == pid }) else { return nil }
+		guard let target = candidates.first(where: { $0.id == windowId && $0.pid == pid }) else {
+			guard let owned = windowInfo(windowId: windowId), owned.pid == pid else { return nil }
+			return PidWindow(id: windowId, origin: owned.bounds.origin)
+		}
 		let id = pointerWindowId(target: target, candidates: candidates, at: point)
 		return candidates.first { $0.id == id }.map { PidWindow(id: id, origin: $0.frame.origin) }
 	}

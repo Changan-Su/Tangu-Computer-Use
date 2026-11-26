@@ -69,10 +69,10 @@ function accessibilityPressNote(steps: Array<{ accessibilityPress?: boolean; pre
     : `${sent} The window could not be brought forward, so nothing here shows whether it landed. Next, only look: call observe_ui again. If it still shows no change, ask the user to check the window.\n`;
 }
 
-export function executionNote(details: unknown, canRequestForeground = false): string {
+export function executionNote(details: unknown): string {
   const summary = executionSummary(details);
   if (!summary) return '';
-  const strict = summary.strictBackground && !canRequestForeground ? '[policy] Strict background is ON. Do not bypass it with shell, AppleScript, open/activate, or another tool. If foreground input is needed, ask the user to switch the app or change this setting.\n' : '';
+  const strict = summary.strictBackground ? '[policy] Strict background is ON. Do not bypass it with shell, AppleScript, open/activate, or another tool. If foreground input is needed, ask the user to switch the app or change this setting.\n' : '';
   if (summary.earlierPressTookEffect) {
     // 页面变了是证据,不是定论(页面上的时钟也会动):说清楚变了什么,让模型看了再定;它再按一次就发出去。
     const moved = summary.earlierPressTookEffect === 'picture' ? 'the picture around the element has changed (a current screenshot is attached)' : 'the page has changed (see the changes in this result)';
@@ -201,7 +201,7 @@ const TARGET_GONE = 'The current controlled window is no longer available';
 export function goneHint(message: string, target?: { app?: string; bundleId?: string }): string {
   if (!message.includes(TARGET_GONE)) return message;
   const call = target?.bundleId ? `ensure_app({ bundleId: ${JSON.stringify(target.bundleId)} })` : target?.app ? `ensure_app({ app: ${JSON.stringify(target.app)} })` : 'ensure_app';
-  return `${message} This is also what a window that left the current desktop looks like: it is on another desktop (Space) or hidden — such windows cannot be listed, observed or clicked. If the app is still running, ${call} returns a fresh window observation or explains how to request foreground access.`;
+  return `${message} The window may be hidden, closed or on another desktop (Space). ${call} returns observable windows without activating a running app. Observe a fresh root before acting.`;
 }
 
 /** find_roots 按 App 找却一个 root 都没有:同一个原因,同一条出路(只在 macOS 说,ensure_app 只有那边有)。 */
@@ -209,5 +209,5 @@ export function noRootsHint(details: unknown, platform: string = process.platfor
   const d = details as { tool?: string; windows?: unknown[]; query?: { app?: string; bundleId?: string; pid?: number } } | null | undefined;
   if (platform !== 'darwin' || d?.tool !== 'find_roots' || !Array.isArray(d.windows) || d.windows.length > 0) return '';
   if (!d.query?.app && !d.query?.bundleId && !d.query?.pid) return '';
-  return '\n[hint] A running app has no roots here while all its windows are on another desktop (Space) or hidden. ensure_app (by bundleId or app name) resolves the app and returns its first observable window state.';
+  return '\n[hint] The target may be hidden, closed or on another desktop (Space). Use ensure_app with the app identity to discover any observable windows in place.';
 }

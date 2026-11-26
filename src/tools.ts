@@ -186,18 +186,13 @@ const toolSpecs = (compact: boolean, panels = false): ToolSpec[] => [
     }, compact ? [] : ['stateId', 'actions']),
   },
   {
-    name: 'ensure_app', run: (args, tcx, pctx) => runEnsureApp(args, tcx, pctx), sideEffect: 'system', darwinOnly: true, timeoutMs: 25_000,
-    description: 'Start here for a named Mac app. Resolve its localized name, find its running window and return its first screenshot and actionable state in one call. Use pixels for screenshot-only work. Cold launches require task approval because some apps activate themselves. If several windows match, choose a returned root. Use this again to recover a stale window.',
+    name: 'ensure_app', run: (args, tcx, pctx) => runEnsureApp(args, tcx, pctx), sideEffect: 'system', approval: 'command', darwinOnly: true, timeoutMs: 25_000,
+    description: 'Start here for a named Mac app. Resolve its localized name, find its running window and return its first screenshot and actionable state in one call. Use pixels for screenshot-only work. Running apps stay in their Space. Cold launches follow the host’s normal tool permission tier. If several windows match, choose a returned root. Use this again to recover a stale window.',
     parameters: obj({
       app: S('Installed app name in the user’s language, or an app bundle path'),
       bundleId: S('Exact bundle identifier, if already known'),
       mode: { type: 'string', enum: ['visual', 'pixels', 'roots'], description: 'Default visual. Use roots to list windows without capturing an image.' },
     }),
-  },
-  {
-    name: 'allow_foreground_for_this_task', sideEffect: 'system', approval: 'always', timeoutMs: 10_000,
-    description: 'Ask the user to allow Computer Use to focus apps and send foreground input for the rest of this task. Use only after background operation is insufficient. A new user turn needs new approval. Strict background settings still apply.',
-    parameters: obj({ reason: S('Explain to the user which app needs focus and why.', 350) }, ['reason']),
   },
   {
     name: 'read_text', exec: executeReadText as PiExecute, sideEffect: 'read', timeoutMs: 30_000,
@@ -267,7 +262,7 @@ export function explainGone(e: unknown, args?: Record<string, any>): void {
 
 /** AgentToolResult → 返回给模型的 string;image block(截图)经 collectImage 回灌;末尾附几行 vendor 只写进 details 的事实:
  *  截图的坐标空间、expect 有没有满足、是否抢了前台、「这是 Forsion 自己的窗口」、按 App 找却没有 root 时的出路。 */
-export function render(result: AgentToolResult, tcx: ToolContext, args?: Record<string, any>, canRequestForeground = false): string {
+export function render(result: AgentToolResult, tcx: ToolContext, args?: Record<string, any>): string {
   const parts: string[] = [];
   let attached = false;
   for (const block of result.content) {
@@ -280,7 +275,7 @@ export function render(result: AgentToolResult, tcx: ToolContext, args?: Record<
   }
   const details = (result as { details?: { pixelsOnly?: boolean; tool?: string; root?: { ref?: string }; execution?: unknown; target?: { app?: string; bundleId?: string; pid?: number }; capture?: { stateId?: string } } }).details;
   if (details?.pixelsOnly && !attached && details.root?.ref) {
-    const status = details.tool === 'act_ui' ? 'Input dispatched. ' : '';
+    const status = details.tool === 'act_ui' ? executionNote(details) : '';
     return status + `Screenshot unavailable for ${details.root.ref}. Request a fresh image with observe_ui({root:"${details.root.ref}",mode:"pixels"}) before using coordinates.`;
   }
   const body = parts.join('\n') || '(no output)';
@@ -289,15 +284,10 @@ export function render(result: AgentToolResult, tcx: ToolContext, args?: Record<
     targets.set(stateId, { app: details.target.app, bundleId: details.target.bundleId });
     if (targets.size > 64) targets.delete(targets.keys().next().value!);
   }
-  return executionNote(details, canRequestForeground) + body + imageNote(details, attached) + expectNote(details) + scrollNote(args?.actions, details?.execution) + foregroundNote(details?.execution, details?.target?.pid) + selfWindowNote(details) + noRootsHint(details);
+  return executionNote(details) + body + imageNote(details, attached) + expectNote(details) + scrollNote(args?.actions, details?.execution) + foregroundNote(details?.execution, details?.target?.pid) + selfWindowNote(details) + noRootsHint(details);
 }
 
-/** ensure_app:后台启动目标 app(open -g)+ 轮询 find_roots 直到有可观察窗口,回其 roots。
- *  已经在跑却列不出窗口(窗口在别的桌面,或被收起来不显示)时后台那一下不管用,只能激活它 —— 屏幕会切到它那个桌面。
- *  结果里如实说它最后在不在前台:微信这类 App 收到重新打开事件会自己跳到前台,「后台启动」对它不成立(反馈 55b984eb)。
- *  严格后台模式下不激活,改为说明原因。
- *  导出(连同 render / explainGone)只为真机仪器 scripts/vision-only.check.mjs 能直接调:走 execute 会顺带触发
- *  helper 的自动更新检查,开发检出里那份 helper 和装着的不是同一个签名,会把用户授过权的 helper 换掉。 */
+/** Inspect a running app in place. Cold starts use a background launch when settings allow it. */
 const nativeDiscovery = { listApps: (signal?: AbortSignal) => currentPlatformBackend.listApps(signal), find: executeFind, observe: executeObserve };
 export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, pctx: ExtensionContext, discovery = nativeDiscovery): Promise<string> {
   if (process.platform !== 'darwin') {
@@ -345,28 +335,32 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
   }
   const name = bundleId || app;
   // -g:启动但不置前台。execFile 传 argv(非 shell),bundleId/app 作单参无注入。
-  const open = (background: boolean) => execFileP('open', [...(background ? ['-g'] : []), ...(bundleId && (!app.startsWith('/') || args.bundleId) ? ['-b', bundleId] : ['-a', app])], { timeout: 8_000, signal: tcx.signal });
+  const openInBackground = () => execFileP('open', ['-g', ...(bundleId && !absolute ? ['-b', bundleId] : ['-a', app])], { timeout: 8000, signal: tcx.signal });
   const strict = loadComputerUseConfig(pctx.cwd).config.headless;
   // 查找已运行的 App 时不重复发送 open 事件，有的 App 收到它会自己跳到前台。
   if (!wasRunning) {
     if (absolute && running.some(a => bundleId && a.bundleId === bundleId)) return 'Another installed copy is running. Open the requested copy manually and retry with its path.';
-    if (strict || pctx.foregroundAllowed !== true) {
-      const next = strict ? 'Ask the user to open it, then retry.' : 'Request foreground approval if available, or ask the user to open it.';
-      return `${name} is not running or could not be identified. A newly launched native app can activate itself even with a background launch. ${next}`;
-    }
+    if (strict) return `${name} is not running. Strict background is enabled; ask the user to open it before observing.`;
     try {
-      await open(true);
+      await openInBackground();
     } catch (e: any) {
       return `Could not launch ${name}: ${e?.stderr?.toString().trim() || e?.message || e}. Check the app/bundleId is installed.`;
     }
   }
   const started = Date.now();
-  let activated = false;
-  let triedActivating = false;
   let captureLost = false;
+  let launchSignalled = false;
   while (Date.now() - started < 12_000) {
     if (tcx.signal?.aborted) return 'ensure_app aborted.';
     if (absolute && !pathPids.length) pathPids = await macAppPathPids(app, tcx.signal);
+    if (!wasRunning && !launchSignalled && tcx.runId && Date.now() - started < 2000) {
+      const launched = (await apps()).find(a => mine(a) && a.isFrontmost);
+      if (launched) {
+        const { macosHelper } = await import('./vendor/platform/macos/helper.ts');
+        const reply = await macosHelper.daemonCommand('reportLaunchForeground', { pid: launched.pid, runId: tcx.runId }, 800).catch(() => null);
+        launchSignalled = !!reply;
+      }
+    }
     const found = !absolute || pathPids.length === 1 ? await spec_executeFind(pctx, tcx, appName, bundleId, discovery.find, pathPids[0]) : undefined;
     // 查找本身失败(helper 没应答)不说明窗口在哪,不据此升级到激活。
     if (found) {
@@ -375,11 +369,11 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
         const fm = running.find((a) => a.isFrontmost);
         // 给的名字对不上任何在跑的 App(本地化名、别名)时,退而看前台 App 是不是找到的窗口的主人。
         const front = !!fm && (running.some(mine) ? mine(fm) : found.windows.some(w => w.pid === fm.pid));
-        const how = !front ? `Opened ${name} in the background; it did not take the foreground.`
-          : activated ? `${name} was running with no window on the current desktop (on another desktop, or hidden), so it was brought to the foreground; the screen may have switched to its desktop.`
-          : `Opened ${name}; it is now the foreground app (some apps come forward on their own even when opened in the background).`;
+        const how = !front ? `Observed ${name} in the background; it did not take the foreground.`
+          : `${name} is currently the foreground app.`;
         const roots = `${how}\n${found.text}`;
         if (mode === 'roots' || found.windows.length !== 1) return roots;
+        if ('windowId' in found.windows[0] && !found.windows[0].windowId) return roots + '\nThis accessibility root has no separate screenshot. Use observe_ui with semantic mode.';
         const root = found.windows[0].windowRef;
         let image;
         try {
@@ -396,30 +390,20 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
         const next = pctx.jevEnabled && !seen.startsWith('Screenshot unavailable') ? `\nNext native action: call jev_ui with root ${root} and the visible target names. Use double_click to open a list item.` : '';
         return `${how}\n${summary}\n${seen}${next}`;
       }
-      // ponytail:只对「本来就在跑」的 App 升级到激活;冷启动的窗口晚几秒才出来是常事,不该因此抢前台。
-      // 「本来就在跑」按名字 / bundleId 认,名字对不上(本地化名、别名)就不升级,退回原来的「等满 12 秒」。
-      if (wasRunning && !triedActivating && Date.now() - started > 1_500) {
-        if (strict) {
-          return `${name} is running but has no window on the current desktop (it is on another desktop, or hidden). Bringing it back means taking the foreground, which the strict background setting forbids. Do not bypass this setting through shell, AppleScript, open/activate, or another tool. Ask the user to switch to ${name} themselves, or to turn strict background off.`;
-        }
-        if (pctx.foregroundAllowed !== true) return `${name} is running but has no observable window. To activate it, request approval with allow_foreground_for_this_task if available. You can also ask the user to show the window. Do not use shell or another tool to activate it.`;
-        if (tcx.signal?.aborted) return 'ensure_app aborted.';
-        triedActivating = true;
-        activated = await open(false).then(() => true, () => false);
-      }
+      if (wasRunning && Date.now() - started > 1500)
+        return `${name} is running but has no observable window. Leave it in its Space. Ask the user to show a window if they want to continue.`;
     }
     await sleep(400);
   }
-  const took = activated ? ' It was activated (the foreground was taken and the screen may have switched to its desktop), and it still shows no window.' : '';
-  return `${captureLost ? 'The window changed during capture' : 'No observable window yet'} for ${name}.${took} Retry ensure_app with the same app identity.`;
+  return `${captureLost ? 'The window changed during capture' : 'No observable window yet'} for ${name}. Retry ensure_app with the same app identity.`;
 }
 
 /** Exact app identities keep the first captured window tied to the requested application. */
-async function spec_executeFind(pctx: ExtensionContext, tcx: ToolContext, app: string, bundleId: string, find: typeof executeFind, pid?: number): Promise<{ text: string; windows: { pid: number; windowRef: string }[] } | undefined> {
+async function spec_executeFind(pctx: ExtensionContext, tcx: ToolContext, app: string, bundleId: string, find: typeof executeFind, pid?: number): Promise<{ text: string; windows: { pid: number; windowRef: string; windowId?: number }[] } | undefined> {
   try {
     const params = pid ? { pid } : bundleId ? { bundleId } : { app };
     const r = await find('', params, tcx.signal, undefined, pctx);
-    const windows = (r.details as { windows?: Array<{ pid: number; windowRef: string }> } | undefined)?.windows ?? [];
+    const windows = (r.details as { windows?: Array<{ pid: number; windowRef: string; windowId?: number }> } | undefined)?.windows ?? [];
     // 不走 render:那边会在「没有 root」时附一句「去调 ensure_app」,而这里就是 ensure_app 自己。
     return { text: r.content.map((block) => block.type === 'text' ? block.text : '').join('\n') + selfWindowNote(r.details), windows };
   } catch {
@@ -469,10 +453,6 @@ function bindScreenshotArgs(tool: 'act_ui' | 'observe_ui', args: Record<string, 
 }
 
 export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowserUrl): ToolProvider {
-  // Only the always-approved tool can add a grant. Never fall back to a session
-  // id: a conversation can contain many independently authorized tasks.
-  const grants = new Set<string>();
-  const grantKey = (ctx: ToolContext) => ctx.runId && ctx.userTurnId && ctx.userTurnSignal && !ctx.userTurnSignal.aborted && JSON.stringify([ctx.userId, ctx.appId, ctx.sessionId, ctx.runId, ctx.userTurnId]);
   const browserMode = () => {
     const settings = store.getScopeSettings(PLUGIN_ID, 'global');
     if (settings.browser_use === false) return 'standard';
@@ -485,7 +465,6 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
     && isSupportedPlatform()
     && (!spec.darwinOnly || process.platform === 'darwin')
     && (!spec.jevOnly || store.getScopeSettings(PLUGIN_ID, 'global').jev_enabled === true)
-    && (spec.name !== 'allow_foreground_for_this_task' || store.getScopeSettings(PLUGIN_ID, 'global').headless !== true)
     // 直接读设置,不读 vendor 的配置对象:后者要等这个进程里调过一次工具才同步,在那之前「浏览器工具」关了也照样列出来。
     && (!spec.browserOnly || store.getScopeSettings(PLUGIN_ID, 'global').browser_use !== false);
 
@@ -507,24 +486,8 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
       syncSettings(store);
       const pctx = makePiCtx(tcx, false);
       pctx.jevEnabled = store.getScopeSettings(PLUGIN_ID, 'global').jev_enabled === true;
-      const key = grantKey(tcx);
       const strict = loadComputerUseConfig(pctx.cwd).config.headless;
-      if (spec.name === 'allow_foreground_for_this_task') {
-        if (strict) return 'Strict background is enabled. Ask the user to show the target window themselves.';
-        if (!key || !tcx.userConfirmedCall || tcx.signal?.aborted) return 'Foreground access requires a current task and a confirmed approval from a compatible host. Ask the user to show the window manually.';
-        grants.add(key);
-        if (grants.size > 128) grants.delete(grants.values().next().value!);
-        return 'Foreground control is approved for this task only. Continue with the target app.';
-      }
-      pctx.foregroundAllowed = !strict && !!key && grants.has(key);
-      if (pctx.foregroundAllowed && tcx.userTurnSignal) {
-        const signal = tcx.signal ? AbortSignal.any([tcx.signal, tcx.userTurnSignal]) : tcx.userTurnSignal;
-        tcx = { ...tcx, signal };
-        pctx.signal = signal;
-        signal.throwIfAborted();
-      }
-      if (spec.name === 'launch_browser' && args.visible === true && !strict && !pctx.foregroundAllowed)
-        throw new Error('Visible launch requires foreground approval. Launch without visible to stay in the background.');
+      pctx.foregroundAllowed = !strict && spec.approval === 'command';
       const mode = browserMode();
       pctx.compactBrowserControls = mode !== 'standard';
       pctx.browserPanelZoom = mode === 'panels';
@@ -558,7 +521,7 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
           await ensureComputerUseSetup(pctx, tcx.signal);
         } catch (e: any) {
           // 权限是系统安全设置,只能用户自己拨 —— 但可以替他把 App 登记好、把面板打开。
-          const guidance = await guideMissingPermissions(tcx.signal, pctx.foregroundAllowed);
+          const guidance = await guideMissingPermissions(tcx.signal);
           // ⚠️只有「自动安装本身失败了」才该提终端命令。就绪失败的原因多得很(Linux 缺 AT-SPI、
           // 架构不符、daemon 起不来……),对这些 case 说「去跑 setup」是把模型引到错的方向上,
           // 而真正的原因反而被这句话盖住了。
@@ -570,14 +533,11 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
       }
       // 装/升级过就在结果里说一句 —— 用户装了什么、agent 替他做了什么,不该是暗箱。
       const prefix = installNote ? `${installNote}\n` : '';
-      const policyHint = !strict && !pctx.foregroundAllowed && toolSurface(spec.name, args) === 'desktop' && ['act_ui', 'jev_ui'].includes(spec.name)
-        ? "\n[policy] Only background input is authorized. If that is insufficient, request approval with allow_foreground_for_this_task if available, or ask the user to show the window manually. Inspect unverified results before retrying." : '';
-      if (spec.run) return prefix + presentLiveViewOnce(spec.name, tcx, await spec.run(args, tcx, pctx, store)) + policyHint;
+      if (spec.run) return prefix + presentLiveViewOnce(spec.name, tcx, await spec.run(args, tcx, pctx, store));
       let result: AgentToolResult;
       try {
         result = await spec.exec!('', args, tcx.signal, undefined, pctx);
       } catch (e: any) {
-        if (policyHint && e instanceof Error) e.message += policyHint;
         explainGone(e, args);
         throw e;
       }
@@ -587,7 +547,7 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
         if (!screen) throw new Error('The target supplied no screenshot to inspect.');
         detail = inspectScreenshot(screen, args);
       }
-      let text = render(result, tcx, args, Boolean(policyHint));
+      let text = render(result, tcx, args);
       if (detail?.text) text += '\n' + detail.text;
       if (detail?.crop) {
         const queued = tcx.collectImage && tcx.collectImage({url:'data:image/png;base64,' + detail.crop,name:'detail-2x.png'});
@@ -595,7 +555,7 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
           ? 'Magnified detail omitted by the image collector. Request it in a new model round.'
           : detail.detailDescription);
       }
-      return prefix + presentLiveViewOnce(spec.name, tcx, text) + policyHint;
+      return prefix + presentLiveViewOnce(spec.name, tcx, text);
       })(); } finally { unwatch(); }
     }),
   });

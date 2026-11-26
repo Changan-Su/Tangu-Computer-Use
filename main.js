@@ -135,7 +135,6 @@ const MSG = {
     'tl.v.search.run': '查找', 'tl.v.search.done': '查找', 'tl.v.search.err': '查找',
     'tl.v.read.run': '读取', 'tl.v.read.done': '读取', 'tl.v.read.err': '读取',
     'tl.v.wait.run': '等待', 'tl.v.wait.done': '等到', 'tl.v.wait.err': '等到',
-    'tl.focus.running': '请求本次任务的前台控制权', 'tl.focus.done': '已允许本次任务控制前台', 'tl.focus.error': '未获得本次任务的前台控制权',
     'tl.v.open.run': '打开', 'tl.v.open.done': '打开', 'tl.v.open.err': '打开',
     'tl.v.act.run': '操作', 'tl.v.act.done': '完成这些操作', 'tl.v.act.err': '完成这些操作',
   },
@@ -234,7 +233,6 @@ const MSG = {
     'tl.v.search.run': 'Searching for', 'tl.v.search.done': 'Searched for', 'tl.v.search.err': 'search for',
     'tl.v.read.run': 'Reading', 'tl.v.read.done': 'Read', 'tl.v.read.err': 'read',
     'tl.v.wait.run': 'Waiting for', 'tl.v.wait.done': 'Waited for', 'tl.v.wait.err': 'wait for',
-    'tl.focus.running': 'Requesting foreground control for this task', 'tl.focus.done': 'Foreground control approved for this task', 'tl.focus.error': 'Foreground control was not granted for this task',
     'tl.v.open.run': 'Opening', 'tl.v.open.done': 'Opened', 'tl.v.open.err': 'open',
     'tl.v.act.run': 'Working', 'tl.v.act.done': 'Finished the actions', 'tl.v.act.err': 'finish the actions',
   },
@@ -483,7 +481,7 @@ function overlayPx(frac, natW, natH, scale, offX, offY) {
 // 解析不出动作 → 返回空,宿主照旧显示。⚠️依赖的是 vendor 的结果文字格式:check.mjs 钉着这些模板片段,vendor 升级改了格式会红。
 // 本插件引擎半身的全部工具(src/tools.ts 的 SPECS;check.mjs 断言两边一致)。
 const CU_TOOLS = ['jev_ui', 'find_roots', 'observe_ui', 'search_ui', 'expand_ui', 'inspect_ui', 'act_ui',
-  'ensure_app', 'allow_foreground_for_this_task', 'read_text', 'wait_for', 'launch_browser', 'navigate_browser', 'evaluate_browser']
+  'ensure_app', 'read_text', 'wait_for', 'launch_browser', 'navigate_browser', 'evaluate_browser']
 const TL_TEXT_MAX = 24
 const TL_APP_MAX = 32
 const TL_CHAIN_MAX = 12
@@ -854,16 +852,12 @@ function describeCall(call, iconOf) {
       if (done && !/^Found \d+ matching roots?; returned \d+/m.test(result)) return null
       return out(tlSentence(L, phase, 'find', '', obj), name, bundleId)
     }
-    case 'allow_foreground_for_this_task': {
-      if (done && !result.startsWith('Foreground control is approved for this task only.')) return null
-      return out(tlFmt(L, 'tl.focus.' + phase))
-    }
     case 'ensure_app': {
       const bundleId = typeof args.bundleId === 'string' && BUNDLE_RE.test(args.bundleId) ? args.bundleId : ''
       const app = tlClip(typeof args.app === 'string' ? args.app.replace(/\/+$/, '').split('/').pop().replace(/\.app$/i, '') : '', TL_APP_MAX)
         || bundleId
       if (!app) return null
-      const failed = phase === 'error' || (done && /^(?:Could not launch |ensure_app requires|ensure_app aborted|ensure_app \(background launch\) is macOS-only|.+ is running but has no (?:observable )?window )/m.test(result))
+      const failed = phase === 'error' || (done && /^(?:Could not launch |ensure_app requires|ensure_app aborted|ensure_app \(background launch\) is macOS-only|.+ is running but has no window )/m.test(result))
       // 证据:回来的根列表里有窗口行(「- @rN <kind> <App> pid N …」)。「Opened X, but no window is observable yet.」不算打开好了 → 空
       if (!failed && done && !/^- @r\d+ \S+ .+? pid \d+ /m.test(result)) return null
       return out(tlSentence(L, failed ? 'error' : phase, 'open', '', app), app, bundleId)
