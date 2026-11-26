@@ -76,3 +76,17 @@ export async function macAppPathPids(path: string, signal?: AbortSignal): Promis
   const { stdout } = await run('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script, '--', path], { signal, timeout: 3000 });
   return JSON.parse(stdout);
 }
+
+export async function macScreenLocked(signal?: AbortSignal): Promise<boolean> {
+  // CGSessionCopyCurrentDictionary returns a CF reference in JXA.
+  const script = `ObjC.import('CoreGraphics');
+    const session = ObjC.castRefToObject($.CGSessionCopyCurrentDictionary());
+    ObjC.deepUnwrap(session)?.CGSSessionScreenIsLocked === true;`;
+  try {
+    const { stdout } = await run('/usr/bin/osascript', ['-l', 'JavaScript', '-e', script], { signal, timeout: 2000 });
+    return stdout.trim() === 'true';
+  } catch {
+    signal?.throwIfAborted();
+    return false;
+  }
+}

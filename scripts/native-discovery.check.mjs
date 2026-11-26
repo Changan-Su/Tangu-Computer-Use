@@ -17,6 +17,7 @@ try {
     for (const deliver of [true, false]) {
       const roots = [], captures = [];
       const backend = {
+        screenLocked: async () => { throw new Error('A capturable window needs no lock probe'); },
         listApps: async () => [{ pid: 19, bundleId: 'test.local', appName: 'Fixture' }],
         async find(_id, query) {
           assert.equal(query.bundleId, 'test.local');
@@ -40,5 +41,19 @@ try {
       assert.equal(result.includes('Screenshot unavailable for @r2'), !deliver);
     }
   }
+  for (const running of [false, true]) {
+    const backend = {
+      screenLocked: async () => true,
+      listApps: async () => running ? [{ pid: 19, bundleId: 'test.local', appName: 'Fixture' }] : [],
+      async find() {
+        assert.ok(running, 'a cold launch must stop before window enumeration');
+        return { content: [], details: { windows: [] } };
+      },
+      observe: async () => assert.fail('no target to capture')
+    };
+    const result = await runEnsureApp({ bundleId: 'test.local' }, {}, { cwd: dir }, backend);
+    assert.match(result, /screen_locked.*test\.local.*unlock their Mac/);
+  }
+  console.log('PASS unavailable targets on a locked desktop end with a request to unlock');
   console.log('PASS fresh window and image delivery for both native capture errors');
 } finally { rmSync(dir, { recursive: true, force:true }); }

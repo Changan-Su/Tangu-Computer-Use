@@ -38,7 +38,8 @@ try {
 assert.ok(result.includes(bundleId), 'Result must identify the requested application');
 assert.equal(samples.filter(x => x === target).length, 0, 'The target received foreground focus');
 const visible = shots === 1 && /stateId|State [\da-f-]{36}/i.test(result);
+const locked = shots === 0 && result.includes('[screen_locked]');
 const hidden = shots === 0 && result.includes('no observable window');
 assert.ok(visible || hidden, 'Expected a first image and state, or a background-safe hidden-window outcome');
-console.log(JSON.stringify({ app, bundleId, outcome: visible ? 'first-image' : 'hidden-window', shots, ms: Math.round(performance.now()-start),
+console.log(JSON.stringify({ app, bundleId, outcome: visible ? 'first-image' : locked ? 'screen-locked' : 'hidden-window', shots, ms: Math.round(performance.now()-start),
   samples: samples.length, foregroundChanges: samples.slice(1).filter((x,i) => x !== samples[i]).length, targetForegroundSamples: 0 }));

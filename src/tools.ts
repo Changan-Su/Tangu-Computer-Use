@@ -10,7 +10,7 @@
  */
 import { browserRegions } from './vendor/contract.ts';
 import { assertPublicHttpUrl } from './publicUrl.ts';
-import { macAppIdentifiers, macAppPathPids } from './macosApp.ts';
+import { macAppIdentifiers, macAppPathPids, macScreenLocked } from './macosApp.ts';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ToolDef, ToolProvider, ToolContext, AppProfile, PluginStore } from '@forsion/tangu-agent';
@@ -288,7 +288,7 @@ export function render(result: AgentToolResult, tcx: ToolContext, args?: Record<
 }
 
 /** Inspect a running app in place. Cold starts use a background launch when settings allow it. */
-const nativeDiscovery = { listApps: (signal?: AbortSignal) => currentPlatformBackend.listApps(signal), find: executeFind, observe: executeObserve };
+const nativeDiscovery = { screenLocked: macScreenLocked, listApps: (signal?: AbortSignal) => currentPlatformBackend.listApps(signal), find: executeFind, observe: executeObserve };
 export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, pctx: ExtensionContext, discovery = nativeDiscovery): Promise<string> {
   if (process.platform !== 'darwin') {
     return 'ensure_app (background launch) is macOS-only. On other platforms, launch the app yourself, then use observe_ui.';
@@ -334,11 +334,13 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
     }
   }
   const name = bundleId || app;
+  const lockedMessage = `[screen_locked] macOS is locked and ${name} has no observable window. Stop this desktop task and tell the user to unlock their Mac. Wait for their reply before any further tool calls.`;
   // -g:启动但不置前台。execFile 传 argv(非 shell),bundleId/app 作单参无注入。
   const openInBackground = () => execFileP('open', ['-g', ...(bundleId && !absolute ? ['-b', bundleId] : ['-a', app])], { timeout: 8000, signal: tcx.signal });
   const strict = loadComputerUseConfig(pctx.cwd).config.headless;
   // 查找已运行的 App 时不重复发送 open 事件，有的 App 收到它会自己跳到前台。
   if (!wasRunning) {
+    if (await discovery.screenLocked(tcx.signal)) return lockedMessage;
     if (absolute && running.some(a => bundleId && a.bundleId === bundleId)) return 'Another installed copy is running. Open the requested copy manually and retry with its path.';
     if (strict) return `${name} is not running. Strict background is enabled; ask the user to open it before observing.`;
     try {
@@ -388,11 +390,14 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
         const next = pctx.jevEnabled && !seen.startsWith('Screenshot unavailable') ? `\nNext native action: call jev_ui with root ${root} and the visible target names. Use double_click to open a list item.` : '';
         return `${how}\n${summary}\n${seen}${next}`;
       }
-      if (wasRunning && Date.now() - started > 1500)
-        return `${name} is running but has no observable window. Leave it in its Space. Ask the user to show a window if they want to continue.`;
+      if (wasRunning && Date.now() - started > 1500) {
+        if (await discovery.screenLocked(tcx.signal)) return lockedMessage;
+        return `${name} is running but has no observable window. Leave it in its Space. Ask the user to show a window and wait for their reply before trying again.`;
+      }
     }
     await sleep(400);
   }
+  if (await discovery.screenLocked(tcx.signal)) return lockedMessage;
   return `${captureLost ? 'The window changed during capture' : 'No observable window yet'} for ${name}. Retry ensure_app with the same app identity.`;
 }
 
