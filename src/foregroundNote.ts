@@ -87,6 +87,7 @@ export function executionNote(details: unknown): string {
       : 'The native executor confirmed this action; still verify the requested task result.';
   return `[execution] ${JSON.stringify(summary)}\n${meaning} Jev and act_ui use the SAME executor and foreground policy. A missing foreground transition does not mean Jev is background-only.\n`
     + (summary.steps.at(-1)?.recoveryHint ? summary.steps.at(-1)!.recoveryHint + '\n' : accessibilityPressNote(summary.steps))
+    + (summary.strictBackground === false ? 'When the requested result is visible, finish the turn. Desktop automatically returns to the originating conversation.\n' : '')
     + strict;
 }
 

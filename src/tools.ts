@@ -400,7 +400,7 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
                 if (seen.startsWith('Screenshot unavailable')) return 'Screenshot unavailable after recovery. Stop the blocked step.';
                 receipt.freshCapture = image.details.capture;
                 receipt.phase = 'foreground';
-                return `[foreground] Mini recovery brought ${name} forward. The earlier click was not replayed. Inspect the current image, then click only if still needed.\n${seen}`;
+                return `[foreground] Mini recovery brought ${name} forward. Inspect the new image before clicking. Once the task result is visible, finish your reply. Desktop handles returning to the original chat automatically, including its Space. Do not locate or click the chat to return.\n${seen}`;
               } catch (error) {
                 tcx.signal?.throwIfAborted();
                 if (!/stale|no longer available|root_not_found|window_not_found/i.test(String(error))) throw error;

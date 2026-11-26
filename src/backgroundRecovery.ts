@@ -4,8 +4,8 @@ import type { PictureGrid } from './vendor/outline.ts';
 import { currentOverlayRunId } from './overlayState.ts';
 
 interface WindowIdentity { pid: number; windowId: number }
-interface Point { x: number; y: number; count: number }
-interface Receipt extends WindowIdentity { point: Point; picture?: PictureGrid; verifiedWindow: boolean; freshCapture?: { stateId: string; timestamp: number }; retries: number; phase: 'background' | 'raising' | 'foreground' | 'sent' | 'blocked'; expires: number }
+interface Point { x: number; y: number }
+interface Receipt extends WindowIdentity { point: Point; picture?: PictureGrid; verifiedWindow: boolean; freshCapture?: { stateId: string; timestamp: number }; retries: number; repeatRefused?: boolean; phase: 'background' | 'raising' | 'foreground' | 'sent' | 'blocked'; expires: number }
 const receipts = new Map<string, Receipt>();
 
 function receiptKey(window: WindowIdentity): string | undefined {
@@ -20,7 +20,7 @@ export function clickReceipt(window: WindowIdentity): Receipt | undefined {
 }
 
 export function sameClick(a: Point, b: Point): boolean {
-  return Math.abs(a.x - b.x) <= 0.006 && Math.abs(a.y - b.y) <= 0.006 && a.count === b.count;
+  return Math.abs(a.x - b.x) <= 0.006 && Math.abs(a.y - b.y) <= 0.006;
 }
 
 /** An already exhausted window was requested again. The host can finish this blocked turn. */

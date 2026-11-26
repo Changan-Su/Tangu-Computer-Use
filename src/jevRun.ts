@@ -101,7 +101,7 @@ export const jevRuntime = {
 
 const NOTE = 'attemptedSteps = inputs sent (a scroll step whose until was already in view counts, with scrolls 0). confirmedSteps = steps confirmed by the native executor or by Jev checking the step\'s expect on a fresh screenshot. '
   + 'Unknown is unverified, not failed: a step without expect whose native outcome is unknown stops the run, and so does an expect that did not appear in time. Look at the returned screenshot before continuing, '
-  + 'and continue only the steps that were not confirmed; never repeat an attempted step blindly with jev_ui or act_ui. If the desired effect is missing, follow the latest recoveryHint once. Stop the blocked step if recovery is unavailable. '
+  + 'and continue only the steps that were not confirmed; never repeat an attempted step blindly with jev_ui or act_ui. If the desired effect is missing, follow the latest recoveryHint once. Stop the blocked step if recovery is unavailable. When the task result is visible, finish your reply. Desktop returns to the originating chat automatically. '
   + 'point is in Jev\'s own capture (see capture); pointFraction/box are fractions of the window, so compare them with other screenshots that way. '
   + 'A scroll step reports how often it scrolled and why it stopped (until_seen, max_scrolls, no_change, input_failed, window_resized, cancelled). '
   + 'Jev uses the SAME executor and foreground policy as act_ui; foregroundTaken describes this run only. Preview only locates and cannot test input delivery.';

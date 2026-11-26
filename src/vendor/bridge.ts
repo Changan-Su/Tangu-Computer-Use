@@ -1316,7 +1316,7 @@ async function helperAct(
 	const pointer = isBackgroundPointer(action);
 	const look = currentLookOrThrow();
 	const point = currentPlatformBackend.name === "macos" && pointer && action.action !== "scroll" && "x" in action.target && look.image
-		? { x: action.target.x / look.image.width, y: action.target.y / look.image.height, count: "clickCount" in action.params ? action.params.clickCount ?? 1 : 1 } : undefined;
+		? { x: action.target.x / look.image.width, y: action.target.y / look.image.height } : undefined;
 	let receipt = clickReceipt(target);
 	if (receipt?.phase === "blocked") throw recoveryExhausted("No input sent. The exact window could not be recovered. Report the blocked step.");
 	if (receipt?.phase === "raising") throw new Error("No input sent. Recovery for this window is unavailable. Stop and report the blocked step.");
@@ -1330,7 +1330,8 @@ async function helperAct(
 	const strict = isHeadlessMode();
 	if (same && receipt?.phase === "sent") throw recoveryExhausted("No input sent. Foreground recovery for this control is unavailable. Stop and report the blocked step.");
 	if (same && receipt?.phase === "background" && receipt.retries >= 2) {
-		if (strict || !receipt.verifiedWindow) throw recoveryExhausted("No input sent. Repeated background click could not be verified. Stop and report the blocked step.");
+		if (strict || !receipt.verifiedWindow || receipt.repeatRefused) throw recoveryExhausted("No input sent. Repeated background click could not be verified. Stop and report the blocked step.");
+		receipt.repeatRefused = true;
 		throw new Error(`No input sent. This control has already been clicked twice without confirmation. If the requested change is absent, use ${recoveryCall} once, then inspect the new screenshot. Do not try more nearby coordinates.`);
 	}
 	if (point && receipt?.phase === "foreground") {

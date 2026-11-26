@@ -174,6 +174,8 @@ Both sit just above that window, so a window the user keeps in front of it cover
 first successful `act_ui` or `jev_ui` in a run, the live picture of that window appears on the Agent
 Desk by itself: do not call `desk_present` for it.
 
+When the user asks to return to the original chat, finish the turn as soon as the task result is visible. Desktop returns to the originating conversation automatically. Looking for the chat window delays that handback.
+
 On macOS, Genesis automatically opens a temporary Mini Panel for the current running conversation
 when real Computer Use input takes another app into the foreground. The user does not need to open
 Mini first. It follows the cursor with a linear transition and closes when Forsion regains focus or
