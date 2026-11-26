@@ -43,7 +43,7 @@ export interface ToolContext {
   /** 工具产出图片的回流闸(view_image / computer-use observe 用):把图片 data URL 交回 loop,
    *  loop 在本轮工具执行完后物化成一条 user 图像消息追加到对话尾部,让模型"看见"图片。
    *  缺省(未装配此闸)时工具应优雅降级,不要假定一定可用。 */
-  collectImage?: (img: { url: string; name?: string }) => void;
+  collectImage?: (img: { url: string; name?: string }) => void | boolean;
   displayFile?: (item: { name: string; mime?: string; path?: string; dataUrl?: string }) => void;
   /** 本次 run 的 id(一条用户消息引起的那一整轮)。拿来做「每轮只做一次」;缺省时按 sessionId 兜底。 */
   runId?: string;
@@ -199,6 +199,7 @@ export interface ScopedPluginRouter {
 
 /** 运行时句柄(按引用传入,核心同一模块实例)。只列稳定公开成员。 */
 export interface TanguSdk {
+  validateBrowserUrl?(raw: string): Promise<string>;
   automation: {
     list(): Promise<Array<{id:string;desc:string;enabled:boolean;nextRunAt:string|null;[key:string]:any}>>;
     save(key:string,input:{description:string;type:'at'|'every'|'daily_at';datetime?:string;interval?:string;time?:string;tool:string;args:Record<string,unknown>;enabled:boolean}):Promise<{id:string;[key:string]:any}>;

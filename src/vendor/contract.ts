@@ -24,6 +24,8 @@ export interface NavigateBrowserParams extends StateTargetParams {
 }
 
 export interface LaunchBrowserParams {
+	mode?: "auto" | "pixels";
+	visible?: boolean;
 	url?: string;
 }
 
@@ -32,8 +34,15 @@ export interface EvaluateBrowserParams {
 	expression: string;
 }
 
+/** Positions in the visible browser viewport, ordered from upper left to lower right. */
+export const browserRegions = ["top-left", "top", "top-right", "left", "center", "right", "bottom-left", "bottom", "bottom-right"] as const;
+export type BrowserRegion = typeof browserRegions[number];
+
 export interface ObserveParams extends ObserveTargetParams {
-	mode?: "semantic" | "visual" | "fused";
+	region?: BrowserRegion;
+	stateId?: string;
+	focus?: { x: number; y: number };
+	mode?: "semantic" | "visual" | "fused" | "pixels";
 	/** Internal capture override; not part of the model-facing schema. */
 	readText?: "auto" | "always" | "never";
 }

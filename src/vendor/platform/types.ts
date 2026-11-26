@@ -94,6 +94,7 @@ export interface PlatformFocusWindowResult {
 }
 
 export interface HelperActPerformed {
+	verification?: string;
 	grounding?: "description" | "coordinates" | "keyboard-events";
 	/** `ax` means the platform accessibility API (AX on macOS, UIA on Windows). */
 	delivery?: "ax" | NativeInputDelivery;

@@ -44,6 +44,10 @@ export class StateStore<T> {
 		this.records.clear();
 	}
 
+	values(): IterableIterator<StoredState<T>> {
+		return this.records.values();
+	}
+
 	get size(): number {
 		return this.records.size;
 	}

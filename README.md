@@ -238,15 +238,19 @@ ASCII punctuation in its output is folded to half-width so it matches accessibil
 
 ## When to use it vs. browser tools
 
-Computer Use drives **any on-screen desktop app**. For **pure web** tasks prefer `browser_task` /
-`browser_*` (lighter), or plain `curl` when the page is directly fetchable. Use the Computer Use browser
-tools only when a desktop workflow must also touch a web page in the same root forest.
+Use `launch_browser({url})` for an interactive web page. The plugin starts Chrome or Helium in
+headless mode, with a fresh profile for this conversation. It needs the browser executable and can
+run without a Chrome extension or native desktop helper. Use the returned control refs with
+`act_ui` and keep the session with `navigate_browser`. Use `browser_tabs` for personal tabs
+and their existing logins. For a canvas or a screenshot-only task, launch with `mode: "pixels"`. The agent receives a screenshot on launch and after each action. It can click, drag, scroll at an image point, or send keys to the focused control. This mode stays active for the life of the managed browser and keeps page text and element references out of the agent’s context. For a native window use `observe_ui({root, mode: "pixels"})`. To check a color or a small icon, pass `samplePixels: [{x,y}]` or `magnify: {x,y,width,height}` to a screenshot-only observation of an exact root. The sampler reads the delivered image. Browser PNG colors are lossless and native JPEG colors are approximate. The 2× magnify crop leaves the original action coordinates in effect. When **Compact screenshot clicks (experimental)** is enabled, the model gets a short handle. For small browser controls at normal page zoom, use `observe_ui({view,focus:{x,y}})` with the handle from the full screenshot. Chromium renders a fresh, higher-resolution region of the visible page. Call `act_ui({view,click:[x,y]})` with the new handle and a point in that detail. The same click accepts the full stateId. The default interface uses stateId and actions. Check for visual changes when using an older screenshot. The next action returns to the full viewport. The agent sees the window image and action status. The native backend can still use accessibility to route input at the chosen coordinates. With strict background off, `visible: true` opens a visible managed window.
 
 ## Settings
 
 - **browser_use** (default on) — allow the CDP browser tools.
+- **compact_browser_controls** (default off) — offer short screenshot handles for single browser clicks with point focus.
+- **browser_panel_zoom** (default off) — include compact clicks and an optional wider view. To inspect a toolbar or panel, choose a viewport region with `observe_ui({view,region:"top-left"})`. The named regions overlap and are capped at 1600 px per side. A panel handle can zoom further with `focus:{x,y}` or open another region of the same viewport. On a live page, use `act_ui({view,hover:[x,y]})` to move the browser pointer and read a delayed tooltip or status label in the returned full screenshot. A subsequent click uses the new view. At maximum zoom, focusing again refreshes the same area and gives the coordinates for an explicit click after visual confirmation. At non-default page zoom use the full screenshot or `magnify`. Click using coordinates in the delivered image.
 - **managed_browser** (default Chrome) — which browser `launch_browser` starts.
-- **headless / 严格后台** (default off) — actions stay in the background; no foreground focus grab or
+- **headless / 严格后台** (default on) — actions stay in the background; no foreground focus grab or
   cursor move. Things the background genuinely cannot do then fail instead of stealing focus.
 - **cursor_overlay / 操作可视化** (default on) — the agent cursor *and* the controlled-window edge glow.
 

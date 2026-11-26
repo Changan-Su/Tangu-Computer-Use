@@ -31,6 +31,9 @@ export interface CurrentCapture {
 }
 
 export interface OperationState {
+	compactBrowserControls?: boolean;
+	browserPanelZoom?: boolean;
+	pixelsOnly?: boolean;
 	currentTarget?: CurrentTarget;
 	currentCapture?: CurrentCapture;
 	currentStateTarget?: StateTargetSnapshot;
@@ -46,6 +49,7 @@ export interface OperationState {
 }
 
 interface DesktopObservation {
+	pixelsOnly?: boolean;
 	kind: "desktop";
 	target: CurrentTarget;
 	capture: CurrentCapture;
@@ -56,6 +60,7 @@ interface DesktopObservation {
 }
 
 interface BrowserObservation {
+	view?: string;
 	kind: "browser";
 	snapshot: CdpPageSnapshot;
 	outline: SerializedOutline;
@@ -108,6 +113,7 @@ export class SavedStates {
 		}
 		const outline = restoreOutline(record.value.outline);
 		return {
+			pixelsOnly: record.value.pixelsOnly,
 			currentTarget: { ...record.value.target },
 			currentCapture: { ...record.value.capture },
 			currentStateTarget: { pid: record.value.target.pid, windowId: record.value.target.windowId, windowRef: record.value.target.windowRef },
@@ -141,6 +147,7 @@ export class SavedStates {
 				outline: serializeOutline(state.currentOutline),
 				note: state.currentNote ? structuredClone(state.currentNote) : undefined,
 				imageMode: state.currentImageMode,
+					pixelsOnly: state.pixelsOnly,
 			},
 		});
 	}

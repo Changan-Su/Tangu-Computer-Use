@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -24,10 +25,12 @@ export interface LoadedComputerUseConfig {
 
 const DEFAULT_CONFIG: ComputerUseConfig = {
 	browser_use: true,
-	headless: false,
+	headless: true,
 	cursor_overlay: true,
 	managed_browser: "chrome",
 };
+
+export const operationConfig = new AsyncLocalStorage<LoadedComputerUseConfig>();
 
 let activeConfig: ComputerUseConfig = { ...DEFAULT_CONFIG };
 let activeLoadedConfig: LoadedComputerUseConfig = { config: activeConfig, sources: [], env: {} };
@@ -97,17 +100,17 @@ export function loadComputerUseConfig(cwd: string): LoadedComputerUseConfig {
 }
 
 export function getComputerUseConfig(): ComputerUseConfig {
-	return activeConfig;
+	return operationConfig.getStore()?.config ?? activeConfig;
 }
 
 export function getLoadedComputerUseConfig(): LoadedComputerUseConfig {
-	return activeLoadedConfig;
+	return operationConfig.getStore() ?? activeLoadedConfig;
 }
 
 export function isHeadlessMode(): boolean {
-	return activeConfig.headless;
+	return getComputerUseConfig().headless;
 }
 
 export function isBrowserUseEnabled(): boolean {
-	return activeConfig.browser_use;
+	return getComputerUseConfig().browser_use;
 }

@@ -8,6 +8,8 @@
  *   - setup:每次工具执行前惰性 ensureComputerUseSetup(hasUI=false)→ 权限缺时 vendor 抛 nonInteractiveError,
  *     被 catch 成指导文本返回给模型(提示跑 `tangu computer-use setup`)。
  */
+import { browserRegions } from './vendor/contract.ts';
+import { assertPublicHttpUrl } from './publicUrl.ts';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { ToolDef, ToolProvider, ToolContext, AppProfile, PluginStore } from '@forsion/tangu-agent';
@@ -16,14 +18,15 @@ import type { ExtensionContext, AgentToolResult } from './pi-compat.ts';
 import {
   executeFind, executeObserve, executeSearchUi, executeExpandUi, executeInspectUi,
   executeAct, executeReadText, executeWaitFor, executeLaunchBrowser, executeNavigateBrowser,
-  executeEvaluateBrowser, ensureComputerUseSetup,
+  executeEvaluateBrowser, ensureComputerUseSetup, toolSurface, pixelBinding,
 } from './vendor/bridge.ts';
-import { getComputerUseConfig } from './vendor/config.ts';
+import { getComputerUseConfig, loadComputerUseConfig } from './vendor/config.ts';
 import { currentPlatformBackend } from './vendor/platform/index.ts';
 import { isSupportedPlatform } from './helperState.ts';
 import { autoInstallFailed, ensureHelperCurrent, guideMissingPermissions } from './onboarding.ts';
 import { executionNote, expectNote, foregroundNote, goneHint, imageNote, noRootsHint, scrollNote, selfWindowNote } from './foregroundNote.ts';
 import { runJev, parseJevArgs } from './jevRun.ts';
+import { inspectScreenshot } from './pixelInspection.ts';
 import { watchRunAbort, withOverlayRun } from './overlayState.ts';
 
 const execFileP = promisify(execFile);
@@ -47,6 +50,10 @@ type PiExecute = (
 const S = (description?: string, maxLength?: number) => ({ type: 'string', ...(description ? { description } : {}), ...(maxLength ? { maxLength } : {}) });
 const N = (description?: string, extra: Record<string, number> = {}) => ({ type: 'number', ...(description ? { description } : {}), ...extra });
 const stateId = { type: 'string', description: 'Required state id owning every @e ref used by this operation' };
+const screenshotPoint = (description: string) => ({
+  type: 'array', items: { type: 'integer', minimum: 0 }, minItems: 2, maxItems: 2, description,
+});
+const view = S('Handle printed on one browser screenshot. Its coordinates belong to that exact full image or detail.');
 const mouseButton = { type: 'string', enum: ['left', 'right', 'middle'] };
 const obj = (properties: Record<string, unknown>, required: string[] = []) => ({ type: 'object', properties, required });
 
@@ -64,8 +71,8 @@ const conditionProps = {
 const clickCount = N('1-3', { minimum: 1, maximum: 3 });
 // 坐标一律是「最近一张截图里的像素」。反馈 55b984eb:这里以前没有任何说明,模型把它当成屏幕坐标去换算。
 const point = {
-  x: N('Pixels from the left edge of the latest screenshot of this state (its size is on the [image] line of the result that attached it), not screen or window-frame coordinates'),
-  y: N('Pixels from the top edge of that same screenshot'),
+  x: N('Pixels from the left edge of the screenshot identified by stateId (full image or focused browser detail). A magnified detail has a separate origin and scale; convert its coordinates using the observation result.'),
+  y: N('Pixels from the top edge of the same screenshot'),
 };
 
 // act_ui 的 actions:上游 uiAction union(8 变体)→ anyOf
@@ -98,7 +105,7 @@ interface ToolSpec {
   timeoutMs: number;
 }
 
-const SPECS: ToolSpec[] = [
+const toolSpecs = (compact: boolean, panels = false): ToolSpec[] => [
   {
     name: 'jev_ui', sideEffect: 'system', approval: 'command', darwinOnly: true, jevOnly: true, timeoutMs: 180_000,
     description: 'Experimental Jev acceleration for ONE native desktop root: you plan, Jev acts and checks. Plan the whole on-screen sequence yourself, then send it as 1–8 steps in one call. Actions: click; double_click (play a row, open a file); fill (atomic setText, native text fields only); type (clicks target when given, then types text at the caret; works on canvas, CEF and web windows where fill is refused, and does not clear the field; keys, e.g. ["return"], are pressed right after the text in the same input: for a search box or a form that applies on Return, never to send a message, which stays a step of its own after you checked the screenshot); key (keys such as ["return"] or ["cmd","a"], after clicking target when given, else to the current focus, which only works while that window is in front); scroll (target = the list or panel; Jev scrolls it, three quarters of the list per wheel and short wheels once part of the item shows, at most maxScrolls times (default 12, up to 30 for a long list), until `until` is fully in view, checking every frame itself; then click the item in the same call). Describe targets by what is drawn (a label, a row\'s title text), never by pixel coordinates; for a list row, target its title text, not the whole row. Give every other step that changes the screen an expect: what the window will certainly show once it worked (e.g. "the Daily picks song list is shown", "row 3 shows a playing icon"); do not guess text you have not seen, such as a page title. Jev locates each target on a fresh observation, sends the input, then looks for expect on new screenshots for up to 4 s (page loads included) and only then moves on, with no main-model round trip per step. It hands back early, with the latest screenshot, when a target is missing/ambiguous/low-confidence, an expect does not appear, a scroll does not reach until, or a step without expect cannot be confirmed natively (canvas/web windows never confirm natively, so always give expect there). A rejected target means Jev does not see it as described: describe it differently and call again. mode=elements selects accessibility refs and never takes screenshots (click and fill only; expect is then not checked); vision uses screenshot boxes; auto tries elements then vision. preview=true locates ONE target without acting. point in the report is in Jev\'s own capture; use pointFraction to compare with other screenshots. Unknown is an unverified input, not a failed one: inspect the returned screenshot before repeating anything with any tool, and continue only the unconfirmed steps. Same executor and foreground policy as act_ui; only drag needs act_ui. key ["return"] in a message field sends it: do not batch irreversible/outward-facing actions without the authorization the normal Computer Use rules require. Never put API keys in arguments.',
@@ -135,10 +142,18 @@ const SPECS: ToolSpec[] = [
   },
   {
     name: 'observe_ui', exec: executeObserve as PiExecute, sideEffect: 'read', timeoutMs: 60_000,
-    description: 'Capture the current/frontmost root or one exact @r root and return a bounded UI outline. Use mode=semantic to skip OCR and images, visual to force them, fused for automatic selection. Primary UI observation tool; follow with search_ui/expand_ui/inspect_ui/act_ui. Use @e outline refs from observe_ui/search_ui for act_ui; pictureOnly refs are coordinate-only.',
+    description: 'Capture the current/frontmost root or one exact @r root and return a bounded UI outline. Use mode=semantic to skip OCR and images, visual to force them, fused for automatic selection. For screenshot-only work use pixels. For '
+      + (panels ? 'a small browser target, use focus with a full screenshot or named panel handle and click in the returned image. For exact colors use samplePixels. For native windows use magnify' : compact ? 'a small browser target, use focus with the full screenshot handle and click in the returned image. For exact colors use samplePixels. For native windows use magnify' : 'small icons or exact colors, choose magnify or samplePixels on the target root')
+      + '. Primary UI observation tool; follow with search_ui/expand_ui/inspect_ui/act_ui. Use @e outline refs from observe_ui/search_ui for act_ui; pictureOnly refs are coordinate-only.',
     parameters: obj({
       root: S('Exact @r ref issued by find_roots'),
-      mode: { type: 'string', enum: ['semantic', 'visual', 'fused'], description: 'Observation mode, default fused' },
+      ...(compact ? { view } : {}),
+      ...(panels ? { region: { type: 'string', enum: browserRegions, description: 'Zoom a named position of the full browser viewport. Each region includes the surrounding panel. Use view or stateId and click in the returned image. You may inspect a different region from a detail.' } } : {}),
+      stateId: S(compact ? 'Alternative to view. The full stateId of the browser screenshot.' : 'State owning the full browser screenshot when using focus.'),
+      focus: { ...obj({x:N(), y:N()}, ['x','y']), description: panels ? 'Render a high-resolution detail around x/y from the full screenshot or a named panel. Supply its view handle or stateId. Click directly in the returned detail.' : compact ? 'Inspect small controls in a fresh high-resolution browser detail centered on full-image x/y. Supply its view handle or stateId. Click directly in the returned detail.' : 'Inspect small controls in a fresh high-resolution browser detail centered on full-image x/y. Requires root and stateId from the full screenshot. Click directly in the returned detail.' },
+      samplePixels: { type: 'array', items: obj(point, ['x', 'y']), minItems: 1, maxItems: 8, description: 'Read RGB at these full screenshot coordinates to check swatches or edits. Requires an exact root. Implies pixels mode.' },
+      magnify: { ...obj({ ...point, width: N(), height: N() }, ['x', 'y']), description: 'Attach a 2× detail. Give only x and y to center the detail on a point. With width and height, x and y specify the top-left of the rectangle (max 320 × 320). Requires an exact root. Implies pixels mode.' },
+      mode: { type: 'string', enum: ['semantic', 'visual', 'fused', 'pixels'], description: 'pixels shows only the screenshot and its coordinates, including for a native desktop root. visual includes the outline as well. Default fused.' },
     }),
   },
   {
@@ -158,12 +173,16 @@ const SPECS: ToolSpec[] = [
   },
   {
     name: 'act_ui', exec: executeAct as PiExecute, sideEffect: 'system', approval: 'command', timeoutMs: 120_000,
-    description: 'Perform one or more precisely targeted checked actions and return the successor state. Batch only actions whose targets are already present in this state (for example focus then type). After navigation or opening a popup, inspect the successor state before targeting a newly revealed control; do not guess its coordinates from the old screenshot. Use expect for observable completion. expect reads accessibility text only, never the pixels: on a window whose outline has almost no text it will rarely match, so prefer leaving it out there and judging from the attached screenshot. Coordinates (x / y, drag path) are pixels in the latest attached screenshot, whose size the result states on an [image] line. After clicking an editable region in the same call, omit ref from typeText/keypress so input follows that focus; a later call can omit ref only while the target window is still frontmost, otherwise click again first. To fill a text field prefer a single setText action — it writes the value in the background without taking focus; only click the field first (which takes the foreground) if setText reports it did not take, as happens on some web/Electron inputs. When any action takes the foreground the result says so on a [foreground] line. For strict background-only runs, turn on the plugin\'s "strict background" setting.',
+    description: 'Perform one or more precisely targeted checked actions and return the successor state. '
+      + (compact ? 'For a single left click in a browser screenshot, pass click:[x,y] and its view or stateId. ' : '')
+      + (panels ? 'For an unfamiliar icon on a live page, hover:[x,y] can reveal its tooltip or status text before you click. ' : '')
+      + 'When the state says Screenshot only, send exactly ONE action, then inspect the successor image and use its new stateId. For other states, batch only actions whose targets are already present in this state (for example focus then type). After navigation or opening a popup, inspect the successor state before targeting a newly revealed control; do not guess its coordinates from the old screenshot. Use expect for observable completion. expect reads accessibility text only, never the pixels: on a window whose outline has almost no text it will rarely match, so prefer leaving it out there and judging from the attached screenshot. Coordinates (x / y, drag path) are pixels in the latest attached screenshot, whose size the result states on an [image] line. After clicking an editable region in the same call, omit ref from typeText/keypress so input follows that focus; a later call can omit ref only while the target window is still frontmost, otherwise click again first. To fill a text field prefer a single setText action — it writes the value in the background without taking focus; only click the field first (which takes the foreground) if setText reports it did not take, as happens on some web/Electron inputs. When any action takes the foreground the result says so on a [foreground] line. For strict background-only runs, turn on the plugin\'s "strict background" setting.',
     parameters: obj({
-      stateId,
-      expect: obj(conditionProps),
+      ...(compact ? { view, click: screenshotPoint('Single left click at [x,y] in the identified screenshot.') } : {}),
+      ...(panels ? { hover: screenshotPoint('Move the browser pointer to [x,y] without clicking and capture the full page viewport after a short dwell.') } : {}),
+      stateId, expect: obj(conditionProps),
       actions: { type: 'array', items: uiAction, minItems: 1, maxItems: 20 },
-    }, ['stateId', 'actions']),
+    }, compact ? [] : ['stateId', 'actions']),
   },
   {
     name: 'ensure_app', run: runEnsureApp, sideEffect: 'system', darwinOnly: true, timeoutMs: 25_000,
@@ -185,8 +204,8 @@ const SPECS: ToolSpec[] = [
   },
   {
     name: 'launch_browser', exec: executeLaunchBrowser as PiExecute, sideEffect: 'browser', approval: 'command', browserOnly: true, timeoutMs: 60_000,
-    description: 'Launch the configured Tangu-managed CDP browser and return an observed browser-page state. Use for browser work that needs a managed CDP context. Prefer curl through bash when the page is directly fetchable. Which browser starts is a plugin setting, not a parameter.',
-    parameters: obj({ url: S('Initial URL', 8192) }),
+    description: 'Open a fresh background browser for this conversation. No Chrome extension or desktop permissions are needed. For a URL or web form, start here and use the returned state with act_ui. This separate profile has no personal tabs or logins. Use browser_tabs when the user needs their existing browser.',
+    parameters: obj({ url: S('Initial URL', 8192), mode: { type:'string', enum:['auto','pixels'], description:'pixels for screenshot-only control (canvas, remote desktop, or when explicitly requested). Launch and each action return an image. Click or drag at image coordinates.' }, visible: { type: 'boolean', description: 'Show a window on the user’s desktop only when requested. Screenshots work without this flag. Requires strict background to be off.' } }),
   },
   {
     name: 'navigate_browser', exec: executeNavigateBrowser as PiExecute, sideEffect: 'browser', approval: 'command', browserOnly: true, timeoutMs: 60_000,
@@ -222,6 +241,7 @@ const owned = new Set<string>();
 export function makePiCtx(tcx: ToolContext, hasUI: boolean): ExtensionContext {
   return {
     cwd: tcx.cwd || process.cwd(),
+    browserOwner: JSON.stringify([tcx.userId, tcx.appId, tcx.sessionId]),
     hasUI,
     ui: { notify: () => {}, select: async () => undefined },
     sessionManager: { getBranch: () => [] },
@@ -246,18 +266,23 @@ export function render(result: AgentToolResult, tcx: ToolContext, args?: Record<
   for (const block of result.content) {
     if (block.type === 'text') parts.push(block.text);
     else if (block.type === 'image' && tcx.collectImage) {
-      tcx.collectImage({ url: `data:${block.mimeType || 'image/jpeg'};base64,${block.data}`, name: 'screen.jpg' });
-      attached = true;
+      const queued = tcx.collectImage({ url: `data:${block.mimeType || 'image/jpeg'};base64,${block.data}`, name: block.mimeType === 'image/png' ? 'screen.png' : 'screen.jpg' });
+      if (queued === false) parts.push('Screenshot omitted because the image queue is full. Observe this target again in a new model round before using coordinates.');
+      else attached = true;
     }
   }
+  const details = (result as { details?: { pixelsOnly?: boolean; tool?: string; root?: { ref?: string }; execution?: unknown; target?: { app?: string; bundleId?: string; pid?: number }; capture?: { stateId?: string } } }).details;
+  if (details?.pixelsOnly && !attached && details.root?.ref) {
+    const status = details.tool === 'act_ui' ? 'Input dispatched. ' : '';
+    return status + `Screenshot unavailable for ${details.root.ref}. Request a fresh image with observe_ui({root:"${details.root.ref}",mode:"pixels"}) before using coordinates.`;
+  }
   const body = parts.join('\n') || '(no output)';
-  const details = (result as { details?: { execution?: unknown; target?: { app?: string; bundleId?: string }; capture?: { stateId?: string } } }).details;
   const stateId = details?.capture?.stateId;
   if (stateId && (details?.target?.app || details?.target?.bundleId)) {
     targets.set(stateId, { app: details.target.app, bundleId: details.target.bundleId });
     if (targets.size > 64) targets.delete(targets.keys().next().value!);
   }
-  return executionNote(details) + body + imageNote(details, attached) + expectNote(details) + scrollNote(args?.actions, details?.execution) + foregroundNote(details?.execution) + selfWindowNote(details) + noRootsHint(details);
+  return executionNote(details) + body + imageNote(details, attached) + expectNote(details) + scrollNote(args?.actions, details?.execution) + foregroundNote(details?.execution, details?.target?.pid) + selfWindowNote(details) + noRootsHint(details);
 }
 
 /** ensure_app:后台启动目标 app(open -g)+ 轮询 find_roots 直到有可观察窗口,回其 roots。
@@ -281,14 +306,13 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
   const wasRunning = (await apps()).some(mine);
   // -g:启动但不置前台。execFile 传 argv(非 shell),bundleId/app 作单参无注入。
   const open = (background: boolean) => execFileP('open', [...(background ? ['-g'] : []), ...(bundleId ? ['-b', bundleId] : ['-a', app])], { timeout: 8_000 });
-  const strict = getComputerUseConfig().headless === true;
-  // 严格后台下不去「重新打开」一个已经在跑的 App:微信这类收到这个事件会自己跳到前台。只找它现有的窗口。
-  if (!(strict && wasRunning)) {
+  const strict = loadComputerUseConfig(pctx.cwd).config.headless;
+  // 查找已运行的 App 时不重复发送 open 事件，有的 App 收到它会自己跳到前台。
+  if (!wasRunning) {
     try {
       await open(true);
     } catch (e: any) {
-      // 已经在跑的 App 按这个名字打不开(从没登记过的位置启动的)不要紧:接着找它的窗口就是了。
-      if (!wasRunning) return `Could not launch ${name}: ${e?.stderr?.toString().trim() || e?.message || e}. Check the app/bundleId is installed.`;
+      return `Could not launch ${name}: ${e?.stderr?.toString().trim() || e?.message || e}. Check the app/bundleId is installed.`;
     }
   }
   const started = Date.now();
@@ -344,7 +368,54 @@ async function spec_executeFind(pctx: ExtensionContext, tcx: ToolContext, app: s
   }
 }
 
-export function buildToolProvider(store: PluginStore): ToolProvider {
+async function legacyBrowserUrl(raw: string): Promise<string> {
+  if (!['1','true','yes','on'].includes((process.env.TANGU_BROWSER_ALLOW_PRIVATE_URLS ?? '').toLowerCase())) return (await assertPublicHttpUrl(raw)).href;
+  const url = new URL(raw);
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Only HTTP(S) URLs are allowed.');
+  return url.href;
+}
+
+function bindScreenshotArgs(tool: 'act_ui' | 'observe_ui', args: Record<string, any>, owner: string, compact: boolean): Record<string, any> {
+  const byView = args.view !== undefined;
+  if (!compact && (byView || args.click !== undefined || args.region !== undefined)) throw new Error('Compact screenshot controls are disabled. Use stateId and actions to click.');
+  if (byView && args.stateId !== undefined) throw new Error('Supply one screenshot view or stateId.');
+  if (tool === 'act_ui' && !byView && args.click === undefined && args.hover === undefined) {
+    if (typeof args.stateId !== 'string' || !Array.isArray(args.actions)) throw new Error('Supply a screenshot and click:[x,y], or stateId and actions.');
+    return args;
+  }
+  const id = byView ? args.view : args.stateId;
+  if (tool === 'observe_ui' && id === undefined) return args;
+  const binding = typeof id === 'string' && pixelBinding(id.trim(), owner, byView);
+  if (!binding) {
+    if (byView || tool === 'act_ui') throw new Error('Screenshot expired or unavailable. Observe the browser again.');
+    return args;
+  }
+  if (tool === 'act_ui') {
+    const idKey = byView ? 'view' : 'stateId';
+    const kind = args.hover !== undefined ? 'hover' : 'click';
+    const xy = args[kind];
+    if (Object.keys(args).some(key => key !== idKey && key !== kind) || !Array.isArray(xy) || xy.length !== 2
+      || !xy.every(n => Number.isSafeInteger(n) && n >= 0)) {
+      throw new Error(`A screenshot ${kind} takes only its view or stateId and ${kind}:[x,y] in whole pixels.`);
+    }
+    return { stateId: binding.stateId, actions: [{ action: kind === 'hover' ? 'moveMouse' : 'click', x: xy[0], y: xy[1] }] };
+  }
+  if (args.root !== undefined && args.root !== binding.root) throw new Error('Use the screenshot belonging to this browser root.');
+  if (args.mode !== undefined && args.mode !== 'pixels') throw new Error('Screenshot-only state requires pixels mode.');
+  if (binding.detail && (args.magnify !== undefined || args.samplePixels !== undefined)) {
+    throw new Error('Magnify and samplePixels use full-image coordinates. Observe the full screenshot first.');
+  }
+  const { view: _view, ...rest } = args;
+  return { ...rest, root: binding.root, stateId: binding.stateId, mode: 'pixels' };
+}
+
+export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowserUrl): ToolProvider {
+  const browserMode = () => {
+    const settings = store.getScopeSettings(PLUGIN_ID, 'global');
+    if (settings.browser_use === false) return 'standard';
+    if (settings.browser_panel_zoom === true) return 'panels';
+    return settings.compact_browser_controls === true ? 'compact' : 'standard';
+  };
   const gate = (spec: ToolSpec) => (profile: AppProfile): boolean =>
     !!profile.capabilities.hostExec
     && store.isPluginEnabledSync(PLUGIN_ID)
@@ -370,23 +441,49 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
         parseJevArgs(args);
       }
       syncSettings(store);
-      // ⚠️这里**绝不能**再加「没装就 return 指导文本」的早退:vendor 的 ensureInstalled() 本来就会
-      // 自动跑 setup-helper.mjs,早退等于把上游的自动安装堵死(用户报的「首次安装还要敲命令」就是它)。
-      // 我们只补上游缺的那半:装着的二进制比 bundle 老时也要重装。
-      const installNote = await ensureHelperCurrent(tcx.signal);
       const pctx = makePiCtx(tcx, false);
-      try {
-        await ensureComputerUseSetup(pctx, tcx.signal);
-      } catch (e: any) {
-        // 权限是系统安全设置,只能用户自己拨 —— 但可以替他把 App 登记好、把面板打开。
-        const guidance = await guideMissingPermissions(tcx.signal);
-        // ⚠️只有「自动安装本身失败了」才该提终端命令。就绪失败的原因多得很(Linux 缺 AT-SPI、
-        // 架构不符、daemon 起不来……),对这些 case 说「去跑 setup」是把模型引到错的方向上,
-        // 而真正的原因反而被这句话盖住了。
-        const fallback = autoInstallFailed()
-          ? `Computer Use is not ready: ${e?.message || e}\nAutomatic helper installation failed — run \`tangu computer-use setup\` in a terminal to see why.`
-          : `Computer Use is not ready: ${e?.message || e}`;
-        return [installNote, guidance ?? fallback].filter(Boolean).join('\n');
+      const mode = browserMode();
+      pctx.compactBrowserControls = mode !== 'standard';
+      pctx.browserPanelZoom = mode === 'panels';
+      if (args.hover !== undefined && spec.name === 'act_ui' && !pctx.browserPanelZoom) throw new Error('Screenshot hover requires browser panel zoom.');
+      if (args.region !== undefined && spec.name === 'observe_ui' && !pctx.browserPanelZoom) throw new Error('Browser panel zoom is disabled.');
+      if ((spec.name === 'launch_browser' || spec.name === 'navigate_browser') && typeof args.url === 'string' && args.url.trim()) {
+        args = { ...args, url: await validateUrl(args.url.trim()) };
+      }
+      if (spec.name === 'act_ui' || spec.name === 'observe_ui') {
+        args = bindScreenshotArgs(spec.name, args, pctx.browserOwner!, pctx.compactBrowserControls);
+      }
+      const inspectPixels = spec.name === 'observe_ui' && (args.samplePixels !== undefined || args.magnify !== undefined);
+      if (spec.name === 'observe_ui' && args.region !== undefined && (!browserRegions.includes(args.region) || args.focus !== undefined)) {
+        throw new Error('Choose a named region or a focus point, one at a time.');
+      }
+      if (spec.name === 'observe_ui' && (args.focus !== undefined || args.region !== undefined)) {
+        if (typeof args.root !== 'string' || toolSurface(spec.name, args) !== 'browser' || typeof args.stateId !== 'string' || !args.stateId.trim()
+          || inspectPixels || (args.mode !== undefined && args.mode !== 'pixels')) {
+          throw new Error('Focus requires one browser root and its full screenshot stateId in pixels mode, without magnify or samplePixels.');
+        }
+        args = { ...args, mode: 'pixels' };
+      }
+      if (inspectPixels) {
+        if (typeof args.root !== 'string' || !/^@r\d+$/.test(args.root) || (args.mode && args.mode !== 'pixels')) throw new Error('Use an exact root and pixels mode for screenshot details.');
+        args = { ...args, mode: 'pixels' };
+      }
+      let installNote;
+      if (toolSurface(spec.name, args) === "desktop") {
+        installNote = await ensureHelperCurrent(tcx.signal);
+        try {
+          await ensureComputerUseSetup(pctx, tcx.signal);
+        } catch (e: any) {
+          // 权限是系统安全设置,只能用户自己拨 —— 但可以替他把 App 登记好、把面板打开。
+          const guidance = await guideMissingPermissions(tcx.signal);
+          // ⚠️只有「自动安装本身失败了」才该提终端命令。就绪失败的原因多得很(Linux 缺 AT-SPI、
+          // 架构不符、daemon 起不来……),对这些 case 说「去跑 setup」是把模型引到错的方向上,
+          // 而真正的原因反而被这句话盖住了。
+          const fallback = autoInstallFailed()
+            ? `Computer Use is not ready: ${e?.message || e}\nAutomatic helper installation failed — run \`tangu computer-use setup\` in a terminal to see why.`
+            : `Computer Use is not ready: ${e?.message || e}`;
+          return [installNote, guidance ?? fallback].filter(Boolean).join('\n');
+        }
       }
       // 装/升级过就在结果里说一句 —— 用户装了什么、agent 替他做了什么,不该是暗箱。
       const prefix = installNote ? `${installNote}\n` : '';
@@ -398,10 +495,25 @@ export function buildToolProvider(store: PluginStore): ToolProvider {
         explainGone(e, args);
         throw e;
       }
-      return prefix + presentLiveViewOnce(spec.name, tcx, render(result, tcx, args));
+      let detail: ReturnType<typeof inspectScreenshot> | undefined;
+      if (inspectPixels) {
+        const screen = result.content.find(block => block.type === 'image');
+        if (!screen) throw new Error('The target supplied no screenshot to inspect.');
+        detail = inspectScreenshot(screen, args);
+      }
+      let text = render(result, tcx, args);
+      if (detail?.text) text += '\n' + detail.text;
+      if (detail?.crop) {
+        const queued = tcx.collectImage && tcx.collectImage({url:'data:image/png;base64,' + detail.crop,name:'detail-2x.png'});
+        text += '\n' + (!tcx.collectImage || queued === false
+          ? 'Magnified detail omitted by the image collector. Request it in a new model round.'
+          : detail.detailDescription);
+      }
+      return prefix + presentLiveViewOnce(spec.name, tcx, text);
       })(); } finally { unwatch(); }
     }),
   });
 
-  return { id: 'plugin:computer-use', tools: () => SPECS.map(toTool) };
+  const specs = { standard: toolSpecs(false), compact: toolSpecs(true), panels: toolSpecs(true, true) };
+  return { id: 'plugin:computer-use', tools: () => specs[browserMode()].map(toTool) };
 }

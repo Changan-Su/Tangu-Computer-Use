@@ -1,7 +1,7 @@
 ---
 name: Desktop app control
 description: Use when a task needs a real desktop application rather than an API, CLI, or file — reading what is on screen in another app, clicking through its UI, filling its fields, or driving a GUI-only workflow. Covers the Computer Use tool loop, keeping actions in the background, and the confirmation rules for irreversible actions.
-version: 1.0.0
+version: 1.2.0
 category: automation
 ---
 
@@ -15,9 +15,16 @@ Forsion's own windows are not a Computer Use target. To change a Forsion setting
 pages, use `list_ui_commands` and then `run_ui_command` / `set_ui_setting`; a tool result marked
 `[forsion]` means you are looking at Forsion itself.
 
-For a page you can simply fetch, use `curl` through bash. For pure web work prefer `browser_task` /
-`browser_*` — they are lighter. Use Computer Use when the workflow lives in a native desktop app, or
-when a web page must be handled inside the same window forest as a desktop app.
+When selecting an icon-only tool in a live browser toolbar, identify it from the application's own tooltip or status line. If the screenshot offers hover, use `act_ui({view,hover:[x,y]})` on a likely icon. Read the returned full screenshot. If the description identifies a different tool, inspect the next candidate. Click the confirmed control's visible center in the latest screenshot. A static image cannot display a new tooltip; use its visible pixels and zoom instead.
+
+For a canvas, remote display, or screenshot-only request, open the browser with `launch_browser({url, mode:"pixels"})`. Ground each coordinate in the returned image, use `act_ui` to click or drag, and inspect its successor image. Coordinates use the reported image dimensions. Screenshots work in the background. For an existing desktop window, use `observe_ui({root,mode:"pixels"})` and pass its state to `act_ui`. For tiny or crowded browser targets, call `observe_ui({root,stateId,focus:{x,y}})` on the full pixels view. Click in the returned detail with its new stateId. If you cannot identify the control, inspect another region or report it. If the screenshot offers a short view handle, it accepts `act_ui({view,click:[x,y]})` for a single click in that image. For other windows, use `observe_ui({root,mode:"pixels",magnify:{x,y,width,height}})` to enlarge a region without changing the app. For exact-color work, read `samplePixels:[{x,y},…]` in the palette before editing and inside the finished shape before reporting success. These values come from the same screenshot. On dense toolbars, move the pointer to an uncertain icon or swatch and check its tooltip before committing. Select the tool and intended color before touching the document. If an edit changes the wrong pixels, undo it before trying again. Compare the whole result with the original image before claiming the other objects survived.
+
+For a fresh interactive web task, use `launch_browser({url})`. Each conversation gets a separate
+Chrome or Helium profile. The default opens in the background, without a Chrome extension or desktop
+Accessibility and Screen Recording permissions. Use the returned state and control refs with
+`act_ui`; use `navigate_browser` to keep the same session. A fresh launch replaces this conversation's
+previous managed browser. For the user's existing signed-in tab, use `browser_tabs`. For a desktop
+application, start with `find_roots`. Strict background is on by default; a saved preference takes priority.
 
 ## The loop
 
@@ -152,7 +159,7 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
   the screenshot the result attaches before scrolling again.
 - Background is attempted first; the foreground is taken only when an action truly needs it, and the
   result then carries a `[foreground]` line. **When you see that line, tell the user** — you moved
-  their focus. Users who never want that can turn on the plugin's "strict background" setting.
+  their focus. Automatic foreground fallback requires the user to turn off "strict background".
   When it is on, do not bypass it through shell, AppleScript, `open`/activate or another tool.
   If foreground input is needed, ask the user to switch the app or change the setting.
 - Clicking by coordinates no longer implies the foreground: the helper hit-tests that point inside the
@@ -163,8 +170,8 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
   background too. The result says so. If the returned state shows nothing changed, press the same
   element again: the repeat is a real click and takes the foreground. Do not retry it any other way.
 - If the tree did not change right after such a press, the press has probably landed anyway: a covered
-  web page takes it but stops updating its tree, sometimes until the page next changes. The result
-  says so, brings the window forward and attaches a current screenshot. Go by that screenshot and press
+  web page takes it but stops updating its tree, sometimes until the page next changes. With foreground fallback enabled, the result
+  can bring the window forward and attach a current screenshot. Go by that screenshot and press
   again only if it shows the press did nothing.
 
 ## Show the user what you are doing

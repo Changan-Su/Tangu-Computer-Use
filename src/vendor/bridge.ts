@@ -1,19 +1,18 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { browserConversation, browserOwner, launchManagedBrowser, closeManagedBrowsers } from "../managedBrowser.ts";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { canRetryInForeground, isBackgroundPointer, keysFollow, needsFrontmostProbe, pointerMissesAfter, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
-import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
-import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig } from "./config.ts";
+import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpViewportForContext, cdpViewportStamp, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
+import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig, operationConfig } from "./config.ts";
 import { applyWheelFix, wheelFix } from "../wheel.ts"; // Forsion patch, see UPSTREAM.md
 import { noteContact, webContentWait } from "../webContent.ts"; // Forsion patch, see UPSTREAM.md
 import { noteAfterAct, noteFromLook, noteRegionKeyForRef, renderNote, type WindowNote } from "./note.ts";
 import { foldToBudget, graftScopedOutline, nodeByRef, outlineNodeLabel, outlineNodePath, rankedTextMatch, restoreOutline, searchOutline, searchOutlineRanked, serializeOutline, serializeOutlineNodeShallow, serializeOutlineSearchMatch, type LookResponse, type Outline, type OutlineChange, type OutlineNode, type OutlineRect, type PictureGrid, type OutlineSearchMatch, type SerializedOutline, type SerializedOutlineNode, type SerializedOutlineSearchMatch } from "./outline.ts";
-import { applyOutputEnvelope, boundToolError, clearStoredOutputs, readStoredOutput, UI_TEXT_PAGE_CHARS } from "./output.ts";
+import { applyOutputEnvelope, boundToolError, clearStoredOutputs, isBrowserOutput, readStoredOutput, UI_TEXT_PAGE_CHARS } from "./output.ts";
 import { AGENT_TOOL_NAMES, type ActParams, type EvaluateBrowserParams, type ExpandUiParams, type ImageMode, type InspectUiParams, type LaunchBrowserParams, type FindParams, type NavigateBrowserParams, type ObserveParams, type ObserveTargetParams, type ReadTextParams, type RootSelector, type SearchUiParams, type UiAction, type WaitForParams } from "./contract.ts";
 import { toFiniteNumber } from "./platform/coerce.ts";
 import { currentPlatformBackend } from "./platform/index.ts";
@@ -189,6 +188,7 @@ interface ListWindowsDetails {
 interface BrowserObservationDetails {
 	tool: string;
 	kind: "browser_page";
+	pixelsOnly?: true;
 	stateId: string;
 	baseStateId?: string;
 	view: "full" | "diff";
@@ -284,9 +284,6 @@ interface RuntimeState {
 	browserRootByContext: Map<string, string>;
 	browserContextByRoot: Map<string, string>;
 	nextRootRefIndex: number;
-	managedBrowser?: ChildProcess;
-	managedBrowserCdpPort?: string;
-	previousCdpPort?: string;
 	permissionStatus?: PermissionStatus;
 	helperDiagnostics?: PlatformDiagnostics;
 	lastPermissionCheckAt: number;
@@ -303,7 +300,6 @@ const LOOK_TIMEOUT_MS = 33_000;
 const ACTION_SETTLE_MS = 280;
 
 const BROWSER_CONTEXT_PREFIX = "browser:";
-const MANAGED_BROWSER_READY_TIMEOUT_MS = 15_000;
 const AUTO_IMAGE_MAX_DIMENSION = 900;
 /** Forsion patch, see UPSTREAM.md. How long a covered page takes to paint again once activated: 0.9-1.3 s measured on macOS 27. */
 const COVERED_PAGE_REPAINT_MS = 2_000;
@@ -320,6 +316,19 @@ const runtimeState: RuntimeState = {
 };
 
 const savedStates = new SavedStates();
+// Handles identify a particular immutable frame, even across concurrent runs or delayed approvals.
+const viewPrefix = "v" + randomUUID().slice(0, 8) + "-";
+let nextView = 0;
+
+export function pixelBinding(id: string, owner: string, byView: boolean) {
+	const record = byView
+		? Array.from(savedStates.store.values()).find(r => r.value.kind === "browser" && r.value.view === id)
+		: savedStates.get(id);
+	if (!record) throw new Error("Screenshot expired or unavailable. Observe the root again.");
+	if (record.value.kind !== "browser" || !record.value.snapshot.pixelsOnly) return undefined;
+	if (record.value.snapshot.owner !== owner) throw new Error("Browser state belongs to another conversation.");
+	return { stateId: record.stateId, root: storeBrowserRootRef(record.value.snapshot.contextId), detail: !!record.value.snapshot.viewport?.origin };
+}
 let resourceScheduler = new ResourceScheduler();
 
 function operationState(): OperationState {
@@ -343,18 +352,7 @@ export async function shutdownComputerUseSession(): Promise<void> {
 	resourceScheduler = new ResourceScheduler();
 	disconnectCdp();
 
-	const managedBrowser = runtimeState.managedBrowser;
-	runtimeState.managedBrowser = undefined;
-	if (managedBrowser) {
-		managedBrowser.kill("SIGTERM");
-		managedBrowser.unref();
-	}
-	if (runtimeState.managedBrowserCdpPort && process.env.PI_COMPUTER_USE_CDP_PORT === runtimeState.managedBrowserCdpPort) {
-		if (runtimeState.previousCdpPort === undefined) delete process.env.PI_COMPUTER_USE_CDP_PORT;
-		else process.env.PI_COMPUTER_USE_CDP_PORT = runtimeState.previousCdpPort;
-	}
-	runtimeState.managedBrowserCdpPort = undefined;
-	runtimeState.previousCdpPort = undefined;
+	await closeManagedBrowsers();
 
 	savedStates.clear();
 	clearStoredOutputs();
@@ -560,7 +558,7 @@ function emptyActivation(): ActivationFlags {
 }
 
 async function ensureReady(ctx: ExtensionContext, signal?: AbortSignal): Promise<void> {
-	loadComputerUseConfig(ctx.cwd);
+	if (!operationConfig.getStore()) loadComputerUseConfig(ctx.cwd);
 
 	throwIfAborted(signal);
 	const ready = await currentPlatformBackend.ensureReady(
@@ -993,7 +991,7 @@ async function performLook(target: ResolvedTarget, options: { readText: "auto" |
 	}, { signal, timeoutMs: LOOK_TIMEOUT_MS });
 	const look = await observe();
 	// Forsion patch, see UPSTREAM.md: the first read of a Chromium app comes back before its web content exists.
-	const wait = currentPlatformBackend.name === "macos" ? await webContentWait(target.pid, look.outline) : 0;
+	const wait = !operationState().pixelsOnly && currentPlatformBackend.name === "macos" ? await webContentWait(target.pid, look.outline) : 0;
 	if (wait <= 0) return look;
 	await sleep(wait, signal);
 	return await observe();
@@ -1014,7 +1012,7 @@ async function captureCurrentTarget(signal?: AbortSignal, readText: "auto" | "al
 	const baseTarget = state.currentTarget;
 	let target = targetOverride ?? await resolveCurrentTarget(signal);
 	target = await ensureTargetWindowId(target, signal);
-	const look = await performLook(target, { maxDimension, readText, includeImage }, signal);
+	const look = await performLook(target, state.pixelsOnly ? { maxDimension: EXPLICIT_IMAGE_MAX_DIMENSION, readText: "never", includeImage: true } : { maxDimension, readText, includeImage }, signal);
 	const outline = stabilizeRefs(baseTarget && sameRootIdentity(baseTarget, target) ? baseOutline : undefined, look.parsedOutline!);
 	look.parsedOutline = outline;
 	look.outline = outline.root;
@@ -1048,6 +1046,15 @@ async function buildToolResult(
 	base?: { stateId: string; outline: Outline },
 ): Promise<AgentToolResult<ComputerUseDetails>> {
 	const state = operationState();
+	if (state.pixelsOnly) {
+		const image = result.look.image;
+		if (!image?.jpegBase64) throw new Error("The target window did not supply a screenshot. Observe it again before acting.");
+		const message = `Screenshot only for ${result.target.windowRef ?? result.target.appName}. State ${result.capture.stateId}. Use one action with the image coordinates. Check the next image for the outcome.`;
+		return { content:[{type:"text", text:message}, {type:"image", mimeType:image.mimeType ?? "image/jpeg", data:image.jpegBase64}],
+			details:{tool, target:{app:result.target.appName, pid:result.target.pid, windowId:result.target.windowId, windowTitle:result.target.windowTitle, windowRef:result.target.windowRef},
+				capture:{...result.capture, coordinateSpace:"window-relative-screenshot-pixels"}, view:"full", activation:result.activation,
+				execution, config:getComputerUseConfig()} };
+	}
 	const fallbackReason = execution.pressUnconfirmed === "current_screenshot"
 		? { reason: "fallback_recovery" as const, message: "Nothing in the page changed after this press, so a current screenshot is attached." }
 		: execution.earlierPressTookEffect === "picture"
@@ -1175,7 +1182,8 @@ function modelRefForRootDelta(delta: NonNullable<HelperActResult["rootDelta"]>[n
 function executionTraceFromAct(result: HelperActResult, policy = currentDeliveryPolicy()): ExecutionTrace {
 	const rootDelta = result.rootDelta?.map((delta) => ({ ...delta, ref: modelRefForRootDelta(delta) }));
 	return executionTrace("act", result.performed?.delivery === "ax" ? "stealth" : "default", {
-		outcome: result.outcome,
+		// Repainting alone cannot establish whether the intended control handled the input.
+		outcome: result.performed?.verification === "pixels" && result.outcome === "worked" ? "unknown" : result.outcome,
 		performed: result.performed,
 		evidence: result.evidence,
 		error: result.error,
@@ -1450,7 +1458,7 @@ async function performListWindows(params: FindParams, signal?: AbortSignal): Pro
 		kind: rawParams.kind,
 	};
 	const config = getComputerUseConfig();
-	const desktopForest = await windowDetailsForFind(query, config, signal);
+	const desktopForest = query.kind === "browser_page" ? [] : await windowDetailsForFind(query, config, signal);
 	const includeBrowserPages = !query.pid && !query.bundleId && (!query.app || normalizeText(query.app) === "browser") && config.browser_use;
 	const browserForest: ListWindowsDetails["windows"] = !includeBrowserPages ? [] : (await listCdpPageContexts().catch(() => []))
 		.map((page) => ({
@@ -1523,8 +1531,75 @@ async function withBrowserWrite<T>(contextId: string, work: () => Promise<T>): P
 	return result.value;
 }
 
-function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string, epoch: number, tool: string, base?: { stateId: string; outline: SerializedOutline }): AgentToolResult<BrowserObservationDetails> {
-	savedStates.set({ stateId: browser.snapshotId, resourceKey, epoch, value: { kind: "browser", snapshot: browser, outline: browser.outline } });
+interface BrowserActionReceipt {
+	action: UiAction;
+	stamp?: string;
+}
+
+function browserActionHint(view: string, viewport: NonNullable<CdpPageSnapshot["viewport"]>, receipt?: BrowserActionReceipt): string {
+	if (receipt?.action.action === "moveMouse") {
+		const { x, y } = receipt.action;
+		let location = "";
+		if (viewport.stamp === receipt.stamp && x !== undefined && y !== undefined) {
+			const px = (x - (viewport.origin?.x ?? 0)) * viewport.width / viewport.cssWidth;
+			const py = (y - (viewport.origin?.y ?? 0)) * viewport.height / viewport.cssHeight;
+			if (px >= 0 && px < viewport.width && py >= 0 && py < viewport.height) location = ` The pointer is near (${Number(px.toFixed(3))},${Number(py.toFixed(3))}) in this screenshot.`;
+		}
+		return `Pointer moved without clicking.${location} Read the tooltip or status line. If it confirms the target, locate its center in this fresh screenshot and use act_ui({view:"${view}",click:[x,y]}). If the label identifies a different tool, hover another candidate.`;
+	}
+	const stop = receipt?.action.action === "click" ? " If only one click was requested, stop here." : "";
+	return `Input dispatched. Check the result in this screenshot.${stop} For a further requested step use {view:"${view}"}.`;
+}
+
+function browserClickHint(tool: string, detail: boolean, view?: string, region?: ObserveParams["region"], canClip?: boolean, inspectedPoint?: ObserveParams["focus"]): string {
+	if (view && operationState().browserPanelZoom) {
+		const click = `act_ui({view:"${view}",click:[x,y]})`;
+		if (detail) {
+			if (inspectedPoint) {
+				const xy = `[${inspectedPoint.x},${inspectedPoint.y}]`;
+				return `Detail view. Fresh screenshot at maximum zoom. Your inspection point is ${xy}. If that point is on the requested control, click it with act_ui({view:"${view}",click:${xy}}). Otherwise use the control’s actual position in this image or inspect a different region.`;
+			}
+			const further = region ? " Use focus:{x,y} in this panel if nearby controls are hard to distinguish." : "";
+			return `Detail view.${region ? " Region: " + region + "." : ""} Click the target with ${click} in this image’s pixels.${further} If the target is absent, use this handle to inspect a different region.`;
+		}
+		if (canClip === false) return `At this page zoom, use ${click} in the full image or inspect it with magnify.`;
+		const toolbar = tool === "launch_browser" ? `On a live icon-only toolbar, hover a candidate with act_ui({view:"${view}",hover:[x,y]}) before clicking. Read the application's tooltip or status line. If its description differs from the requested tool, inspect another candidate. Click after the visible label or description confirms it. On a static screenshot, use the visible pixels directly. ` : "";
+		return `${toolbar}If you see the target, click with ${click}. For a small or crowded control, inspect its location with observe_ui({view:"${view}",focus:{x,y}}). If you can identify only the panel, use observe_ui({view:"${view}",region:POSITION}). POSITION is top-left, top, top-right, left, center, right, bottom-left, bottom or bottom-right. Use coordinates in the returned image.`;
+	}
+	if (view) {
+		const click = `act_ui({view:"${view}",click:[x,y]})`;
+		const focus = `observe_ui({view:"${view}",focus:{x,y}})`;
+		let hint = `Click with ${click}. For a small target, inspect its region with ${focus}.`;
+		if (detail) {
+			hint = `Detail view. Click the target with ${click} using pixels in this image. If absent, report not found or return to the full view.`;
+		} else if (tool === "launch_browser") {
+			hint = `For a first click in a desktop screenshot or dense toolbar, inspect the most likely region once with ${focus}. Click in the returned detail. For a large isolated control use ${click} directly.`;
+		}
+		return hint;
+	}
+	let hint = "Use act_ui with coordinates from this image. For a small or crowded target, inspect its region first with observe_ui, this root, stateId and focus:{x,y}.";
+	if (detail) {
+		hint = "Detail view. Use act_ui with x/y directly in this image and its stateId. If the target is absent, observe this root again for the full image.";
+	} else if (tool === "launch_browser") {
+		hint = "For the first click in a desktop screenshot, canvas or dense toolbar, inspect the most likely region once with observe_ui using this root, stateId and focus:{x,y}. Then click directly in the detail with its new stateId. If you cannot identify the target, report it without guessing. Large isolated controls can be clicked directly.";
+	}
+	return hint;
+}
+
+function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string, epoch: number, tool: string, base?: { stateId: string; outline: SerializedOutline }, observation?: { inspectedPoint?: ObserveParams["focus"]; receipt?: BrowserActionReceipt }): AgentToolResult<BrowserObservationDetails> {
+	const { pixelImage, ...stored } = browser;
+	const view = operationState().compactBrowserControls && pixelImage && stored.viewport ? viewPrefix + (++nextView).toString(36) : undefined;
+	savedStates.set({ stateId: browser.snapshotId, resourceKey, epoch, value: { kind: "browser", view, snapshot: stored, outline: stored.outline } });
+	if (pixelImage && stored.viewport) {
+		const root = { ref:storeBrowserRootRef(stored.contextId), kind:"browser_page" as const, title:"", url:"" };
+		const hint = tool === "act_ui" && view && operationState().browserPanelZoom
+			? browserActionHint(view, stored.viewport, observation?.receipt)
+			: browserClickHint(tool, !!stored.viewport.origin, view, stored.viewport.region, stored.viewport.canClip, observation?.inspectedPoint);
+		return { content: [
+			{ type:"text", text:`${tool} completed for ${root.ref}. State ${stored.snapshotId}. Screenshot only, ${stored.viewport.width} × ${stored.viewport.height} px. ${hint} Inspect the next image after each action.` },
+			{ type:"image", mimeType:"image/png", data:pixelImage },
+		], details:{ tool, kind:"browser_page", pixelsOnly:true, stateId:stored.snapshotId, view:"full", root, outline:stored.outline, renderedOutline:"" } };
+	}
 	const currentOutline = restoreOutline(browser.outline);
 	const transition = base ? changesBetween(restoreOutline(base.outline), currentOutline) : undefined;
 	const useDiff = Boolean(transition && !transition.useFullView);
@@ -1534,15 +1609,22 @@ function browserObservationResult(browser: CdpPageSnapshot, resourceKey: string,
 	const viewText = useDiff
 		? `Changes (${transition!.changedNodeCount}, ${base!.stateId} → ${browser.snapshotId}):\n${renderChanges(transition!.changes) || "(no element changes)"}\nUse stateId ${browser.snapshotId} for subsequent actions and queries.`
 		: folded.text;
-	return { content: [{ type: "text", text: `${tool} completed for ${root.ref} ${JSON.stringify(browser.title)}. State ${browser.snapshotId}.\n${viewText}` }], details };
+	const controls = browser.targets.filter(target => !viewText.includes(`${target.ref} `)).slice(0, 24);
+	const pageText = browser.text.length <= 2400 ? browser.text
+		: browser.text.slice(0, 1400) + `\n… read_text with ${currentOutline.root.ref} for more …\n` + browser.text.slice(-900);
+	const controlHint = tool === "launch_browser" ? "\nUse act_ui with this stateId for all clicks and text entry on this page. To verify the result use observe_ui with this root." : "";
+	const controlText = controls.length ? "\nControls in this state:\n" + controls.map(target =>
+		`${target.ref} ${target.role} ${JSON.stringify(target.name.slice(0, 120))}`).join("\n") : "";
+	return { content: [{ type: "text", text: `${tool} completed for ${root.ref} ${JSON.stringify(browser.title)}. State ${browser.snapshotId}.${controlHint}\n${viewText}${controlText}${pageText ? "\nPage text:\n" + pageText : ""}` }], details };
 }
 
-async function refreshBrowserSnapshot(contextId: string, tool: string, base?: { stateId: string; outline: SerializedOutline }): Promise<AgentToolResult<BrowserObservationDetails>> {
-	const browser = await cdpSnapshotForContext(contextId);
+async function refreshBrowserSnapshot(contextId: string, tool: string, base?: { stateId: string; outline: SerializedOutline }, receipt?: BrowserActionReceipt, signal?: AbortSignal): Promise<AgentToolResult<BrowserObservationDetails>> {
+	const browser = await cdpSnapshotForContext(contextId, operationState().browserSnapshot?.pixelsOnly || undefined);
+	throwIfAborted(signal);
 	if (!browser) throw new Error(`Browser root '${contextId}' is no longer available. Call find_roots and observe_ui again.`);
 	const state = operationState();
 	const resourceKey = state.resourceKey ?? `cdp:${browser.targetId}`;
-	return browserObservationResult(browser, resourceKey, state.epoch ?? resourceScheduler.epoch(resourceKey), tool, base);
+	return browserObservationResult(browser, resourceKey, state.epoch ?? resourceScheduler.epoch(resourceKey), tool, base, { receipt });
 }
 
 function sliceText(value: string, offsetValue: unknown, _limitValue?: unknown): Pick<ReadTextDetails, "offset" | "limit" | "totalChars" | "hasMore" | "text"> {
@@ -1675,6 +1757,13 @@ function conditionScopeNode(outline: Outline, condition: ReturnType<typeof valid
 	return scopeNode;
 }
 
+function browserConditionPresent(snapshot: CdpPageSnapshot, condition: ReturnType<typeof validateCondition>, wireRef?: string): boolean {
+	const outline = restoreOutline(snapshot.outline);
+	if (!condition.scopeRef) return outlineConditionPresent(outline, condition);
+	const scopeRef = wireRef && outline.wireRefToRef.get(wireRef);
+	return Boolean(scopeRef && outlineConditionPresent(outline, { ...condition, scopeRef }));
+}
+
 async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Promise<AgentToolResult<WaitForDetails>> {
 	const contextId = operationState().contextId;
 	const condition = validateCondition(params);
@@ -1685,7 +1774,7 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 		if (!state.resourceKey) throw new Error("The browser observation has no live resource identity. Observe again.");
 		const baseSnapshot = state.browserSnapshot;
 		if (!baseSnapshot) throw new Error("Browser wait requires a complete base observation.");
-		conditionScopeNode(restoreOutline(baseSnapshot.outline), condition);
+		const scope = conditionScopeNode(restoreOutline(baseSnapshot.outline), condition);
 		const deadline = Date.now() + timeoutMs;
 		let lastSnapshot: CdpPageSnapshot | undefined;
 		let lastEpoch = state.epoch ?? resourceScheduler.epoch(state.resourceKey);
@@ -1706,7 +1795,7 @@ async function performWaitFor(params: WaitForParams, signal?: AbortSignal): Prom
 			lastSnapshot = scheduled.value;
 			lastEpoch = scheduled.epoch;
 			if (!lastSnapshot) throw new Error(`Browser root '${contextId}' is no longer available. Call find_roots and observe_ui again.`);
-			const present = outlineConditionPresent(restoreOutline(lastSnapshot.outline), condition);
+			const present = browserConditionPresent(lastSnapshot, condition, scope?.wireRef);
 			if (present !== gone) return finish(true);
 			await sleep(200, signal);
 		} while (Date.now() < deadline);
@@ -1773,14 +1862,45 @@ async function performObserve(params: ObserveParams, signal?: AbortSignal): Prom
 	if (isBrowserContextId(browserContextId)) {
 		const targetId = browserContextId.slice(BROWSER_CONTEXT_PREFIX.length);
 		const resourceKey = `cdp:${targetId}`;
-		const scheduled = await resourceScheduler.read(resourceKey, async () => await cdpSnapshotForContext(browserContextId));
-		const browser = scheduled.value;
-		if (!browser) throw new Error(`Browser context '${browserContextId}' is no longer available. Call find_roots again.`);
-		return browserObservationResult(browser, resourceKey, scheduled.epoch, "observe_ui");
+		if (params.focus !== undefined || params.region !== undefined) {
+			const base = operationState().browserSnapshot;
+			const baseEpoch = operationState().epoch;
+			if (!base?.pixelsOnly || !base.viewport || base.contextId !== browserContextId || baseEpoch === undefined) {
+				throw new Error("Focus requires the full screenshot stateId belonging to this browser root.");
+			}
+			const refreshDetail = !!(operationState().browserPanelZoom && params.focus && base.viewport.origin && !base.viewport.region);
+			const focus = { center: params.focus, region: params.region, base: base.viewport, refreshDetail };
+			const { value, epoch } = await resourceScheduler.readAt(resourceKey, baseEpoch,
+				() => cdpSnapshotForContext(browserContextId, true, focus));
+			if (!value) throw new Error("Browser root is no longer available.");
+			return browserObservationResult(value, resourceKey, epoch, "observe_ui", undefined, { inspectedPoint: refreshDetail ? params.focus : undefined });
+		}
+		const { value, epoch } = await resourceScheduler.read(resourceKey, async () => {
+			const browser = await cdpSnapshotForContext(browserContextId, params.mode === "pixels" || undefined);
+			if (!browser) throw new Error(`Browser context '${browserContextId}' is no longer available. Call find_roots again.`);
+			const image = !browser.pixelsOnly && params.mode === "visual" ? await cdpViewportForContext(browserContextId) : undefined;
+			return { browser, image };
+		});
+		const { browser, image } = value;
+		const observed = operationState();
+		const baseViewport = observed.browserSnapshot?.viewport;
+		if (baseViewport && observed.browserSnapshot?.pixelsOnly && ("samplePixels" in params || "magnify" in params)
+			&& (observed.epoch !== epoch || baseViewport.stamp !== browser.viewport?.stamp
+				|| baseViewport.width !== browser.viewport.width || baseViewport.height !== browser.viewport.height)) {
+			throw new Error("The screenshot or viewport is stale. Observe the full image again before inspecting its coordinates.");
+		}
+		if (image) browser.viewport = image.geometry;
+		const result = browserObservationResult(browser, resourceKey, epoch, "observe_ui");
+		if (image) {
+			result.content.push({ type: "text", text: `[image] Browser viewport ${image.geometry.width} × ${image.geometry.height} pixels. Use coordinates directly from this image with this stateId.` });
+			result.content.push({ type: "image", mimeType: "image/png", data: image.data });
+		}
+		return result;
 	}
 	const state = operationState();
 	const mode = params.mode ?? "fused";
-	const image = mode === "semantic" ? "never" : mode === "visual" ? "always" : "auto";
+	state.pixelsOnly = mode === "pixels";
+	const image = mode === "semantic" ? "never" : (mode === "visual" || state.pixelsOnly) ? "always" : "auto";
 	const defaultReadText = mode === "semantic" ? "never" : mode === "visual" ? "always" : "auto";
 	const readText = params.readText ?? defaultReadText;
 	state.currentImageMode = normalizeImageMode(image);
@@ -1837,7 +1957,7 @@ async function performSearchUi(params: SearchUiParams, signal?: AbortSignal): Pr
 	let matches = ranked.matches;
 	let escalatedOCR = false;
 	const look = state.currentLook;
-	if (shouldEscalateSearchOCR(matches, text) && look && look.readText?.requested !== "never" && !look.readText?.executed && state.lastSearchOcrEscalatedLookId !== look.lookId) {
+	if (!state.browserSnapshot && shouldEscalateSearchOCR(matches, text) && look && look.readText?.requested !== "never" && !look.readText?.executed && state.lastSearchOcrEscalatedLookId !== look.lookId) {
 		state.lastSearchOcrEscalatedLookId = look.lookId;
 		const currentTarget = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 		// captureCurrentTarget adopts the new look/outline/capture into
@@ -1873,7 +1993,7 @@ async function performExpandUi(params: ExpandUiParams, signal?: AbortSignal): Pr
 	const depth = Math.max(1, Math.min(8, Math.trunc(toFiniteNumber(params.depth, 3))));
 	const regionKey = noteRegionKeyForRef(outline, ref);
 	const regionChanged = Boolean(regionKey && state.currentNote?.regions.some((region) => region.key === regionKey && region.status === "changed"));
-	if (target.truncated || regionChanged) {
+	if (!state.browserSnapshot && (target.truncated || regionChanged)) {
 		const currentTarget = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
 		const targetWireRef = wireRefForNode(target);
 		if (!state.resourceKey || state.epoch === undefined) throw new Error("The observation has no live resource identity. Observe again.");
@@ -1990,7 +2110,7 @@ async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget
 		if (!result.steps || result.steps.length === 0) throw new Error("Native action transaction returned no checked steps.");
 		const execution = aggregateExecutions(result.steps.map((step) => executionTraceFromAct(step, "ax_only")));
 		const batchTrace = executionTraceFromAct(result, "ax_only");
-		execution.outcome = result.outcome;
+		if (result.outcome !== "worked") execution.outcome = result.outcome;
 		execution.performed = result.performed;
 		execution.rootDelta = batchTrace.rootDelta;
 		execution.stoppedAt = result.stoppedAt;
@@ -2066,7 +2186,8 @@ async function terminalDesktopActionResult(
 	} catch {
 		// A failed identity probe cannot prove that the root closed.
 	}
-	const targetClosed = exactRootAvailable === false;
+	const targetClosed = exactRootAvailable === false && (!operationState().pixelsOnly || (execution.rootDelta ?? []).some(delta =>
+		delta.change === "closed" && delta.pid === target.pid && delta.ref === target.windowRef));
 	if (targetClosed && !(execution.rootDelta ?? []).some((delta) => delta.change === "closed" && delta.pid === target.pid && (delta.ref === target.windowRef || delta.ref === target.nativeWindowRef))) {
 		execution.rootDelta = [
 			...(execution.rootDelta ?? []),
@@ -2209,7 +2330,9 @@ function solePressKey(actions: UiAction[], execution: ExecutionTrace, target: Re
 
 async function performDesktopTransaction(params: ActParams, actions: UiAction[], signal?: AbortSignal): Promise<AgentToolResult<ComputerUseDetails | TerminalDesktopActionDetails>> {
 	const state = operationState();
-	state.currentImageMode = "auto";
+	state.currentImageMode = state.pixelsOnly ? "always" : "auto";
+	if (state.pixelsOnly && actions.length !== 1) throw new Error("Inspect the next screenshot before sending another action.");
+	if (state.pixelsOnly && (params.expect || actions.some(a => a.ref || a.action === "setText" || a.action === "press"))) throw new Error("Screenshot-only actions use image coordinates. Verify on the returned image.");
 	validateStateId(params.stateId);
 	const look = currentLookOrThrow();
 	const baseView = { stateId: state.currentCapture!.stateId, outline: state.currentOutline! };
@@ -2271,6 +2394,17 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 				await sleep(settleMsForExecution(execution), signal);
 			}
 			let capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);
+			// A native zoom or slide can still be animating when input returns. Only observe again; never repeat the input.
+			if (state.pixelsOnly) {
+				const deadline = Date.now() + 650;
+				do {
+					await sleep(90, signal);
+					const next = await captureCurrentTarget(signal, "never", EXPLICIT_IMAGE_MAX_DIMENSION, target);
+					const settled = next.look.image?.jpegBase64 === capture.look.image?.jpegBase64;
+					capture = next;
+					if (settled) break;
+				} while (Date.now() < deadline);
+			}
 			// Forsion patch, see UPSTREAM.md. A covered page takes an AXPress but stops reporting and repainting. The helper asks
 			// the page before each read (webFlush), which gets the tree back without touching the window, so this read normally
 			// shows the change. What is left is a press that changed nothing, a change that is only painted, and a page that
@@ -2279,7 +2413,7 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 			const pressedSteps = execution.steps?.length ? execution.steps : [execution];
 			const pressed = pressedSteps.filter((step) => step.accessibilityPress);
 			if (pressed.length > 0 && !execution.rootDelta?.length && (!execution.error || execution.error.code === "postcondition_failed") && !webContentChanged(baseView.outline, capture.outline)) {
-				const activated = await currentPlatformBackend.activateWindow?.(nativeWindowRequest(target), signal);
+				const activated = !isHeadlessMode() && await currentPlatformBackend.activateWindow?.(nativeWindowRequest(target), signal);
 				if (activated) {
 					await sleep(COVERED_PAGE_REPAINT_MS, signal);
 					capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);
@@ -2334,9 +2468,28 @@ async function performBrowserTransaction(params: ActParams, actions: UiAction[],
 	const baseSnapshot = operationState().browserSnapshot;
 	if (!baseSnapshot) throw new Error("Browser transaction requires a complete base observation.");
 	const baseView = { stateId: baseSnapshot.snapshotId, outline: baseSnapshot.outline };
+	if (baseSnapshot.pixelsOnly && actions.length !== 1) throw new Error("Use one screenshot-grounded action per call. Inspect its successor image before the next action. A single drag may contain multiple points.");
+	if (baseSnapshot.pixelsOnly && actions.some(a => a.action === "scroll" && !Number.isFinite(a.x))) throw new Error("Scroll at x/y from the latest image.");
+	if (baseSnapshot.pixelsOnly && (params.expect || actions.some(a => a.ref || a.action === "press" || a.action === "setText"))) {
+		throw new Error("Screenshot-only actions use coordinates, drags, keypresses or focused typing. Verify the result on its returned image.");
+	}
 	const condition = params.expect ? validateCondition(params.expect) : undefined;
-	if (condition) conditionScopeNode(restoreOutline(baseSnapshot.outline), condition);
-	const prepared = actions.map((action) => {
+	const scope = condition ? conditionScopeNode(restoreOutline(baseSnapshot.outline), condition) : undefined;
+	const toCss = (x: number, y: number) => {
+		const viewport = baseSnapshot.viewport;
+		if (!viewport) throw new Error("Coordinate input requires observe_ui with mode=visual. Use the returned screenshot and stateId.");
+		if (x < 0 || y < 0 || x >= viewport.width || y >= viewport.height) throw new Error("Point falls outside the observed browser viewport.");
+		return { x: (viewport.origin?.x ?? 0) + x * viewport.cssWidth / viewport.width,
+			y: (viewport.origin?.y ?? 0) + y * viewport.cssHeight / viewport.height };
+	};
+	const prepared = actions.map((input) => {
+		let action = input;
+		if (Number.isFinite(input.x) && Number.isFinite(input.y)) action = { ...input, ...toCss(input.x!, input.y!) };
+		if (baseSnapshot.pixelsOnly && input.action === "scroll" && baseSnapshot.viewport) {
+			action = { ...action, scrollX: (input.scrollX ?? 0) * baseSnapshot.viewport.cssWidth / baseSnapshot.viewport.width,
+				scrollY: (input.scrollY ?? 0) * baseSnapshot.viewport.cssHeight / baseSnapshot.viewport.height };
+		}
+		if (input.path) action = { ...action, path: normalizeActionPath(input.path).map(point => toCss(point.x, point.y)) };
 		if (!BROWSER_TRANSACTION_ACTIONS.has(action.action)) throw new Error(`Browser transactions do not support '${action.action}'.`);
 		if (action.action === "click" && action.ref && action.button && action.button !== "left") throw new Error("Browser ref clicks support only the left button; use coordinate clicks for right or middle buttons.");
 		const target = browserSnapshotTarget(params.stateId, trimOrUndefined(action.ref));
@@ -2347,37 +2500,57 @@ async function performBrowserTransaction(params: ActParams, actions: UiAction[],
 		return { action, target };
 	});
 	return await withBrowserWrite(contextId, async () => {
-		for (const { action, target } of prepared) {
-			let worked = false;
-			if (action.action === "press" || (action.action === "click" && action.ref)) {
-				worked = true;
-				for (let count = 0; count < (action.clickCount ?? 1); count += 1) worked = await cdpClickForContext(contextId, target!.backendNodeId!) && worked;
-			} else if (action.action === "click") {
-				worked = await cdpMouseForContext(contextId, action.x!, action.y!, "mousePressed", action.button ?? "left", action.clickCount ?? 1)
-					&& await cdpMouseForContext(contextId, action.x!, action.y!, "mouseReleased", action.button ?? "left", action.clickCount ?? 1);
-			} else if (action.action === "setText") worked = await cdpTypeForContext(contextId, target!.backendNodeId!, action.text ?? "", true);
-			else if (action.action === "typeText") worked = target?.backendNodeId
-				? await cdpTypeForContext(contextId, target.backendNodeId, action.text ?? "", false)
-				: await cdpTypeFocusedForContext(contextId, action.text ?? "");
-			else if (action.action === "keypress") worked = await cdpKeypressForContext(contextId, action.keys ?? []);
-			else if (action.action === "scroll") worked = await cdpScrollForContext(contextId, toFiniteNumber(action.scrollX, 0), toFiniteNumber(action.scrollY, 0), target?.backendNodeId);
-			else if (action.action === "drag") worked = await cdpDragForContext(contextId, normalizeActionPath(action.path));
-			else if (action.action === "moveMouse") worked = await cdpMouseForContext(contextId, action.x!, action.y!, "mouseMoved");
-			if (!worked) throw new Error("The browser root became unavailable during the action transaction. Observe it again.");
+		let completed = 0;
+		try {
+			for (const { action, target } of prepared) {
+				throwIfAborted(signal);
+				if ((baseSnapshot.pixelsOnly || Number.isFinite(action.x) || action.path) && baseSnapshot.viewport?.stamp !== await cdpViewportStamp(contextId)) {
+					throw new Error("The page or viewport moved since the screenshot. Observe again in visual mode before coordinate input.");
+				}
+				throwIfAborted(signal);
+				let worked = false;
+				if (action.action === "press" || (action.action === "click" && action.ref)) {
+					worked = await cdpClickForContext(contextId, target!.backendNodeId!, action.clickCount ?? 1);
+				} else if (action.action === "click") {
+					worked = await cdpMouseForContext(contextId, action.x!, action.y!, "mousePressed", action.button ?? "left", action.clickCount ?? 1)
+						&& await cdpMouseForContext(contextId, action.x!, action.y!, "mouseReleased", action.button ?? "left", action.clickCount ?? 1);
+				} else if (action.action === "setText") worked = await cdpTypeForContext(contextId, target!.backendNodeId!, action.text ?? "", true);
+				else if (action.action === "typeText") worked = target?.backendNodeId
+					? await cdpTypeForContext(contextId, target.backendNodeId, action.text ?? "", false)
+					: await cdpTypeFocusedForContext(contextId, action.text ?? "");
+				else if (action.action === "keypress") worked = await cdpKeypressForContext(contextId, action.keys ?? [], target?.backendNodeId);
+				else if (action.action === "scroll") worked = await cdpScrollForContext(contextId, toFiniteNumber(action.scrollX, 0), toFiniteNumber(action.scrollY, 0), target?.backendNodeId, action.x !== undefined && action.y !== undefined ? {x:action.x, y:action.y} : undefined);
+				else if (action.action === "drag") worked = await cdpDragForContext(contextId, normalizeActionPath(action.path));
+				else if (action.action === "moveMouse") worked = await cdpMouseForContext(contextId, action.x!, action.y!, "mouseMoved");
+				if (!worked) throw new Error("The browser root became unavailable during the action transaction. Observe it again.");
+				completed++;
+			}
+		} catch (error) {
+			if (!completed) throw error;
+			throw new Error(`${completed} earlier action(s) delivered. Inspect the current state before continuing: ${error}`);
 		}
 		if (condition) {
 			const deadline = Date.now() + condition.timeoutMs;
-			let satisfied = false;
 			do {
+				throwIfAborted(signal);
 				const snapshot = await cdpSnapshotForContext(contextId);
 				if (!snapshot) throw new Error(`Browser root '${contextId}' is no longer available. Observe it again.`);
-				const present = outlineConditionPresent(restoreOutline(snapshot.outline), condition);
-				satisfied = present !== condition.gone;
-				if (!satisfied) await sleep(100, signal);
-			} while (!satisfied && Date.now() < deadline);
-			if (!satisfied) throw new Error(`The browser action was delivered but its postcondition was not satisfied within ${condition.timeoutMs}ms.`);
+				const present = browserConditionPresent(snapshot, condition, scope?.wireRef);
+				if (present !== condition.gone) {
+					const state = operationState();
+					return browserObservationResult(snapshot, state.resourceKey!, state.epoch!, "act_ui", baseView);
+				}
+				await sleep(100, signal);
+			} while (Date.now() < deadline);
+			throw new Error(`The browser action was delivered but its postcondition was not satisfied within ${condition.timeoutMs}ms.`);
 		}
-		return await refreshBrowserSnapshot(contextId, "act_ui", baseView);
+		try {
+			const single = baseSnapshot.pixelsOnly && prepared.length === 1 ? prepared[0].action : undefined;
+			// A live control can paint its hover label after a short timer. Wait only on pixel-mode pointer moves in the panel experiment.
+			if (operationState().browserPanelZoom && single?.action === "moveMouse") await sleep(650, signal);
+			return await refreshBrowserSnapshot(contextId, "act_ui", baseView, single ? { action: single, stamp: baseSnapshot.viewport?.stamp } : undefined, signal);
+		}
+		catch (error) { throw new Error(`${completed} action(s) delivered. Observe before sending more input. ${error}`); }
 	});
 }
 
@@ -2475,79 +2648,24 @@ async function managedBrowserExecutable(browser: "helium" | "chrome"): Promise<s
 	throw new Error(`${browser} executable was not found. Set ${overrideName} to its absolute path.`);
 }
 
-function freeTcpPort(): Promise<number> {
-	return new Promise((resolve, reject) => {
-		const server = net.createServer();
-		server.on("error", reject);
-		server.listen(0, "127.0.0.1", () => {
-			const address = server.address();
-			const port = typeof address === "object" && address ? address.port : 0;
-			server.close(() => port > 0 ? resolve(port) : reject(new Error("Could not allocate a local CDP port.")));
-		});
-	});
-}
-
-async function waitForCdpPort(port: number, signal?: AbortSignal): Promise<void> {
-	const deadline = Date.now() + MANAGED_BROWSER_READY_TIMEOUT_MS;
-	while (Date.now() < deadline) {
-		if (signal?.aborted) throw new Error("Browser launch was aborted.");
-		try {
-			const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(500) });
-			if (response.ok) return;
-		} catch {
-			// Browser is still starting.
-		}
-		await sleep(200, signal);
-	}
-	throw new Error(`Managed browser did not expose CDP on port ${port} within ${MANAGED_BROWSER_READY_TIMEOUT_MS}ms.`);
-}
-
-// Side effects: starts a Pi-managed browser process, replaces any previous managed browser,
-// and sets PI_COMPUTER_USE_CDP_PORT for subsequent CDP context discovery.
 async function performLaunchBrowser(params: LaunchBrowserParams, signal?: AbortSignal): Promise<AgentToolResult<BrowserObservationDetails>> {
-	const browser = getComputerUseConfig().managed_browser;
-	const executable = await managedBrowserExecutable(browser);
-	const port = await freeTcpPort();
-	const requestedUrl = trimOrUndefined(params.url);
-	if (requestedUrl && !/^https?:\/\//i.test(requestedUrl)) throw new Error("launch_browser.url must be an absolute HTTP(S) URL.");
-	const url = requestedUrl ?? "about:blank";
-	const profileDir = path.join(os.tmpdir(), `pi-${browser}-cdp-${port}`);
-	disconnectCdp();
-	runtimeState.managedBrowser?.kill("SIGTERM");
-	const args = [
-		`--remote-debugging-port=${port}`,
-		`--user-data-dir=${profileDir}`,
-		"--no-first-run",
-		"--no-default-browser-check",
-		url,
-	];
-	if (runtimeState.previousCdpPort === undefined && runtimeState.managedBrowserCdpPort === undefined) {
-		runtimeState.previousCdpPort = process.env.PI_COMPUTER_USE_CDP_PORT;
-	}
-	const managedBrowser = spawn(executable, args, { stdio: "ignore", detached: false });
-	managedBrowser.unref();
-	runtimeState.managedBrowser = managedBrowser;
-	runtimeState.managedBrowserCdpPort = String(port);
-	process.env.PI_COMPUTER_USE_CDP_PORT = String(port);
-	try {
-		await waitForCdpPort(port, signal);
-	} catch (error) {
-		if (runtimeState.managedBrowser === managedBrowser) {
-			runtimeState.managedBrowser = undefined;
-			managedBrowser.kill("SIGTERM");
-			if (runtimeState.previousCdpPort === undefined) delete process.env.PI_COMPUTER_USE_CDP_PORT;
-			else process.env.PI_COMPUTER_USE_CDP_PORT = runtimeState.previousCdpPort;
-			runtimeState.managedBrowserCdpPort = undefined;
-			runtimeState.previousCdpPort = undefined;
-		}
-		throw error;
-	}
-	const page = (await listCdpPageContexts())[0];
-	if (!page) throw new Error("Managed browser launched without a CDP page context.");
-	const resourceKey = `cdp:${page.targetId}`;
-	const scheduled = await resourceScheduler.read(resourceKey, async () => await cdpSnapshotForContext(page.contextId));
-	if (!scheduled.value) throw new Error("Managed browser page could not be observed after launch.");
-	return browserObservationResult(scheduled.value, resourceKey, scheduled.epoch, "launch_browser");
+	const config = getComputerUseConfig();
+	const url = trimOrUndefined(params.url);
+	if (url && !/^https?:\/\//i.test(url)) throw new Error("launch_browser.url must be an absolute HTTP(S) URL.");
+	const visible = params.visible === true;
+	if (visible && config.headless) throw new Error("Strict background is enabled. Launch without visible to keep the browser in the background.");
+	const executable = await managedBrowserExecutable(config.managed_browser);
+	const launch = await resourceScheduler.read(`managed-browser:${browserOwner()}`, () =>
+		launchManagedBrowser(executable, visible, signal, async () => {
+			const [page] = await listCdpPageContexts(true);
+			if (!page) throw new Error("Managed browser launched without its initial blank page.");
+			if (url && !await cdpNavigateContext(page.contextId, url)) throw new Error("The initial browser page closed during navigation.");
+			const resourceKey = `cdp:${page.targetId}`;
+			const scheduled = await resourceScheduler.read(resourceKey, () => cdpSnapshotForContext(page.contextId));
+			if (!scheduled.value) throw new Error("Managed browser page could not be observed after launch.");
+			return browserObservationResult(scheduled.value, resourceKey, scheduled.epoch, "launch_browser");
+		}, params.mode === "pixels"));
+	return launch.value;
 }
 
 async function performNavigateBrowser(params: NavigateBrowserParams): Promise<AgentToolResult<BrowserObservationDetails>> {
@@ -2588,16 +2706,40 @@ async function performEvaluateBrowser(params: EvaluateBrowserParams): Promise<Ag
 	});
 }
 
-async function executeTool<P, T>(ctx: ExtensionContext, params: P, signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
-	const outputRef = trimOrUndefined((params as { ref?: string } | undefined)?.ref)?.startsWith("@o") === true;
+// Resolve the actual stored state/root. Extra arguments on a native command must not change its readiness checks.
+const browserStateTools = new Set(["act_ui", "inspect_ui", "search_ui", "expand_ui", "wait_for", "read_text"]);
+export function toolSurface(tool: string, params: { stateId?: unknown; root?: unknown; kind?: unknown; ref?: unknown } = {}): "browser" | "desktop" | "output" {
+	if (tool === "read_text" && typeof params.ref === "string" && params.ref.trim().startsWith("@o")) return isBrowserOutput(params.ref.trim()) ? "browser" : "output";
+	if (["launch_browser", "navigate_browser", "evaluate_browser"].includes(tool)) return "browser";
+	if (tool === "find_roots") return params.kind === "browser_page" ? "browser" : "desktop";
+	if (tool === "observe_ui") return typeof params.root === "string" && runtimeState.browserContextByRoot.has(params.root) ? "browser" : "desktop";
+	return browserStateTools.has(tool) && typeof params.stateId === "string" && savedStates.get(params.stateId.trim())?.value.kind === "browser" ? "browser" : "desktop";
+}
+
+async function executeTool<P, T>(tool: string, ctx: ExtensionContext, params: P, signal: AbortSignal | undefined, run: () => Promise<T>): Promise<T> {
+	const outputRef = tool === "read_text" && trimOrUndefined((params as { ref?: string } | undefined)?.ref)?.startsWith("@o") === true;
 	const requestedStateId = outputRef ? undefined : trimOrUndefined((params as { stateId?: string } | undefined)?.stateId);
 	const stateRecord = requestedStateId ? savedStates.get(requestedStateId) : undefined;
 	if (requestedStateId && !stateRecord) {
 		throw new Error(`State '${requestedStateId}' is unavailable or was evicted. Observe the root again.`);
 	}
 	const operation = savedStates.hydrate(stateRecord);
+	operation.compactBrowserControls = ctx.compactBrowserControls;
+	operation.browserPanelZoom = ctx.browserPanelZoom;
 	return await savedStates.operations.run(operation, async () => {
-		await resourceScheduler.read("session-lifecycle", async () => await ensureReady(ctx, signal));
+		const surface = toolSurface(tool, params as Record<string, unknown>);
+		if (operation.pixelsOnly && tool !== "act_ui") throw new Error("Screenshot-only state. Use observe_ui in pixels mode for another image.");
+		if (stateRecord?.value.kind === "browser" && stateRecord.value.snapshot.owner !== browserOwner()) throw new Error("Browser state belongs to another conversation. Observe your browser again.");
+		if (surface === "browser") {
+			if (stateRecord?.value.kind === "browser" && stateRecord.value.snapshot.pixelsOnly && tool !== "act_ui" && tool !== "navigate_browser"
+				&& !(tool === "observe_ui" && (params as ObserveParams).mode === "pixels"
+					&& runtimeState.browserContextByRoot.get((params as ObserveParams).root ?? "") === stateRecord.value.snapshot.contextId)) {
+				throw new Error("Screenshot-only browser state. Inspect the image or request another with observe_ui.");
+			}
+			if (!isBrowserUseEnabled()) throw new Error("Browser use is disabled in Computer Use settings.");
+		} else if (surface === "desktop") {
+			await resourceScheduler.read("session-lifecycle", async () => await ensureReady(ctx, signal));
+		}
 		throwIfAborted(signal);
 		const result = await run();
 		persistOperation(operation);
@@ -2613,11 +2755,14 @@ function makeToolExecutor<P, D>(tool: string, perform: (params: P, signal?: Abor
 		_onUpdate: AgentToolUpdateCallback<D> | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<D>> => {
-		try {
-			return applyOutputEnvelope(tool, await executeTool(ctx, params, signal, () => perform(params, signal)));
-		} catch (error) {
-			throw boundToolError(tool, error);
-		}
+		return operationConfig.run(loadComputerUseConfig(ctx.cwd), () => browserConversation.run(ctx.browserOwner ?? "standalone", async () => {
+			const browser = toolSurface(tool, params as Record<string, unknown>) === "browser";
+			try {
+				return applyOutputEnvelope(tool, await executeTool(tool, ctx, params, signal, () => perform(params, signal)), browser);
+			} catch (error) {
+				throw boundToolError(tool, error, browser);
+			}
+		}));
 	};
 }
 
