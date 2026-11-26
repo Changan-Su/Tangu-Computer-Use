@@ -141,10 +141,27 @@ const toFront = (bundleId) => execFileP('open', ['-b', bundleId]).catch(() => {}
 const waitForStateNow = (file) => JSON.parse(fs.readFileSync(file, 'utf8'))
 let cover
 
+const backgroundOnly = process.argv.includes('--background-only')
 await buildFixture()
 await ensureDaemon(ask)
 const before = await frontmost()
-try {
+if (backgroundOnly) {
+  try {
+    await killFixture()
+    fs.rmSync(STATE, { force: true })
+    await execFileP('open', ['-g', '-n', APP, '--args', STATE])
+    const boot = await until('fixture visible', s => s.visible)
+    assert.notEqual((await frontmost()).pid, boot.pid)
+    process.kill(boot.pid, 'SIGUSR1')
+    await until('fixture hidden', s => !s.visible)
+    cu.syncSettings({getScopeSettings: () => ({headless: false})})
+    const result = await cu.runEnsureApp({ app: APP }, tcx, pctx)
+    assert.match(result, /allow_foreground_for_this_task/)
+    assert.ok(!state().visible)
+    assert.notEqual((await frontmost()).pid, boot.pid)
+    console.log('PASS hidden native fixture stayed hidden with strict background off and no user grant')
+  } finally { await killFixture() }
+} else try {
   await killFixture()
   fs.rmSync(STATE, { force: true })
   await execFileP('open', ['-g', '-n', APP, '--args', STATE])

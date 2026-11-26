@@ -472,7 +472,7 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
   // Only the always-approved tool can add a grant. Never fall back to a session
   // id: a conversation can contain many independently authorized tasks.
   const grants = new Set<string>();
-  const grantKey = (ctx: ToolContext) => ctx.runId && ctx.userTurnId && JSON.stringify([ctx.userId, ctx.appId, ctx.sessionId, ctx.runId, ctx.userTurnId]);
+  const grantKey = (ctx: ToolContext) => ctx.runId && ctx.userTurnId && ctx.userTurnSignal && !ctx.userTurnSignal.aborted && JSON.stringify([ctx.userId, ctx.appId, ctx.sessionId, ctx.runId, ctx.userTurnId]);
   const browserMode = () => {
     const settings = store.getScopeSettings(PLUGIN_ID, 'global');
     if (settings.browser_use === false) return 'standard';
@@ -517,6 +517,12 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
         return 'Foreground control is approved for this task only. Continue with the target app.';
       }
       pctx.foregroundAllowed = !strict && !!key && grants.has(key);
+      if (pctx.foregroundAllowed && tcx.userTurnSignal) {
+        const signal = tcx.signal ? AbortSignal.any([tcx.signal, tcx.userTurnSignal]) : tcx.userTurnSignal;
+        tcx = { ...tcx, signal };
+        pctx.signal = signal;
+        signal.throwIfAborted();
+      }
       if (spec.name === 'launch_browser' && args.visible === true && !strict && !pctx.foregroundAllowed)
         throw new Error('Visible launch requires foreground approval. Launch without visible to stay in the background.');
       const mode = browserMode();

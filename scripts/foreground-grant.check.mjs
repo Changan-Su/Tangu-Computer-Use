@@ -13,7 +13,8 @@ plugin.activate({ registerPlugin({ toolProvider }) { provider = toolProvider; },
   sdk: { pluginStore: { isPluginEnabledSync: () => true, getScopeSettings: () => settings } } });
 const tools = new Map(provider.tools().map(t => [t.name, t]));
 const grant = tools.get('allow_foreground_for_this_task');
-const base = { runId: 'run', userTurnId: 'turn', sessionId: 'conversation', appId: 'dev', userId: 'user', cwd: dir, execMode: 'host' };
+const turn = new AbortController();
+const base = { userTurnSignal: turn.signal, runId: 'run', userTurnId: 'turn', sessionId: 'conversation', appId: 'dev', userId: 'user', cwd: dir, execMode: 'host' };
 const launch = overrides => tools.get('launch_browser').execute({ visible: true }, { ...base, ...overrides });
 const blocked = /strict background|foreground approval/i;
 try {
@@ -31,6 +32,10 @@ try {
   settings.headless = true;
   await assert.rejects(launch({}), blocked);
   assert.match(await grant.execute({ reason: 'fixture' }, base), /Strict background is enabled/);
+  settings.headless = false;
+  turn.abort();
+  await assert.rejects(launch({}), blocked);
+  assert.match(await grant.execute({reason: 'expired'}, {...base, userConfirmedCall: true}), /confirmed approval/);
   console.log('PASS mandatory approval, grant isolation, missing run, and strict background override.');
 } finally {
   rmSync(dir, { recursive: true, force: true });
