@@ -410,7 +410,7 @@
         "app": "Notes",
         "bundleId": "com.apple.Notes"
       },
-      "result": "Opened com.apple.Notes in the background; it did not take the foreground.\nFound 1 matching root; returned 1. Use @r refs with observe_ui({ root: \"@rN\" }).\n- @r2 window Notes pid 812 — All iCloud (z 1, windowId 77, frame 0,0 900x600, onscreen)",
+      "result": "Observed com.apple.Notes in the background; it did not take the foreground.\nFound 1 matching root; returned 1. Use @r refs with observe_ui({ root: \"@rN\" }).\n- @r2 window Notes pid 812 — All iCloud (z 1, windowId 77, frame 0,0 900x600, onscreen)",
       "errorResult": "Could not launch com.apple.Notes: not found. Check the app/bundleId is installed."
     },
     {

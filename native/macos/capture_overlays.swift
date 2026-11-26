@@ -19,7 +19,8 @@ struct OverlayCandidate {
 /// ponytail: 同层的窗口一律不画 —— 同层的兄弟窗口在执行器把 target 提到最前之后会沉到它下面,点那里落到的是 target;
 /// CG 也分不出同层的子窗口弹层和兄弟窗口。真有 App 把弹层放在 0 层再加子窗口判断。
 func overlayWindowIds(target: OverlayCandidate, candidates: [OverlayCandidate], limit: Int = 8) -> [UInt32] {
-	Array(candidates.lazy.filter {
+	guard target.onScreen else { return [] }
+	return Array(candidates.lazy.filter {
 		$0.id != target.id && $0.pid == target.pid && $0.onScreen && $0.layer > target.layer
 			&& $0.frame.width >= 2 && $0.frame.height >= 2 && $0.frame.intersects(target.frame)
 	}.prefix(limit).map(\.id))

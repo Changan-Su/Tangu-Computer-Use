@@ -116,7 +116,7 @@ async function unitTests() {
   assert.doesNotMatch(hinted, /minimized/, 'minimized windows are still listed, so they are not a cause');
   assert.ok(hinted.includes('ensure_app({ bundleId: "com.tencent.xinWeChat" })'), 'gives the exact call');
   assert.ok(goneHint(gone, { app: 'WeChat' }).includes('ensure_app({ app: "WeChat" })'), 'falls back to the app name');
-  assert.match(goneHint(gone), /ensure_app brings/, 'no remembered target → still names the tool');
+  assert.match(goneHint(gone), /ensure_app returns/, 'no remembered target → still names the tool');
   assert.equal(goneHint('State is stale for desktop-pid:1: expected epoch 8, current epoch 9.', { app: 'x' }), 'State is stale for desktop-pid:1: expected epoch 8, current epoch 9.', 'other errors pass through');
   console.log('✓ unit: goneHint 判据 7 项全过');
 

@@ -8,7 +8,8 @@
  *   各带各的,不会串;Jev 和 vendor 里转几道手的调用也在同一个上下文里。
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { macosHelper } from './vendor/platform/macos/helper.ts';
+import { existsSync } from 'node:fs';
+import { HELPER_APP_EXECUTABLE_PATH, macosHelper } from './vendor/platform/macos/helper.ts';
 
 export interface OverlayStyle { fill: string; edge?: string }
 
@@ -55,6 +56,14 @@ export function withOverlayRun<T>(runId: string | undefined, fn: () => T): T {
 
 export function currentOverlayRunId(): string | undefined {
   return runScope.getStore()?.runId;
+}
+
+/** The native side publishes a lease only if this newly launched process really has focus. */
+export async function reportLaunchForeground(pid: number): Promise<boolean> {
+  const runId = currentOverlayRunId();
+  if (process.platform !== 'darwin' || !runId || !existsSync(HELPER_APP_EXECUTABLE_PATH)) return false;
+  const result = await macosHelper.command<{ active: boolean }>('reportLaunchForeground', { pid, runId }, { timeoutMs: 800 }).catch(() => undefined);
+  return result?.active === true;
 }
 
 /** 每条 act(actBatch 是每一步)要并进请求的字段。 */

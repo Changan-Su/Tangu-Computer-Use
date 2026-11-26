@@ -791,7 +791,7 @@ for (const legacy of [false, true]) {
     ['tools.ts', toolsTs, "return 'Jev is disabled or unavailable on this platform.'"],
     ['tools.ts', toolsTs, '`Computer Use is not ready: ${e?.message || e}`'],
     ['tools.ts', toolsTs, "return [installNote, guidance ?? fallback].filter(Boolean).join('\\n');"],
-    ['tools.ts', toolsTs, 'const how = !front ? `Opened ${name} in the background; it did not take the foreground.`'],
+    ['tools.ts', toolsTs, 'const how = !front ? `Observed ${name} in the background; it did not take the foreground.`'],
     ['tools.ts', toolsTs, "return 'ensure_app (background launch) is macOS-only."],
     ['onboarding.ts', onboarding, 'return `Computer Use still needs macOS ${names} for'],
     ['onboarding.ts', onboarding, "'Installed the Computer Use desktop helper automatically.'"],

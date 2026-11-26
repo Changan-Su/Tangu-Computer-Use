@@ -201,7 +201,7 @@ const TARGET_GONE = 'The current controlled window is no longer available';
 export function goneHint(message: string, target?: { app?: string; bundleId?: string }): string {
   if (!message.includes(TARGET_GONE)) return message;
   const call = target?.bundleId ? `ensure_app({ bundleId: ${JSON.stringify(target.bundleId)} })` : target?.app ? `ensure_app({ app: ${JSON.stringify(target.app)} })` : 'ensure_app';
-  return `${message} This is also what a window that left the current desktop looks like: it is on another desktop (Space) or hidden — such windows cannot be listed, observed or clicked. If the app is still running, ${call} brings its window back; then observe_ui again before acting.`;
+  return `${message} The window may be hidden, closed or on another desktop (Space). ${call} returns observable windows without activating a running app. Observe a fresh root before acting.`;
 }
 
 /** find_roots 按 App 找却一个 root 都没有:同一个原因,同一条出路(只在 macOS 说,ensure_app 只有那边有)。 */
@@ -209,5 +209,5 @@ export function noRootsHint(details: unknown, platform: string = process.platfor
   const d = details as { tool?: string; windows?: unknown[]; query?: { app?: string; bundleId?: string; pid?: number } } | null | undefined;
   if (platform !== 'darwin' || d?.tool !== 'find_roots' || !Array.isArray(d.windows) || d.windows.length > 0) return '';
   if (!d.query?.app && !d.query?.bundleId && !d.query?.pid) return '';
-  return '\n[hint] A running app has no roots here while all its windows are on another desktop (Space) or hidden. ensure_app (by bundleId or app name) starts the app or brings its window back to the current desktop.';
+  return '\n[hint] The target may be hidden, closed or on another desktop (Space). Use ensure_app with the app identity to discover any observable windows in place.';
 }

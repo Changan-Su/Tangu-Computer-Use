@@ -3,7 +3,7 @@ import { parseLookResponse, type LookResponse } from "../../outline.ts";
 import { toBoolean, toFiniteNumber, toOptionalString } from "../coerce.ts";
 import type { ComputerUsePlatformBackend, FramePoints, HelperActResult, PlatformActRequest, PlatformApp, PlatformFocusWindowResult, PlatformFrontmostResult, PlatformObserveRequest, PlatformReadTextRequest, PlatformReadTextResponse, PlatformRoot, PlatformRootKind, PlatformRootQuery, PlatformTarget, PlatformWaitForRequest, PlatformWaitForResponse } from "../types.ts";
 import { macosHelper } from "./helper.ts";
-import { overlayActExtras, withOverlayActExtras } from "../../../overlayState.ts";
+import { currentOverlayRunId, overlayActExtras, withOverlayActExtras } from "../../../overlayState.ts";
 
 function parseApps(result: unknown): PlatformApp[] {
 	const array = Array.isArray(result) ? result : (result as any)?.apps;
@@ -102,16 +102,17 @@ export const macosBackend: Pick<ComputerUsePlatformBackend, "listApps" | "listRo
 	},
 
 	async activateWindow(target: { pid: number; windowId: number; windowRef?: string }, signal?: AbortSignal): Promise<boolean> {
-		const activated = await macosHelper.command<{ appRestored?: boolean }>("restoreUserFocus", { pid: target.pid }, { signal });
-		await macosHelper.command("focusWindow", { ...target }, { signal });
+		const activated = await macosHelper.command<{ appRestored?: boolean; offSpace?: boolean }>("restoreUserFocus", { pid: target.pid, windowId: target.windowId, runId: currentOverlayRunId() }, { signal });
+		if (activated.offSpace) return false;
+		await macosHelper.command("focusWindow", { ...target, requireOnscreen: true }, { signal });
 		return activated.appRestored === true;
 	},
 
 	async observe(request: PlatformObserveRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<LookResponse> {
 		return parseLookResponse(await macosHelper.command("look", {
 			baseLookId: request.baseLookId,
-			windowId: request.target.windowId,
-			windowRef: request.target.rootRef,
+			windowId: request.target.windowId || undefined,
+			windowRef: request.target.windowRef ?? request.target.rootRef,
 			maxDimension: request.maxDimension,
 			readText: request.readText,
 			scopeRef: request.scopeRef,

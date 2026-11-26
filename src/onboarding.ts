@@ -161,7 +161,7 @@ let registered = false;
  * ⚠️一次只开一个面板:系统设置是单窗口,连开两个后一个会顶掉前一个,而两个 key 都被记成"开过了",
  * 于是第一个面板再也不会被打开。剩下的留给下一次重试。
  */
-export async function guideMissingPermissions(signal?: AbortSignal): Promise<string | undefined> {
+export async function guideMissingPermissions(signal?: AbortSignal, allowForeground = false): Promise<string | undefined> {
   if (process.platform !== 'darwin') return undefined;
   try {
     const { macosHelper } = await import('./vendor/platform/macos/helper.ts');
@@ -175,6 +175,7 @@ export async function guideMissingPermissions(signal?: AbortSignal): Promise<str
     const missing = (Object.keys(PANE_LABEL) as PaneKind[]).filter((key) => !granted[key]);
     if (missing.length === 0) return undefined;
 
+    if (!allowForeground) return `Computer Use needs macOS ${missing.map(k => PANE_LABEL[k]).join(' and ')}. Ask the user to open Forsion’s desktop permissions setup for Computer Use, register the helper there, grant access and retry.`;
     if (!registered) {
       // 预登记:让 App 直接出现在隐私列表里,用户只需拨开关,不必自己「+」着去找。
       registered = true;
@@ -182,7 +183,7 @@ export async function guideMissingPermissions(signal?: AbortSignal): Promise<str
     }
     const next = missing.find((key) => !panesOpened.has(key));
     let opened: PaneKind | undefined;
-    if (next) {
+    if (allowForeground && next) {
       // 只有真的开成功了才记 —— 失败还记上的话这个面板就永远不会再被打开。
       opened = await macosHelper.command('openPermissionPane', { kind: next }, { signal, timeoutMs: 10_000 })
         .then(() => { panesOpened.add(next); return next; }, () => undefined);

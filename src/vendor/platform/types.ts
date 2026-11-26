@@ -130,6 +130,7 @@ export interface HelperActResult {
 }
 
 export interface PlatformTarget {
+	windowRef?: string;
 	pid?: number;
 	windowId?: number;
 	rootRef?: string;

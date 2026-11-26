@@ -141,10 +141,27 @@ const toFront = (bundleId) => execFileP('open', ['-b', bundleId]).catch(() => {}
 const waitForStateNow = (file) => JSON.parse(fs.readFileSync(file, 'utf8'))
 let cover
 
+const backgroundOnly = process.argv.includes('--background-only')
 await buildFixture()
 await ensureDaemon(ask)
 const before = await frontmost()
-try {
+if (backgroundOnly) {
+  try {
+    await killFixture()
+    fs.rmSync(STATE, { force: true })
+    await execFileP('open', ['-g', '-n', APP, '--args', STATE])
+    const boot = await until('fixture visible', s => s.visible)
+    assert.notEqual((await frontmost()).pid, boot.pid)
+    process.kill(boot.pid, 'SIGUSR1')
+    await until('fixture hidden', s => !s.visible)
+    cu.syncSettings({getScopeSettings: () => ({headless: false})})
+    const result = await cu.runEnsureApp({ app: APP }, tcx, pctx)
+    assert.match(result, /no observable window/)
+    assert.ok(!state().visible)
+    assert.notEqual((await frontmost()).pid, boot.pid)
+    console.log('PASS hidden native fixture stayed hidden with strict background off and no user grant')
+  } finally { await killFixture() }
+} else try {
   await killFixture()
   fs.rmSync(STATE, { force: true })
   await execFileP('open', ['-g', '-n', APP, '--args', STATE])
@@ -285,15 +302,17 @@ try {
   const strict = (headless) => cu.syncSettings({ getScopeSettings: () => ({ headless }) })
   strict(true)
   const refused = await cu.runEnsureApp({ app: APP }, tcx, pctx).finally(() => strict(false))
-  assert.match(refused, /strict background setting forbids/, `④ 严格后台下 ensure_app 不该激活,实得:${refused}`)
+  assert.match(refused, /no observable window/, `④ 严格后台下 ensure_app 不该激活,实得:${refused}`)
   assert.ok(!state().visible && (await frontmost()).pid !== boot.pid, '④ 严格后台下窗口不该回来、前台不该变')
   // 按路径给(临时目录里的 App 没在 LaunchServices 登记,open -b 找不到它);ensure_app 按名字那一段认出它已经在跑。
-  const back = await cu.runEnsureApp({ app: APP }, tcx, pctx)
-  assert.match(back, /@r\d/, `④ ensure_app 应把窗口带回来,实得:${back}`)
-  assert.match(back, /brought to the foreground/, `④ 后台打开不管用时应激活并如实说,实得:${back}`)
-  assert.ok(state().visible, '④ 窗口真的回来了')
-  assert.equal((await frontmost()).pid, boot.pid, '④ 说它到了前台,它就得真的在前台')
-  console.log(`  ④ 窗口收起后:${gone.slice(0, 60)}… → 补上 ensure_app → ${back.split('\n')[0].slice(0, 80)}…`)
+  const withoutGrant = await cu.runEnsureApp({ app: APP }, tcx, pctx)
+  assert.match(withoutGrant, /no observable window/)
+  assert.ok(!state().visible && (await frontmost()).pid !== boot.pid, 'No activation without a task grant even when strict background is off')
+  const back = await cu.runEnsureApp({ app: APP }, tcx, { ...pctx, foregroundAllowed: true })
+  assert.match(back, /no observable window/)
+  assert.ok(!state().visible && (await frontmost()).pid !== boot.pid, 'Window discovery also stays passive at full access')
+  await execFileP('open', ['-a', APP]) // Test setup: the user explicitly shows this fixture again.
+  await until('fixture shown again', s => s.visible)
   // 窗口本来就在、App 又不会自己往前跳:ensure_app 不抢前台,也不说自己抢了
   if (before.bundleId) {
     await toFront(before.bundleId)

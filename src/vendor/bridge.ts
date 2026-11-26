@@ -1,3 +1,4 @@
+import { reportLaunchForeground } from "../overlayState.ts";
 import { browserConversation, browserOwner, launchManagedBrowser, closeManagedBrowsers } from "../managedBrowser.ts";
 import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
@@ -77,6 +78,8 @@ interface ExecutionTrace {
 }
 
 interface ComputerUseDetails {
+	pixelsOnly?: true;
+	root?: { ref: string };
 	tool: string;
 	target: {
 		app: string;
@@ -1051,7 +1054,7 @@ async function buildToolResult(
 		if (!image?.jpegBase64) throw new Error("The target window did not supply a screenshot. Observe it again before acting.");
 		const message = `Screenshot only for ${result.target.windowRef ?? result.target.appName}. State ${result.capture.stateId}. Use one action with the image coordinates. Check the next image for the outcome.`;
 		return { content:[{type:"text", text:message}, {type:"image", mimeType:image.mimeType ?? "image/jpeg", data:image.jpegBase64}],
-			details:{tool, target:{app:result.target.appName, pid:result.target.pid, windowId:result.target.windowId, windowTitle:result.target.windowTitle, windowRef:result.target.windowRef},
+			details:{tool, pixelsOnly:true, root:{ref:result.target.windowRef || result.target.appName}, target:{app:result.target.appName, pid:result.target.pid, windowId:result.target.windowId, windowTitle:result.target.windowTitle, windowRef:result.target.windowRef},
 				capture:{...result.capture, coordinateSpace:"window-relative-screenshot-pixels"}, view:"full", activation:result.activation,
 				execution, config:getComputerUseConfig()} };
 	}
@@ -1305,6 +1308,7 @@ async function helperAct(
 	};
 	const textTimeout = "text" in action.params ? action.params.text.length * 25 + 4_000 : COMMAND_TIMEOUT_MS;
 	const timeoutMs = Math.max(COMMAND_TIMEOUT_MS, textTimeout);
+	if (currentPlatformBackend.name === "macos" && !target.isOnscreen) headless = true;
 	const pointer = isBackgroundPointer(action);
 	const pointerKey = `${target.pid}:${action.action === "scroll" ? "scroll" : "click"}`;
 	const pressKey = currentPlatformBackend.name === "macos" && (action.action === "press" || action.action === "click") && action.accessibilityPress !== undefined
@@ -2413,7 +2417,7 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 			const pressedSteps = execution.steps?.length ? execution.steps : [execution];
 			const pressed = pressedSteps.filter((step) => step.accessibilityPress);
 			if (pressed.length > 0 && !execution.rootDelta?.length && (!execution.error || execution.error.code === "postcondition_failed") && !webContentChanged(baseView.outline, capture.outline)) {
-				const activated = !isHeadlessMode() && await currentPlatformBackend.activateWindow?.(nativeWindowRequest(target), signal);
+				const activated = target.isOnscreen && !isHeadlessMode() && await currentPlatformBackend.activateWindow?.(nativeWindowRequest(target), signal);
 				if (activated) {
 					await sleep(COVERED_PAGE_REPAINT_MS, signal);
 					capture = await captureCurrentTarget(signal, "auto", AUTO_IMAGE_MAX_DIMENSION, target);
@@ -2656,7 +2660,8 @@ async function performLaunchBrowser(params: LaunchBrowserParams, signal?: AbortS
 	if (visible && config.headless) throw new Error("Strict background is enabled. Launch without visible to keep the browser in the background.");
 	const executable = await managedBrowserExecutable(config.managed_browser);
 	const launch = await resourceScheduler.read(`managed-browser:${browserOwner()}`, () =>
-		launchManagedBrowser(executable, visible, signal, async () => {
+		launchManagedBrowser(executable, visible, signal, async (pid) => {
+			if (visible && pid) await reportLaunchForeground(pid);
 			const [page] = await listCdpPageContexts(true);
 			if (!page) throw new Error("Managed browser launched without its initial blank page.");
 			if (url && !await cdpNavigateContext(page.contextId, url)) throw new Error("The initial browser page closed during navigation.");
@@ -2755,7 +2760,9 @@ function makeToolExecutor<P, D>(tool: string, perform: (params: P, signal?: Abor
 		_onUpdate: AgentToolUpdateCallback<D> | undefined,
 		ctx: ExtensionContext,
 	): Promise<AgentToolResult<D>> => {
-		return operationConfig.run(loadComputerUseConfig(ctx.cwd), () => browserConversation.run(ctx.browserOwner ?? "standalone", async () => {
+		const loaded = loadComputerUseConfig(ctx.cwd);
+		const policy = ctx.foregroundAllowed === false ? { ...loaded, config: { ...loaded.config, headless: true } } : loaded;
+		return operationConfig.run(policy, () => browserConversation.run(ctx.browserOwner ?? "standalone", async () => {
 			const browser = toolSurface(tool, params as Record<string, unknown>) === "browser";
 			try {
 				return applyOutputEnvelope(tool, await executeTool(tool, ctx, params, signal, () => perform(params, signal)), browser);

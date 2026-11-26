@@ -202,7 +202,7 @@ References: [Images](https://docs.typesafe.ai/images), [Box](https://docs.typesa
 [Choice](https://docs.typesafe.ai/primitives/choice), [Noul](https://docs.typesafe.ai/primitives/noul).
 
 `find_roots` · `observe_ui` · `search_ui` · `expand_ui` · `inspect_ui` · `act_ui` · `ensure_app` ·
-`read_text` · `wait_for` · `launch_browser` · `navigate_browser` · `evaluate_browser`
+`jev_ui` (optional) · `read_text` · `wait_for` · `launch_browser` · `navigate_browser` · `evaluate_browser`
 
 All are host-only (require `hostExec`) and gated on the plugin being enabled + a supported platform.
 Action tools (`act_ui`, `launch/navigate/evaluate_browser`) require approval (same tier as `run_bash`);
@@ -252,6 +252,8 @@ and their existing logins. For a canvas or a screenshot-only task, launch with `
 - **managed_browser** (default Chrome) — which browser `launch_browser` starts.
 - **headless / 严格后台** (default on) — actions stay in the background; no foreground focus grab or
   cursor move. Things the background genuinely cannot do then fail instead of stealing focus.
+  With strict background off, foreground input on the current Space follows the host's normal tool permission. Windows in another macOS Space stay there.
+  关闭严格后台后，当前空间里的前台输入遵循会话审批档位。其他空间的窗口只走后台观察与定向输入。
 - **cursor_overlay / 操作可视化** (default on) — the agent cursor *and* the controlled-window edge glow.
 
 ## Development
@@ -260,6 +262,7 @@ and their existing logins. For a canvas or a screenshot-only task, launch with `
 npm install
 npm run build          # esbuild → tangu-plugins/computer-use/dist/index.js  +  tsc --noEmit
 npm run check          # foreground note · helper path · highlight geometry · desktop plugin
+npm run check:mac-app -- 网易云音乐 com.netease.163music  # sample focus while observing a running app
 npm run check:live     # real machine, needs an authorized helper:
                        #   check:blindclick  background click lands without taking the foreground
                        #   check:liveview    the live view really streams, at the window's aspect
@@ -343,6 +346,8 @@ Offline platform regression: `npm run build && npm run check:platform` checks to
 Windows strict background refuses known activating WinForms Invoke and Framework WPF press providers before input, including mixed hosts. Supported WinForms EDIT writes and report-list scrolling use verified native control handles without global input. Read-only or effectively disabled controls remain protected; timed-out or normalized writes report uncertain delivery and do not trigger a foreground retry. These are provider-specific capabilities, not a promise that arbitrary accessibility actions cannot activate an app. See [Windows acceptance evidence](docs/windows-vision-2026-10-21.md).
 
 Windows 严格后台在输入前拒绝已知会激活窗口的 WinForms Invoke / Framework WPF press 提供方，包含混合宿主。受支持的 WinForms EDIT 写入与报表列表滚动使用验证后的原生控件句柄，不发送全局输入；只读和祖先禁用保护保留。超时或被应用归一化的写入标记为不确定，不自动转前台重写。能力取决于控件提供方，不能把任意无障碍动作视为天然不抢焦点；详见上面的验收记录。
+
+已有两个桌面时可运行 `npm run check:mac-spaces`。Melody 把自己的测试窗口放到另一个桌面，脚本通过正式插件截图和双击，比对播放状态、桌面变化与目标进程激活通知。
 
 Genesis 的自动 Mini 依赖 helper socket 同目录的 `foreground.json`。升级 helper 行为时必须提升捆绑包版本并重建所有随包 native 产物；桌面按 manifest 版本播种，不覆盖同版本副本。0.5.2 起自动更新成功后重启常驻 helper，避免协议号与路径相同但内存中仍为旧版本。
 
