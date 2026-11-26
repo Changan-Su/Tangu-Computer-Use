@@ -122,6 +122,7 @@ export class WindowsHelperClient {
 
 	async command<T>(cmd: string, args: Record<string, unknown> = {}, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<T> {
 		const child = await this.process(options?.signal);
+		options?.signal?.throwIfAborted();
 		const id = randomUUID();
 		const timeoutMs = options?.timeoutMs ?? COMMAND_TIMEOUT_MS;
 		return await new Promise<T>((resolve, reject) => {

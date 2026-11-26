@@ -20,6 +20,11 @@ try {
   assert.equal(tools.get('observe_ui').capabilities.approval, undefined);
   const launch = () => tools.get('launch_browser').execute({ visible: true }, base);
   await assert.rejects(launch(), /executable.*not found/);
+  const launchTool = tools.get('launch_browser');
+  const activeTurn = new AbortController();
+  await assert.rejects(launchTool.execute({ visible: true }, { ...base, userTurnSignal: activeTurn.signal }), /executable.*not found/);
+  activeTurn.abort();
+  await assert.rejects(launchTool.execute({ visible: true }, { ...base, userTurnSignal: activeTurn.signal }), /user turn has changed/);
   settings.headless = true;
   await assert.rejects(launch(), /strict background/i);
   console.log('PASS standard command approval tier, full-access visible launch and strict background override.');
