@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import AppKit
 import ApplicationServices
@@ -446,8 +447,9 @@ final class Bridge {
 	}
 	private struct AddressAttempt {
 		var tab: AXUIElement?
-		var source: String?
-		var expected: URL?
+		var source: Data?
+		var expected: Data?
+		var lookupMisses = 0
 		var writes = 0
 		var submissions = 0
 		var editing = false
@@ -455,6 +457,7 @@ final class Bridge {
 		var updated = Date()
 	}
 	private var addresses: [AddressScope: AddressAttempt] = [:]
+	private let addressKey = SymmetricKey(size: .bits256)
 	private let supportsAgentCursor = CommandLine.arguments.contains("serve")
 	private let browserBundleIds: Set<String> = [
 		"com.apple.Safari", "com.google.Chrome", "org.chromium.Chromium", "company.thebrowser.Browser", "com.brave.Browser", "com.microsoft.edgemac", "com.vivaldi.Vivaldi", "net.imput.helium", "org.mozilla.firefox",
@@ -826,6 +829,11 @@ final class Bridge {
 	private func overlayTurn(_ request: [String: Any]) throws -> [String: Any] {
 		guard let command = OverlayTurnCommand.parse(request) else {
 			throw BridgeFailure(message: "overlayTurn only accepts phase \"end\" with an optional string runId", code: "invalid_args")
+		}
+		if let run = command.runId {
+			physicalInputLock.lock()
+			addresses = addresses.filter { $0.key.run != run }
+			physicalInputLock.unlock()
 		}
 		liveLock.lock()
 		liveTurn.requestEnd(runId: command.runId, at: OverlayClock.now())
@@ -4643,6 +4651,9 @@ final class Bridge {
 	/// 造事件时写的就是它;公开的 91 / 92 填了不认)和另一份窗口内坐标(windowLocation,左上角原点),
 	/// 后者只能用未公开的 CGEventSetWindowLocation 写。⚠️顺序:改 location 会把 windowLocation 作废成 (-1,-1)。
 	private func postEvent(_ event: CGEvent, pid: Int32, delivery: String = "hid", window: PidWindow? = nil, activateTarget: Bool = true) {
+		// Pointer actions have no modifier argument. CGEvent(source: nil) otherwise copies the user's live
+		// modifiers, turning a plain click into e.g. Command-click even when sent to a background window.
+		if event.type != .keyDown && event.type != .keyUp && event.type != .flagsChanged { event.flags = [] }
 		if delivery == "pid" {
 			if let window, let setWindowLocation = Self.setWindowLocation {
 				setWindowLocation(event, CGPoint(x: event.location.x - window.origin.x, y: event.location.y - window.origin.y))
@@ -4720,7 +4731,7 @@ final class Bridge {
 		}
 	}
 
-	private func postMouseClick(at point: CGPoint, pid: Int32, button: CGMouseButton = .left, clickCount: Int = 1, delivery: String = "hid", window: PidWindow? = nil, beforeDown: (() throws -> Void)? = nil) throws {
+	private func postMouseClick(at point: CGPoint, pid: Int32, button: CGMouseButton = .left, clickCount: Int = 1, delivery: String = "hid", window: PidWindow? = nil, moveBeforeDown: Bool = true, beforeDown: (() throws -> Void)? = nil) throws {
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		// Tangu:HID 点击会把**用户的实物指针**挪到目标处并留在那里 —— 前台被抢已经够烦,
@@ -4737,8 +4748,10 @@ final class Bridge {
 				CGAssociateMouseAndMouseCursorPosition(1)
 			}
 		}
-		try beforeDown?()
-		try postMouseMove(to: point, pid: pid, delivery: delivery, window: window, activateTarget: beforeDown == nil)
+		if moveBeforeDown {
+			try beforeDown?()
+			try postMouseMove(to: point, pid: pid, delivery: delivery, window: window, activateTarget: beforeDown == nil)
+		}
 		for index in 1...max(1, clickCount) {
 			guard let down = CGEvent(mouseEventSource: nil, mouseType: mouseDownType(for: button), mouseCursorPosition: point, mouseButton: button),
 				let up = CGEvent(mouseEventSource: nil, mouseType: mouseUpType(for: button), mouseCursorPosition: point, mouseButton: button)
@@ -4749,7 +4762,7 @@ final class Bridge {
 			up.setIntegerValueField(.mouseEventClickState, value: Int64(index))
 			try beforeDown?()
 			postEvent(down, pid: pid, delivery: delivery, window: window, activateTarget: beforeDown == nil)
-			usleep(12_000)
+			usleep(moveBeforeDown ? 12_000 : 30_000)
 			postEvent(up, pid: pid, delivery: delivery, window: window, activateTarget: beforeDown == nil)
 			if index < clickCount {
 				usleep(70_000)
@@ -4919,6 +4932,51 @@ final class Bridge {
 		BridgeFailure(message: "The original Chrome tab could not be verified. Stop this navigation and inspect the current tab.", code: "computer_use_recovery_exhausted")
 	}
 
+	private func addressDigest(_ value: String) -> Data {
+		Data(HMAC<SHA256>.authenticationCode(for: Data(value.utf8), using: addressKey))
+	}
+
+	private func exactChromeWindow(_ scope: AddressScope) -> AXUIElement? {
+		guard NSWorkspace.shared.frontmostApplication?.processIdentifier == scope.pid,
+			let window = copyAttribute(AXUIElementCreateApplication(scope.pid), attribute: kAXFocusedWindowAttribute as CFString).flatMap(asAXElement),
+			exactWindowID(window) == scope.window else { return nil }
+		return window
+	}
+
+	// Chrome's WebUI suggestion list is a separate, same-layer native window. Verify the hit, the exact URL
+	// and the browser-owned WebUI before sending anything. A hit on the underlying page cannot pass.
+	private func chromeURLSuggestion(_ scope: AddressScope, field: AXUIElement, text: String) -> (window: PidWindow, point: CGPoint)? {
+		guard let rect = frameForElement(field), let expected = addressURL(text), Self.setWindowLocation != nil else { return nil }
+		let point = CGPoint(x: rect.midX, y: rect.maxY + 18)
+		var hit: AXUIElement?
+		guard AXUIElementCopyElementAtPosition(AXUIElementCreateApplication(scope.pid), Float(point.x), Float(point.y), &hit) == .success else { return nil }
+		var node = hit, matched = false, popup = false
+		for _ in 0..<20 {
+			guard let current = node else { break }
+			let role = stringAttribute(current, attribute: kAXRoleAttribute as CFString)
+			if role == "AXStaticText", let label = stringAttribute(current, attribute: kAXValueAttribute as CFString) {
+				// Chromium appends an accessibility position to the URL. Never accept a prefix of a different URL.
+				let labelURL = label.range(of: #"(?:,\s+|，|、)(?=[^,，、]*\p{Nd}[^,，、]*$)"#, options: .regularExpression)
+					.map { String(label[..<$0.lowerBound]) } ?? label
+				matched = addressURL(labelURL) == expected
+			}
+			if role == "AXWebArea" {
+				let value = copyAttribute(current, attribute: kAXURLAttribute as CFString)
+				let url = (value as? URL) ?? (value as? String).flatMap(URL.init(string:))
+				popup = url?.scheme == "chrome" && url?.host == "omnibox-popup.top-chrome"
+				if !popup { return nil }
+			}
+			if role == "AXWindow" {
+				guard matched, popup, let id = exactWindowID(current), id != scope.window,
+					let info = windowInfo(windowId: id), info.pid == scope.pid, info.bounds.contains(point) else { return nil }
+				guard let top = onScreenWindows().first(where: { $0.pid == scope.pid && $0.frame.contains(point) }), top.id == id else { return nil }
+				return (PidWindow(id: id, origin: info.bounds.origin), point)
+			}
+			node = parentElement(current)
+		}
+		return nil
+	}
+
 	private func addressReceipt(_ outcome: String, _ verification: String, _ delivery: String) -> [String: Any] {
 		["outcome": outcome, "performed": ["delivery": delivery, "verification": verification]]
 	}
@@ -4930,17 +4988,20 @@ final class Bridge {
 	private func typeChromeAddress(_ text: String, scope: AddressScope, client: Int32?) throws -> [String: Any]? {
 		guard var goal = addresses[scope], goal.editing, Date().timeIntervalSince(goal.updated) < 300 else { return nil }
 		guard let expected = addressURL(text), let last = text.last else {
-			addresses.removeValue(forKey: scope)
+			goal.typedURL = false
+			addresses[scope] = goal
 			return nil
 		}
 		guard let bar = chromeAddressField(pid: scope.pid, windowId: scope.window), let source = documentAddress(bar.window) else {
 			throw BridgeFailure(message: "No URL sent. The original Chrome address field lost focus. Inspect the window.", code: "address_focus_changed")
 		}
 		guard sameChromeTab(goal.tab, window: bar.window) else { throw tabChanged() }
-		if goal.expected != expected || goal.source != source {
-			goal = AddressAttempt(tab: goal.tab, source: source, expected: expected, editing: true)
+		let destination = addressDigest(expected.absoluteString)
+		let sourceDigest = addressDigest(source)
+		if goal.expected != destination || goal.source != sourceDigest {
+			goal = AddressAttempt(tab: goal.tab, source: sourceDigest, expected: destination, editing: true)
 		}
-		guard goal.submissions < 2 else { throw addressExhausted() }
+		guard goal.submissions == 0 else { throw addressExhausted() }
 		goal.typedURL = true
 		addresses[scope] = goal
 		let before = stringAttribute(bar.field, attribute: kAXValueAttribute as CFString)
@@ -4975,6 +5036,21 @@ final class Bridge {
 		return addressReceipt("unknown", "address_mismatch", "pid")
 	}
 
+	private func focusChromeAddress(_ scope: AddressScope) throws {
+		// A modified letter alone never sends Command-up. Chromium may then interpret the next pointer event as Cmd-click.
+		guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 55, keyDown: true),
+			let up = CGEvent(keyboardEventSource: nil, virtualKey: 55, keyDown: false) else {
+			throw BridgeFailure(message: "Could not create Command key events.", code: "input_failed")
+		}
+		down.type = .flagsChanged
+		down.flags = .maskCommand
+		up.type = .flagsChanged
+		up.flags = []
+		down.postToPid(scope.pid)
+		defer { up.postToPid(scope.pid) }
+		try postKey("l", flags: .maskCommand, pid: scope.pid, delivery: "pid")
+	}
+
 	private func chromeAddressKeys(_ keys: [String], scope: AddressScope, client: Int32?) throws -> [String: Any]? {
 		let chord = keys.joined(separator: "+").lowercased()
 		if ["cmd+l", "command+l", "meta+l"].contains(chord) {
@@ -4987,52 +5063,77 @@ final class Bridge {
 			goal.typedURL = false
 			goal.updated = Date()
 			addresses[scope] = goal
-			try postKeyPress(keys: keys, pid: scope.pid)
+			guard clientConnected(client), let focused = exactChromeWindow(scope), let original = selectedChromeTab(focused) else { throw tabChanged() }
+			try focusChromeAddress(scope)
 			let until = Date().addingTimeInterval(0.45)
 			repeat {
 				if let bar = chromeAddressField(pid: scope.pid, windowId: scope.window), let tab = selectedChromeTab(bar.window) {
+					guard sameElement(original, tab) else { throw tabChanged() }
 					if let old = goal.tab, !sameElement(old, tab) { goal = AddressAttempt(editing: true) }
 					goal.tab = tab
 					addresses[scope] = goal
-					return addressReceipt("worked", "address_focus", "hid")
+					return addressReceipt("worked", "address_focus", "pid")
 				}
 				usleep(25_000)
 			} while Date() < until && clientConnected(client)
-			return addressReceipt("unknown", "address_focus_unconfirmed", "hid")
+			return addressReceipt("unknown", "address_focus_unconfirmed", "pid")
 		}
 		guard var goal = addresses[scope], goal.editing, Date().timeIntervalSince(goal.updated) < 300 else { return nil }
-		guard ["return", "enter"].contains(chord), goal.typedURL, let expected = goal.expected, let source = goal.source else {
-			// Other shortcuts can intentionally leave the address bar. Keep the budget across a later Cmd+L.
-			goal.editing = false
-			addresses[scope] = goal
-			return nil
+		guard ["return", "enter"].contains(chord), let expected = goal.expected, let source = goal.source else { return nil }
+		if !goal.typedURL {
+			guard let bar = chromeAddressField(pid: scope.pid, windowId: scope.window),
+				let url = addressURL(stringAttribute(bar.field, attribute: kAXValueAttribute as CFString)),
+				addressDigest(url.absoluteString) == expected else { return nil }
 		}
-		guard let window = windowElement(pid: scope.pid, windowId: scope.window) else { throw tabChanged() }
-		func documentChange(_ delivery: String) throws -> [String: Any]? {
+		guard let window = exactChromeWindow(scope), sameChromeTab(goal.tab, window: window) else { throw tabChanged() }
+		func committed(_ delivery: String) throws -> [String: Any]? {
+			guard let document = documentAddress(window), addressDigest(document) != source else { return nil }
 			guard sameChromeTab(goal.tab, window: window) else { throw tabChanged() }
-			guard let document = documentAddress(window), document != source else { return nil }
 			addresses.removeValue(forKey: scope)
-			let reached = addressURL(document) == expected
+			let reached = addressURL(document).map { addressDigest($0.absoluteString) } == expected
 			return addressReceipt(reached ? "worked" : "unknown", reached ? "document_url" : "document_changed", delivery)
 		}
-		if let late = try documentChange("none") { return late }
-		guard goal.submissions < 2 else { throw addressExhausted() }
-		guard clientConnected(client), let bar = chromeAddressField(pid: scope.pid, windowId: scope.window),
-			documentAddress(bar.window) == source, addressURL(stringAttribute(bar.field, attribute: kAXValueAttribute as CFString)) == expected else {
-			goal.editing = false
-			addresses[scope] = goal
-			throw BridgeFailure(message: "No Return sent. The address field no longer has the verified URL and focus. Inspect the window.", code: "address_focus_changed")
+		func awaitCommit(_ delivery: String) throws -> [String: Any]? {
+			let until = Date().addingTimeInterval(1.5)
+			repeat {
+				if let changed = try committed(delivery) { return changed }
+				usleep(75_000)
+			} while Date() < until && clientConnected(client)
+			return nil
 		}
-		goal.submissions += 1
+		if goal.submissions > 0 {
+			if let late = try awaitCommit("none") { return late }
+			throw addressExhausted()
+		}
+		guard let baseline = documentAddress(window), addressDigest(baseline) == source else { throw tabChanged() }
+		if addressURL(baseline).map({ addressDigest($0.absoluteString) }) == expected {
+			addresses.removeValue(forKey: scope)
+			return addressReceipt("worked", "document_already_open", "none")
+		}
+		guard clientConnected(client), let bar = chromeAddressField(pid: scope.pid, windowId: scope.window),
+			let text = stringAttribute(bar.field, attribute: kAXValueAttribute as CFString),
+			addressURL(text).map({ addressDigest($0.absoluteString) }) == expected else {
+			goal.typedURL = false
+			addresses[scope] = goal
+			throw BridgeFailure(message: "No Return sent. The original address field no longer has the verified URL and focus.", code: "address_focus_changed")
+		}
+		guard let suggestion = chromeURLSuggestion(scope, field: bar.field, text: text) else {
+			goal.lookupMisses += 1
+			addresses[scope] = goal
+			if goal.lookupMisses >= 2 { throw addressExhausted() }
+			return addressReceipt("unknown", "address_waiting_for_match", "none")
+		}
+		try postMouseClick(at: suggestion.point, pid: scope.pid, delivery: "pid", window: suggestion.window, moveBeforeDown: false) {
+			guard self.clientConnected(client), let current = self.chromeAddressField(pid: scope.pid, windowId: scope.window),
+				self.sameChromeTab(goal.tab, window: current.window), self.sameElement(current.field, bar.field),
+				self.stringAttribute(current.field, attribute: kAXValueAttribute as CFString) == text,
+				let live = self.chromeURLSuggestion(scope, field: current.field, text: text),
+				live.window.id == suggestion.window.id, live.point == suggestion.point else { throw self.tabChanged() }
+		}
+		goal.submissions = 1
 		goal.updated = Date()
 		addresses[scope] = goal
-		try postKeyPress(keys: ["return"], pid: scope.pid, delivery: "pid")
-		let until = Date().addingTimeInterval(1.2)
-		repeat {
-			if let changed = try documentChange("pid") { return changed }
-			usleep(60_000)
-		} while Date() < until && clientConnected(client)
-		if goal.submissions == 2 { throw addressExhausted() }
+		if let changed = try awaitCommit("pid") { return changed }
 		return addressReceipt("unknown", "address_pending", "pid")
 	}
 
@@ -5145,6 +5246,7 @@ final class Bridge {
 	}
 
 	private func setUnicodeString(event: CGEvent, text: String) {
+		event.flags = []
 		var utf16 = Array(text.utf16)
 		utf16.withUnsafeMutableBufferPointer { buffer in
 			guard let base = buffer.baseAddress else { return }

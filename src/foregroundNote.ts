@@ -76,7 +76,9 @@ const navigationNotes: Record<string, string> = {
   address_focus_unconfirmed: 'Chrome did not confirm address-bar focus. Inspect the screenshot before typing.',
   address_value: 'The complete URL is in the address bar. Send Return once on this state and inspect the destination.',
   address_mismatch: 'The address bar does not contain the expected URL. Do not submit. Select it again with Mod+L, then check the new screenshot.',
-  address_pending: 'Return was dispatched. The document has not changed yet. Observe once. If the same address field still contains the exact URL and the destination is missing, send Return once more without retyping or clicking.',
+  address_waiting_for_match: 'No input sent. The exact URL suggestion is not ready. Inspect the next screenshot. If it shows the matching URL, request Return once more.',
+  address_pending: 'Chrome received the URL submission. Inspect the returned screenshot. If navigation is still pending, request Return once for a read-only status check. The helper will not submit the URL again.',
+  document_already_open: 'The requested URL was already open in the verified tab. Check the page contents.',
   document_changed: 'The browser document changed. Check the displayed destination or redirect before continuing.',
   document_url: 'The exact window committed the requested document URL. Inspect the page for the task result.',
 };

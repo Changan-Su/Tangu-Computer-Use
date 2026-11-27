@@ -14,6 +14,10 @@ const directory = mkdtempSync(join(tmpdir(), 'cu-address-'));
 const requests = [];
 const server = createServer((request, response) => {
   requests.push(request.url);
+  if (request.url === '/slow') {
+    setTimeout(() => response.end('<title>Slow navigation</title>'), 2100);
+    return;
+  }
   if (request.url === '/no-content') {
     response.writeHead(204);
   } else {
@@ -84,7 +88,7 @@ try {
   assert.equal(await focus(), 'address_focus');
   assert.equal(await type(origin + destination), 'address_value');
   let submitted = await submit();
-  if (submitted === 'address_pending') {
+  if (submitted === 'address_waiting_for_match' || submitted === 'address_pending') {
     frame = await observe();
     submitted = await submit();
   }
@@ -92,21 +96,37 @@ try {
   assert.equal(requests.filter(url => url === destination).length, 1);
   console.log('PASS requested URL and query committed once in the original window');
 
+  async function openUntilSubmitted(url) {
+    frame = await observe();
+    assert.equal(await focus(), 'address_focus');
+    assert.equal(await type(url), 'address_value');
+    let result = await submit();
+    if (result === 'address_waiting_for_match') {
+      frame = await observe();
+      result = await submit();
+    }
+    return result;
+  }
+
+  const slow = await openUntilSubmitted(origin + '/slow');
+  if (slow === 'address_pending') {
+    frame = await observe();
+    assert.equal(await submit(), 'document_url');
+  } else assert.equal(slow, 'document_url');
+  assert.equal(requests.filter(url => url === '/slow').length, 1);
+  console.log('PASS slow response commits with exactly one request');
+
+  assert.equal(await openUntilSubmitted(origin + '/no-content'), 'address_pending');
   frame = await observe();
-  assert.equal(await focus(), 'address_focus');
-  assert.equal(await type(origin + '/no-content'), 'address_value');
-  assert.equal(await submit(), 'address_pending');
+  await act({ action: 'keypress', keys: ['Left'] });
   frame = await observe();
-  assert.equal(await focus(), 'address_focus');
-  assert.equal(await type(origin + '/no-content'), 'address_value');
   await assert.rejects(submit(), exhausted);
   frame = await observe();
   await focus();
-  const before = requests.filter(url => url === '/no-content').length;
   await assert.rejects(type(origin + '/no-content'), exhausted);
-  assert.equal(requests.filter(url => url === '/no-content').length, before);
-  assert.ok(before >= 1 && before <= 2, 'The server must actually return a 204 during the bounded attempts');
-  console.log('PASS unchanged document stops the host after two submissions; observing and refocusing cannot reset the budget');
+  assert.equal(requests.filter(url => url === '/no-content').length, 1);
+  console.log('PASS 204 stops the host; observing and refocusing cannot resubmit');
+
   frame = await observe();
   await focus();
   const unsent = '/must-not-open';
@@ -120,6 +140,9 @@ try {
   assert.ok(!requests.includes(unsent));
   console.log('PASS a different selected tab cancels submission without sending the URL');
 
+} catch (error) {
+  console.error('Fixture requests:', requests);
+  throw error;
 } finally {
   if (chrome && closed) { chrome.kill(); await closed; }
   if (helperPid) { try { process.kill(helperPid, 'SIGTERM'); } catch {} }

@@ -2395,8 +2395,8 @@ function solePressKey(actions: UiAction[], execution: ExecutionTrace, target: Re
 async function performDesktopTransaction(params: ActParams, actions: UiAction[], signal?: AbortSignal): Promise<AgentToolResult<ComputerUseDetails | TerminalDesktopActionDetails>> {
 	const state = operationState();
 	state.currentImageMode = state.pixelsOnly ? "always" : "auto";
-	if (state.pixelsOnly && actions.length !== 1) throw new Error("Inspect the next screenshot before sending another action.");
-	if (state.pixelsOnly && (params.expect || actions.some(a => a.ref || a.action === "setText" || a.action === "press"))) throw new Error("Screenshot-only actions use image coordinates. Verify on the returned image.");
+	if (state.pixelsOnly && actions.length !== 1) throw new Error("No input was sent. Keep this stateId and send only the first action in the array. Inspect the next screenshot before sending another action.");
+	if (state.pixelsOnly && (params.expect || actions.some(a => a.ref || a.action === "setText" || a.action === "press"))) throw new Error("Screenshot-only actions use image coordinates. No input was sent. Pass stateId at the top level and omit ref from the action. Verify on the returned image.");
 	validateStateId(params.stateId);
 	const look = currentLookOrThrow();
 	const baseView = { stateId: state.currentCapture!.stateId, outline: state.currentOutline! };
