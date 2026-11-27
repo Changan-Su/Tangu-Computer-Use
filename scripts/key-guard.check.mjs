@@ -63,16 +63,23 @@ try {
   assert.ok(lookId, 'look failed')
   const base = { lookId, pid: melody.pid, target: { x: 20, y: 20 }, policy: 'foreground' }
   for (const [action, params] of [['typeText', { text: '' }], ['keypress', { keys: ['shift'] }]]) {
+    const visibility = (await ask('dockProbe', {pid:melody.pid, windowId})).result
+    assert.equal(visibility?.exists, true, 'fixture window must still exist')
+    const expectedCode = visibility.onScreen ? 'foreground_unavailable' : 'foreground_required'
     const r = await ask('act', { ...base, action, params: { ...params, delivery: 'hid' } })
     assert.notEqual(r.error?.code, 'screen_locked', 'the screen is locked; unlock it and run again (a locked screen refuses keys with or without the guard)')
-    assert.ok(!r.ok && r.error?.code === 'foreground_unavailable', `${action} to a background app must be refused, got ${JSON.stringify(r.ok ? r.result : r.error).slice(0, 200)}`)
-    console.log(`PASS ${action} refused (${r.error.code})`)
+    assert.ok(!r.ok && r.error?.code === expectedCode, `${action} to a background app must be refused, got ${JSON.stringify(r.ok ? r.result : r.error).slice(0, 200)}`)
+    console.log(`PASS ${action} refused (${r.error.code}, onscreen=${visibility.onScreen})`)
   }
   assert.equal(readState(statePath).keys, 0, 'Melody received keys')
   console.log('PASS Melody received no keys')
 
   const pairState = path.join(path.dirname(statePath), 'siblings.json')
-  pair = await launchFixture(await buildFixture('firstmouse'), pairState, {args:['--keyboard-sibling']})
+  const pairApp = await buildFixture('firstmouse')
+  pair = await launchFixture(pairApp, pairState, {args:['--keyboard-sibling']})
+  await execFileP('open', ['-a', pairApp])
+  const focused = await ask('focusWindow', {pid:pair.pid, windowId:pair.siblingId})
+  assert.equal(focused.result?.focused, true, 'fixture must focus the sibling before checking delivery')
   const target = {pid:pair.pid, windowId:pair.siblingId}
   let frontWindow
   for (let i = 0; i < 25; i++) {
