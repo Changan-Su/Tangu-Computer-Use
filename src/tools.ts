@@ -1,3 +1,4 @@
+import { targetIsFrontmost } from './vendor/actions.ts';
 import { clickReceipt, recoveryExhausted } from './backgroundRecovery.ts';
 /**
  * 上游与 Tangu 的工具通过同一套执行策略注册。翻译要点:
@@ -77,6 +78,12 @@ const point = {
   y: N('Pixels from the top edge of the same screenshot'),
 };
 
+const keyboardTarget = {
+  ref: S('Editable outline ref. Omit when using screenshot coordinates or the current focus.'),
+  x: N('Native window: supply both x and y from the latest screenshot to direct keys to the window. This does not click or focus the field. For typing, verify the intended caret first.'),
+  y: N('Native window screenshot y paired with x. For a managed browser page use its focused field without coordinates.'),
+};
+
 // act_ui 的 actions:上游 uiAction union(8 变体)→ anyOf
 const uiAction = {
   anyOf: [
@@ -84,8 +91,8 @@ const uiAction = {
     obj({ action: { const: 'click' }, ref: S('Actionable outline ref'), button: mouseButton, clickCount }, ['action', 'ref']),
     obj({ action: { const: 'click' }, ...point, button: mouseButton, clickCount }, ['action', 'x', 'y']),
     obj({ action: { const: 'setText' }, ref: S('Editable outline ref'), text: { type: 'string' } }, ['action', 'ref', 'text']),
-    obj({ action: { const: 'typeText' }, ref: S('Omit to type into the current focus: needs a click earlier in this same call, or a target window that is already frontmost'), text: { type: 'string' } }, ['action', 'text']),
-    obj({ action: { const: 'keypress' }, ref: S('Omit to send keys to the current focus: needs a click earlier in this same call, or a target window that is already frontmost'), keys: { type: 'array', items: { type: 'string' }, minItems: 1 } }, ['action', 'keys']),
+    obj({ action: { const: 'typeText' }, ...keyboardTarget, text: { type: 'string' } }, ['action', 'text']),
+    obj({ action: { const: 'keypress' }, ...keyboardTarget, keys: { type: 'array', items: { type: 'string' }, minItems: 1 } }, ['action', 'keys']),
     obj({ action: { const: 'scroll' }, ref: S('Outline ref to scroll. Without ref or x/y it scrolls where the previous click/moveMouse of this same call landed'), ...point, scrollX: N('Horizontal distance. For a coordinate scroll on macOS: pixels of the latest screenshot, the same scale as x / y'), scrollY: N('Vertical distance, positive scrolls down. For a coordinate scroll on macOS: pixels of the latest screenshot, the same scale as x / y') }, ['action']),
     obj({ action: { const: 'drag' }, path: { type: 'array', items: obj(point, ['x', 'y']), minItems: 2 } }, ['action', 'path']),
     obj({ action: { const: 'moveMouse' }, ...point }, ['action', 'x', 'y']),
@@ -289,37 +296,41 @@ export function render(result: AgentToolResult, tcx: ToolContext, args?: Record<
 }
 
 /** Inspect a running app in place. Cold starts use a background launch when settings allow it. */
-const nativeDiscovery = { activate: currentPlatformBackend.activateWindow, screenLocked: macScreenLocked, listApps: (signal?: AbortSignal) => currentPlatformBackend.listApps(signal), find: executeFind, observe: executeObserve };
+const nativeDiscovery = { getFrontmost: currentPlatformBackend.getFrontmost, activate: currentPlatformBackend.activateWindow, screenLocked: macScreenLocked, listApps: (signal?: AbortSignal) => currentPlatformBackend.listApps(signal), find: executeFind, observe: executeObserve };
 export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, pctx: ExtensionContext, discovery = nativeDiscovery): Promise<string> {
+  const foregroundRoot = args.foregroundRoot;
+  const unavailable = (message: string): string => {
+    if (foregroundRoot !== undefined) throw new Error(message);
+    return message;
+  };
   if (process.platform !== 'darwin') {
-    return 'ensure_app (background launch) is macOS-only. On other platforms, launch the app yourself, then use observe_ui.';
+    return unavailable('ensure_app (background launch) is macOS-only. On other platforms, launch the app yourself, then use observe_ui.');
   }
   let bundleId = typeof args.bundleId === 'string' ? args.bundleId.trim() : '';
   const app = typeof args.app === 'string' ? args.app.trim() : '';
-  if (!bundleId && !app) return 'ensure_app requires "app" or "bundleId".';
-  const foregroundRoot = args.foregroundRoot;
-  if (foregroundRoot !== undefined && (typeof foregroundRoot !== 'string' || !/^@r\d+$/.test(foregroundRoot))) return 'Choose an exact window root returned by discovery.';
-  if (foregroundRoot && (!tcx.runId || !pctx.foregroundAllowed)) return 'Foreground access is unavailable for this run.';
+  if (!bundleId && !app) return unavailable('ensure_app requires "app" or "bundleId".');
+  if (foregroundRoot !== undefined && (typeof foregroundRoot !== 'string' || !/^@r\d+$/.test(foregroundRoot))) throw new Error('Choose an exact window root returned by discovery.');
+  if (foregroundRoot && (!tcx.runId || !pctx.foregroundAllowed)) throw new Error('Foreground access is unavailable for this run.');
   const mode = args.mode ?? 'visual';
   if (!['visual', 'pixels', 'roots'].includes(mode)) throw new Error('Choose visual, pixels, or roots.');
   const absolute = app.startsWith('/');
-  if (absolute && bundleId) return 'Choose one app path or one bundleId.';
+  if (absolute && bundleId) return unavailable('Choose one app path or one bundleId.');
   let pathPids = absolute ? await macAppPathPids(app, tcx.signal) : [];
   const appName = app.replace(/\/+$/, '').split('/').pop()!.replace(/\.app$/i, '');
   const apps = () => discovery.listApps(tcx.signal);
   const running = await apps();
   const byName = running.filter(a => a.appName.toLowerCase() === appName.toLowerCase());
   if (!bundleId && !app.startsWith('/') && new Set(byName.map(a => a.bundleId)).size > 1)
-    return 'Several running apps have that name. Choose a bundleId: ' + byName.map(a => a.bundleId).join(', ');
+    return unavailable('Several running apps have that name. Choose a bundleId: ' + byName.map(a => a.bundleId).join(', '));
   if (!bundleId && (!byName.length || app.startsWith('/'))) {
     const matches = await macAppIdentifiers(app, tcx.signal).catch(() => {
       tcx.signal?.throwIfAborted();
       return [];
     });
-    if (matches.length > 1) return 'Several installed apps have that name. Choose a bundleId: ' + matches.join(', ');
+    if (matches.length > 1) return unavailable('Several installed apps have that name. Choose a bundleId: ' + matches.join(', '));
     bundleId = matches[0] ?? '';
   }
-  if (pathPids.length > 1) return 'Several processes use that app path. Choose a window with find_roots.';
+  if (pathPids.length > 1) return unavailable('Several processes use that app path. Choose a window with find_roots.');
   const mine = (a: { appName: string; bundleId?: string; pid: number }) => absolute ? pathPids.includes(a.pid) : bundleId ? a.bundleId === bundleId : a.appName.toLowerCase() === appName.toLowerCase();
   let wasRunning = running.some(mine);
   if (!bundleId && !wasRunning && !app.startsWith('/')) {
@@ -337,8 +348,8 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
       bundleId = exact[0].bundleId;
       wasRunning = true;
     } else if (exact.length) {
-      return 'Matching window titles were found under other app names. Choose the intended owner before acting.\n' +
-        exact.map(w => `${w.windowRef} ${w.app} (${w.bundleId || w.pid})`).join('\n');
+      return unavailable('Matching window titles were found under other app names. Choose the intended owner before acting.\n' +
+        exact.map(w => `${w.windowRef} ${w.app} (${w.bundleId || w.pid})`).join('\n'));
     }
   }
   const name = bundleId || app;
@@ -347,9 +358,9 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
   const openInBackground = () => execFileP('open', ['-g', ...(bundleId && !absolute ? ['-b', bundleId] : ['-a', app])], { timeout: 8000, signal: tcx.signal });
   const backgroundOnly = pctx.foregroundAllowed === false;
   // 查找已运行的 App 时不重复发送 open 事件，有的 App 收到它会自己跳到前台。
-  if (foregroundRoot && (backgroundOnly || !wasRunning)) return 'The requested window cannot be raised in this run.';
+  if (foregroundRoot && (backgroundOnly || !wasRunning)) throw new Error('The requested window cannot be raised in this run.');
   if (!wasRunning) {
-    if (await discovery.screenLocked(tcx.signal)) return lockedMessage;
+    if (await discovery.screenLocked(tcx.signal)) return unavailable(lockedMessage);
     if (absolute && running.some(a => bundleId && a.bundleId === bundleId)) return 'Another installed copy is running. Open the requested copy manually and retry with its path.';
     if (backgroundOnly) return `${name} is not running. This operation can only observe running apps.`;
     try {
@@ -362,7 +373,7 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
   let captureLost = false;
   let launchSignalled = false;
   while (Date.now() - started < 12_000) {
-    if (tcx.signal?.aborted) return 'ensure_app aborted.';
+    tcx.signal?.throwIfAborted();
     if (absolute && !pathPids.length) pathPids = await macAppPathPids(app, tcx.signal);
     if (!wasRunning && !launchSignalled && tcx.runId && Date.now() - started < 2000) {
       const launched = (await apps()).find(a => mine(a) && a.isFrontmost);
@@ -375,43 +386,55 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
     if (found) {
       if (foregroundRoot) {
         const window = found.windows.find(w => w.windowRef === foregroundRoot);
-        if (!window?.windowId) return 'Window unavailable. Stop the blocked step.';
+        if (!window?.windowId) throw new Error('Window unavailable. Stop the blocked step.');
         const target = { pid: window.pid, windowId: window.windowId };
         const receipt = clickReceipt(target);
         if (receipt) {
-          if (!receipt.verifiedWindow) return 'Original window identity unavailable. Stop the blocked step.';
+          if (!receipt.verifiedWindow) throw recoveryExhausted('Original window identity unavailable. Stop the blocked step.');
           if (receipt.phase === 'blocked' || receipt.phase === 'sent') throw recoveryExhausted('Recovery was already attempted. No further input was sent. Report the blocked step.');
-          if (receipt.phase !== 'background') return 'The window is already being recovered. Inspect the latest screenshot before acting.';
+          if (receipt.phase !== 'background') throw new Error('The window is already being recovered. Inspect the latest screenshot before acting.');
           receipt.phase = 'raising';
           try {
             const raised = await discovery.activate?.({ ...target, recoverBackgroundClick: true }, tcx.signal);
-            if (!raised) return 'macOS could not focus this exact window. Stop the blocked step. No click was replayed.';
+            if (!raised) throw recoveryExhausted('macOS could not focus this exact window. Stop the blocked step. No click was replayed.');
             // During a Space transition AX can withdraw the old root before publishing the visible one.
             // Retry only the observation, on this pid/windowId, while the target still owns the foreground.
             const until = Date.now() + 2_000;
             do {
               tcx.signal?.throwIfAborted();
-              if (!(await apps()).some(a => a.pid === target.pid && a.isFrontmost)) return 'Foreground changed during recovery. Stop the blocked step. No click was replayed.';
+              if (!(await apps()).some(a => a.pid === target.pid && a.isFrontmost)) throw recoveryExhausted('Foreground changed during recovery. Stop the blocked step. No click was replayed.');
               try {
                 const image = await discovery.observe('', { root: foregroundRoot, mode: 'pixels' }, tcx.signal, undefined, pctx);
-                if (!('target' in image.details) || image.details.target.pid !== target.pid || image.details.target.windowId !== target.windowId) return 'The recovered window changed. Stop the blocked step.';
+                if (!('target' in image.details) || image.details.target.pid !== target.pid || image.details.target.windowId !== target.windowId) throw recoveryExhausted('The recovered window changed. Stop the blocked step.');
+                if (!image.details.capture?.stateId) throw recoveryExhausted('No fresh screenshot state after recovery. Stop the blocked step.');
+                const focused = await discovery.getFrontmost(tcx.signal, true);
+                if (focused.pid === target.pid && !focused.windowId) throw Object.assign(new Error('Window focus is still settling.'), {code:'focus_pending'});
+                if (!targetIsFrontmost(focused, target)) throw recoveryExhausted('The exact window lost focus during capture. Stop the blocked step. No click was replayed.');
+                if (!tcx.collectImage || !image.content.some(block => block.type === 'image' && block.data)) throw recoveryExhausted('Screenshot unavailable after recovery. Stop the blocked step.');
                 const seen = render(image, tcx);
-                if (seen.startsWith('Screenshot unavailable')) return 'Screenshot unavailable after recovery. Stop the blocked step.';
                 receipt.freshCapture = image.details.capture;
                 receipt.phase = 'foreground';
+                if (seen.startsWith('Screenshot unavailable')) throw Object.assign(new Error('The window was recovered but the image queue is full. Observe this exact root in pixels mode in a new round before sending input. No click was replayed.'), {code:'image_queue_full'});
                 return `[foreground] Mini recovery brought ${name} forward. Inspect the new image before clicking. Once the task result is visible, finish your reply. Desktop handles returning to the original chat automatically, including its Space. Do not locate or click the chat to return.\n${seen}`;
               } catch (error) {
                 tcx.signal?.throwIfAborted();
-                if (!/stale|no longer available|root_not_found|window_not_found/i.test(String(error))) throw error;
+                const code = (error as {code?: string})?.code;
+                if (!['root_not_found', 'window_not_found', 'capture_failed', 'capture_timeout', 'focus_pending'].includes(code ?? '') && !/stale|no longer available|root_not_found|window_not_found/i.test(String(error))) throw error;
               }
               await sleep(120);
             } while (Date.now() < until);
-            return 'The recovered window did not provide a fresh screenshot. Stop the blocked step. No click was replayed.';
+            throw recoveryExhausted('The recovered window did not provide a fresh screenshot. Stop the blocked step. No click was replayed.');
+          } catch (error) {
+            tcx.signal?.throwIfAborted();
+            const code = (error as {code?: string})?.code;
+            if (code === 'image_queue_full' || code === 'computer_use_recovery_exhausted') throw error;
+            throw recoveryExhausted(`Window recovery failed: ${error instanceof Error ? error.message : String(error)}. No click was replayed.`);
           } finally { if (receipt.phase === 'raising') receipt.phase = 'blocked'; }
         }
-        if (!window.isOnscreen) return 'This off-Space window must be tried in the background first.';
+        if (!window.isOnscreen) throw new Error('This off-Space window must be tried in the background first.');
         const raised = await discovery.activate?.({ pid: window.pid, windowId: window.windowId }, tcx.signal);
-        return raised ? `[foreground] Brought ${name} ${foregroundRoot} forward.` : 'The requested window could not be brought forward on this desktop.';
+        if (!raised || !targetIsFrontmost(await discovery.getFrontmost(tcx.signal, true), target)) throw new Error('The requested window could not be brought forward on this desktop.');
+        return `[foreground] Brought ${name} ${foregroundRoot} forward.`;
       }
       if (found.windows.length) {
         const running = await apps();
@@ -440,14 +463,14 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
         return `${how}\n${summary}\n${seen}${next}`;
       }
       if (wasRunning && Date.now() - started > 1500) {
-        if (await discovery.screenLocked(tcx.signal)) return lockedMessage;
+        if (await discovery.screenLocked(tcx.signal)) return unavailable(lockedMessage);
         return `${name} is running but has no observable window. Leave it in its Space. Ask the user to show a window and wait for their reply before trying again.`;
       }
     }
     await sleep(400);
   }
-  if (await discovery.screenLocked(tcx.signal)) return lockedMessage;
-  return `${captureLost ? 'The window changed during capture' : 'No observable window yet'} for ${name}. Retry ensure_app with the same app identity.`;
+  if (await discovery.screenLocked(tcx.signal)) return unavailable(lockedMessage);
+  return unavailable(`${captureLost ? 'The window changed during capture' : 'No observable window yet'} for ${name}. Retry ensure_app with the same app identity.`);
 }
 
 /** Exact app identities keep the first captured window tied to the requested application. */
@@ -585,7 +608,9 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
           const fallback = autoInstallFailed()
             ? `Computer Use is not ready: ${e?.message || e}\nAutomatic helper installation failed — run \`tangu computer-use setup\` in a terminal to see why.`
             : `Computer Use is not ready: ${e?.message || e}`;
-          return [installNote, guidance ?? fallback].filter(Boolean).join('\n');
+          const message = [installNote, guidance ?? fallback].filter(Boolean).join('\n');
+          if (spec.name === 'ensure_app' && args.foregroundRoot !== undefined) throw new Error(message);
+          return message;
         }
       }
       // 装/升级过就在结果里说一句 —— 用户装了什么、agent 替他做了什么,不该是暗箱。

@@ -417,7 +417,7 @@ final class ArrivalBudgetBox {
 }
 
 final class Bridge {
-	private let protocolVersion = 23
+	private let protocolVersion = 24
 	/// 截图里变了超过这么多像素(缩到最长边 800 后)才算「画面变了」:光标闪烁、JPEG 噪声在这之下。
 	static let pixelChangeThreshold = 12
 	/// NSEvent 带窗口号造出来的 CGEvent 里,窗口号在这个字段(CGEventTypes.h 没有它)。
@@ -976,7 +976,7 @@ final class Bridge {
 			return try listRoots(pid: optionalIntArg(request, "pid").map { Int32($0) }, title: optionalStringArg(request, "title"))
 		case "getFrontmost":
 			if boolArg(request, "pidOnly") == true { return ["pid": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0] }
-			return try getFrontmost()
+			return try getFrontmost(requireExactWindow: boolArg(request, "requireExactWindow") == true)
 		case "reportLaunchForeground":
 			let pid = Int32(try intArg(request, "pid"))
 			guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return ["active": false] }
@@ -1399,7 +1399,7 @@ final class Bridge {
 		return output
 	}
 
-	private func getFrontmost() throws -> [String: Any] {
+	private func getFrontmost(requireExactWindow: Bool) throws -> [String: Any] {
 		guard let app = NSWorkspace.shared.frontmostApplication else {
 			throw BridgeFailure(message: "No frontmost app available", code: "frontmost_unavailable")
 		}
@@ -1418,7 +1418,7 @@ final class Bridge {
 		let exact = focused.flatMap(exactWindowID)
 		let focusedEntry = exact.flatMap { id in windows.first { ($0["windowId"] as? Int) == Int(id) } }
 		// A guessed Chrome window must never authorize focus-following input. Other apps retain their acquisition fallback.
-		let chosen = focusedEntry ?? (app.bundleIdentifier == "com.google.Chrome" ? nil : windows.sorted(by: { scoreWindow($0) > scoreWindow($1) }).first)
+		let chosen = focusedEntry ?? (requireExactWindow || app.bundleIdentifier == "com.google.Chrome" ? nil : windows.sorted(by: { scoreWindow($0) > scoreWindow($1) }).first)
 		if let chosen {
 			result["windowTitle"] = (chosen["title"] as? String) ?? ""
 			if let windowId = chosen["windowId"] {
@@ -1427,6 +1427,9 @@ final class Bridge {
 			if let windowRef = chosen["windowRef"] as? String {
 				result["windowRef"] = windowRef
 			}
+		}
+		if requireExactWindow, NSWorkspace.shared.frontmostApplication?.processIdentifier != pid {
+			return ["pid": Int(NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0)]
 		}
 		return result
 	}
@@ -2545,6 +2548,11 @@ final class Bridge {
 			return AddressScope(run: run, pid: pid, window: inputWindowId)
 		}()
 
+		// A coordinate names a window, never a field. macOS routes PID key events through the app's key window.
+		let keyWindow = target["x"] != nil && (action == "keypress" || action == "typeText") ? inputWindowId : nil
+		if keyWindow != nil && params["preserveFocus"] as? Bool != true && NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.google.Chrome" {
+			throw BridgeFailure(message: "For native Chrome, use the focused window and send keys without coordinates. No input sent.", code: "chrome_focus_required")
+		}
 		var element: AXUIElement?
 		var rawPoint: CGPoint?
 		var preflightCapsUnknown = false
@@ -2992,7 +3000,7 @@ final class Bridge {
 			let text = params["text"] as? String ?? ""
 			if let scope = addressScope, let result = try typeChromeAddress(text, scope: scope, client: client) { return finish(result) }
 			if !text.isEmpty { cueField(element) }
-			try postUnicodeText(text, pid: pid, delivery: delivery)
+			try postUnicodeText(text, pid: pid, delivery: delivery, windowId: keyWindow)
 			performed["grounding"] = "coordinates"
 			if let element, !text.isEmpty {
 				usleep(30_000)
@@ -3025,7 +3033,7 @@ final class Bridge {
 			acquirePhysicalInputIfNeeded()
 			if delivery == "hid" && !preserveFocus { try focusTargetForPhysicalInput() }
 			if let scope = addressScope, let result = try chromeAddressKeys(keys, scope: scope, client: client) { return finish(result) }
-			try postKeyPress(keys: keys, pid: pid, delivery: delivery)
+			try postKeyPress(keys: keys, pid: pid, delivery: delivery, windowId: keyWindow)
 			performed["grounding"] = "coordinates"
 		} else if let element, action == "scroll" {
 			let cursorPoint = try? coordinatePoint()
@@ -5151,12 +5159,38 @@ final class Bridge {
 		return addressReceipt("unknown", "address_pending", "pid")
 	}
 
-	private func postKeyPress(keys: [String], pid: Int32, delivery: String = "hid") throws {
+	private func verifyKeyboardWindow(pid: Int32, windowId: UInt32?) throws {
+		guard let windowId else { return }
+		let app = AXUIElementCreateApplication(pid)
+		guard let focused = copyAttribute(app, attribute: kAXFocusedWindowAttribute as CFString).flatMap(asAXElement),
+			exactWindowID(focused) == windowId else {
+			throw BridgeFailure(message: "Keyboard delivery stopped because the exact window does not hold keyboard focus. Check the screenshot before retrying.", code: "keyboard_window_changed")
+		}
+	}
+
+	// AppKit reads the destination window number from both halves of a keyboard event.
+	// Preserve the original key code, Unicode string and modifiers, and avoid reactivation for focus-following input.
+	private func postWindowKeyPair(_ down: CGEvent, _ up: CGEvent, pid: Int32, delivery: String, windowId: UInt32?) throws {
+		if let windowId {
+			for event in [down, up] {
+				event.setIntegerValueField(Self.windowNumberField, value: Int64(windowId))
+				guard NSEvent(cgEvent: event)?.windowNumber == Int(windowId) else {
+					throw BridgeFailure(message: "Keyboard event could not be bound to the requested window.", code: "keyboard_window_unavailable")
+				}
+			}
+			try verifyKeyboardWindow(pid: pid, windowId: windowId)
+			if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
+		}
+		postEvent(down, pid: pid, delivery: delivery, activateTarget: windowId == nil)
+		postEvent(up, pid: pid, delivery: delivery, activateTarget: windowId == nil)
+	}
+
+	private func postKeyPress(keys: [String], pid: Int32, delivery: String = "hid", windowId: UInt32? = nil) throws {
 		if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		if let chord = keyChord(keys) {
-			try postKey(chord.key, flags: chord.flags, pid: pid, delivery: delivery)
+			try postKey(chord.key, flags: chord.flags, pid: pid, delivery: delivery, windowId: windowId)
 			return
 		}
 
@@ -5166,21 +5200,21 @@ final class Bridge {
 				.map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
 				.filter { !$0.isEmpty }
 			if let chord = keyChord(parts) {
-				try postKey(chord.key, flags: chord.flags, pid: pid, delivery: delivery)
+				try postKey(chord.key, flags: chord.flags, pid: pid, delivery: delivery, windowId: windowId)
 			} else {
-				try postKey(key, flags: [], pid: pid, delivery: delivery)
+				try postKey(key, flags: [], pid: pid, delivery: delivery, windowId: windowId)
 			}
 		}
 	}
 
-	private func postKey(_ key: String, flags: CGEventFlags, pid: Int32, delivery: String = "hid") throws {
+	private func postKey(_ key: String, flags: CGEventFlags, pid: Int32, delivery: String = "hid", windowId: UInt32? = nil) throws {
 		// 每个键都再核一次:打到一半用户切走了 App,剩下的键不能跟过去
 		if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		guard let code = keyCode(key) else {
 			if key.count == 1 {
-				try postUnicodeText(key, pid: pid, delivery: delivery)
+				try postUnicodeText(key, pid: pid, delivery: delivery, windowId: windowId)
 				return
 			}
 			throw BridgeFailure(message: "Unsupported key '\(key)'", code: "invalid_args")
@@ -5192,19 +5226,18 @@ final class Bridge {
 		}
 		down.flags = flags
 		up.flags = flags
-		postEvent(down, pid: pid, delivery: delivery)
-		postEvent(up, pid: pid, delivery: delivery)
+		try postWindowKeyPair(down, up, pid: pid, delivery: delivery, windowId: windowId)
 		usleep(8_000)
 	}
 
-	private func postUnicodeText(_ text: String, pid: Int32, delivery: String = "hid") throws {
+	private func postUnicodeText(_ text: String, pid: Int32, delivery: String = "hid", windowId: UInt32? = nil) throws {
 		if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
 		if delivery == "hid" { physicalInputLock.lock(); ForegroundActivity.shared.enter() }
 		defer { if delivery == "hid" { ForegroundActivity.shared.leave(); physicalInputLock.unlock() } }
 		for scalar in text.unicodeScalars {
 			let char = String(scalar)
 			if let stroke = physicalKeyStroke(for: char) {
-				try postKey(stroke.key, flags: stroke.flags, pid: pid, delivery: delivery)
+				try postKey(stroke.key, flags: stroke.flags, pid: pid, delivery: delivery, windowId: windowId)
 				continue
 			}
 			guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
@@ -5215,8 +5248,7 @@ final class Bridge {
 			setUnicodeString(event: down, text: char)
 			setUnicodeString(event: up, text: char)
 			if delivery == "hid" { try requireFrontmostForKeys(pid: pid) }
-			postEvent(down, pid: pid, delivery: delivery)
-			postEvent(up, pid: pid, delivery: delivery)
+			try postWindowKeyPair(down, up, pid: pid, delivery: delivery, windowId: windowId)
 			usleep(8_000)
 		}
 	}

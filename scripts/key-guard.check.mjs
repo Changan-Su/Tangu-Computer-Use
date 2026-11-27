@@ -46,7 +46,7 @@ const ask = (cmd, args = {}) => new Promise((resolve, reject) => {
 })
 
 const statePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cu-key-guard-')), 'melody.json')
-let melody
+let melody, pair
 try {
   assert.ok(fs.existsSync(helperApp), `computer-use helper not installed at ${helperApp}`)
   await execFileP('open', ['-n', '-g', helperApp, '--args', 'serve', '--socket', socket])
@@ -69,7 +69,35 @@ try {
   }
   assert.equal(readState(statePath).keys, 0, 'Melody received keys')
   console.log('PASS Melody received no keys')
+
+  const pairState = path.join(path.dirname(statePath), 'siblings.json')
+  pair = await launchFixture(await buildFixture('firstmouse'), pairState, {args:['--keyboard-sibling']})
+  const target = {pid:pair.pid, windowId:pair.siblingId}
+  let frontWindow
+  for (let i = 0; i < 25; i++) {
+    frontWindow = (await ask('getFrontmost', {requireExactWindow:true})).result
+    if (frontWindow?.pid === target.pid && frontWindow.windowId === target.windowId) break
+    await sleep(100)
+  }
+  assert.equal(frontWindow?.pid, pair.pid)
+  assert.equal(frontWindow?.windowId, pair.siblingId)
+  const send = async (windowId, action, params) => {
+    const look = await ask('look', {windowId, maxDimension:800, includeImage:true, readText:'never'})
+    assert.ok(look.result?.lookId)
+    return ask('act', {lookId:look.result.lookId, pid:pair.pid, target:{x:20,y:40}, policy:'background', action, params})
+  }
+  for (const [action,params] of [['keypress',{keys:['down']}],['typeText',{text:'z'}]]) {
+    const result = await send(pair.windowNumber, action, params)
+    assert.equal(result.error?.code, 'keyboard_window_changed', 'Refuse the other window of the same app')
+  }
+  const keyEvents = () => readState(pairState).events.filter(row => row.kind.startsWith('keyDown-'))
+  assert.deepEqual(keyEvents(), [])
+  assert.equal((await send(pair.siblingId,'typeText',{text:'z'})).ok, true)
+  for (let i = 0; i < 20 && !keyEvents().length; i++) await sleep(50)
+  assert.deepEqual(keyEvents().map(row=>row.kind), ['keyDown-'+pair.siblingId])
+  console.log('PASS sibling window received no misdirected key; exact window received one targeted character')
 } finally {
+  if (pair) await quitFixture(pair).catch(() => {})
   if (melody) await quitFixture(melody).catch(() => {})
   await ask('shutdown').catch(() => {})
   const { stdout } = await execFileP('pgrep', ['-f', socket]).catch(() => ({ stdout: '' }))

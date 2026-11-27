@@ -137,12 +137,16 @@ for (const action of [{ action: 'keypress', keys: ['UP'] }, { action: 'typeText'
   assert.match(lost, /frontmost/, `${name}: error says why`);
 
   // 自带坐标的不吃「在前台」这条:照旧按坐标目标走(后台优先),坐标照旧要过校验
+  const seated = fresh({ frontmost: true, clicked: true });
+  assert.deepEqual(prepareAction({ ...action, x: 10, y: 20 }, seated, env()).target, { x: 10, y: 20 });
+  for (const partial of [{ x: 10 }, { y: 20 }, { x: NaN, y: 20 }]) {
+    assert.throws(() => prepareAction({ ...action, ...partial }, seated, env()), /both x and y/);
+  }
   const pointed = prepareAction({ ...action, x: 10, y: 20 }, fresh({ frontmost: true }), env());
   assert.equal(pointed.usesCurrentFocus, false, `${name}: x/y on a frontmost window stays a point target`);
   assert.deepEqual(pointed.target, { x: 10, y: 20 });
   assert.match(message(() => prepareAction({ ...action, x: -1, y: -1 }, fresh({ frontmost: true }), env())), /outside the look image/, `${name}: x/y is still validated`);
-  // 上游原有行为不变:本批点击建立焦点后,自带坐标的按键也跟随焦点
-  assert.equal(prepareAction({ ...action, x: 10, y: 20 }, fresh({ clicked: true }), env()).usesCurrentFocus, true, `${name}: upstream behaviour after an in-batch click is unchanged`);
+  assert.equal(prepareAction(action, fresh({ clicked: true }), env()).usesCurrentFocus, true, `${name}: untargeted keys still follow an in-batch click`);
 
   // 「在前台」只管到本批第一个 click / press 为止:那一下可能把前台交给别的 App,之后的字就会打错地方
   for (const click of [{ action: 'press', ref: '@e1' }, { action: 'click', ref: '@e1' }, { action: 'click', x: 5, y: 5 }]) {

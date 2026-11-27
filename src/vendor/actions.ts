@@ -37,6 +37,7 @@ export function keysFollow(actions: readonly UiAction[], index: number): boolean
 }
 
 export interface ActionEnvironment {
+	preserveBatchKeyboardFocus?: boolean;
 	headless: boolean;
 	pixelsOnly?: boolean;
 	image?: { width: number; height: number };
@@ -107,7 +108,7 @@ export function targetIsFrontmost(front: { pid: number; windowId?: number }, tar
 // Read by the model: say how to fix the call, not just what is missing.
 function missingTarget(operation: PreparedAction["action"], env: ActionEnvironment): Error {
 	if (isKeyboard(operation)) {
-		if (env.pixelsOnly && !env.headless) return new Error(`${operation} has no focus to follow. No input sent. Use the exact window's foreground recovery if available, then take one action per screenshot. To navigate in Chrome press keys ["Mod+L"], verify the address field is selected, type the URL, then submit after checking the value.`);
+		if (env.pixelsOnly && !env.headless) return new Error(`${operation} has no focus to follow. No input sent. Use one action per screenshot. Supply both x and y from the latest native screenshot to route keys to that window. Coordinates do not focus a field. Check the intended caret before typing; if focus is uncertain, observe or request exact-window recovery.`);
 		return new Error(env.headless
 			? `${operation} requires either ref or both x and y. Foreground input is unavailable for this operation, so focus cannot be used.`
 			: `${operation} has no focus to follow: nothing earlier in this act_ui call clicked a coordinate or an editable control, and the target window is not known to be frontmost (it is in the background, or a press since the start of this call may have changed that). Either put such a click before it in the same act_ui call, or pass x and y (any point in the window; the keys go to whatever already has focus there).`);
@@ -173,10 +174,18 @@ function accessibilityPressIdentity(action: UiAction, target: ActionTarget, stat
 	return undefined;
 }
 
+export function validateKeyboardTarget(action: UiAction): void {
+	if (isKeyboard(action.action) && (action.x !== undefined || action.y !== undefined)) {
+		if (!Number.isFinite(action.x) || !Number.isFinite(action.y)) throw new Error("Keyboard input requires both x and y from the latest native screenshot. No input sent.");
+		if (action.ref) throw new Error("Choose a keyboard ref or a screenshot point. No input sent.");
+	}
+}
+
 export function prepareAction(action: UiAction, state: ActionState, env: ActionEnvironment): PreparedAction {
 	const operation = action.action;
+	validateKeyboardTarget(action);
 	const usesCurrentFocus = !env.headless && isKeyboard(operation) && !action.ref
-		&& (state.currentFocus || (state.frontmost === true && followsFocus(action)));
+		&& ((state.currentFocus && env.preserveBatchKeyboardFocus === true) || (followsFocus(action) && (state.currentFocus || state.frontmost === true)));
 	const target = usesCurrentFocus ? focusedTarget(env) : nativeTarget(action, operation, env, state.pointer);
 	if (isClick(operation) || operation === "moveMouse" || operation === "scroll") state.pointer = target;
 	if (isClick(operation)) state.frontmost = false;

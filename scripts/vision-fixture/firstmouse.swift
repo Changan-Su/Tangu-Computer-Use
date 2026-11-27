@@ -13,6 +13,8 @@ if let i = argv.firstIndex(of: "--frame"), i + 1 < argv.count {
 	if n.count == 4 { frame = NSRect(x: n[0], y: n[1], width: n[2], height: n[3]) }
 }
 
+let siblingTest = argv.contains("--keyboard-sibling")
+var sibling: NSWindow?
 var events: [[String: Any]] = []
 var clicks = 0
 func log(_ kind: String) {
@@ -41,7 +43,8 @@ final class Pad: NSView {
 let window = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
 
 func save() {
-	let state: [String: Any] = ["pid": Int(getpid()), "windowNumber": window.windowNumber, "ready": window.isVisible, "active": NSApp.isActive, "clicks": clicks, "events": events]
+	var state: [String: Any] = ["pid": Int(getpid()), "windowNumber": window.windowNumber, "ready": window.isVisible, "active": NSApp.isActive, "clicks": clicks, "events": events]
+	if let sibling { state["siblingId"] = sibling.windowNumber }
 	try? JSONSerialization.data(withJSONObject: state).write(to: URL(fileURLWithPath: statePath), options: .atomic)
 }
 
@@ -56,6 +59,20 @@ final class Delegate: NSObject, NSApplicationDelegate {
 		window.contentView = Pad()
 		window.setFrame(NSRect(x: frame.minX, y: screenHeight - frame.maxY, width: frame.width, height: frame.height), display: true)
 		window.orderFrontRegardless()
+		if siblingTest {
+			let other = NSWindow(contentRect: NSRect(x: 140, y: 160, width: 320, height: 180), styleMask: [.titled, .closable], backing: .buffered, defer: false)
+			sibling = other
+			other.title = "Sibling keyboard receiver"
+			let field = NSTextField(frame: NSRect(x: 20, y: 30, width: 200, height: 36))
+			other.contentView?.addSubview(field)
+			NSApp.activate()
+			other.makeKeyAndOrderFront(nil)
+			other.makeFirstResponder(field)
+			monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+				log("keyDown-\(event.windowNumber)")
+				return event
+			}
+		}
 		DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { save() }
 	}
 }

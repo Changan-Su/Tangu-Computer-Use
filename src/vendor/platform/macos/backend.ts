@@ -82,8 +82,8 @@ export const macosBackend: Pick<ComputerUsePlatformBackend, "listApps" | "listRo
 		}, { signal }));
 	},
 
-	async getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult> {
-		const result = await macosHelper.command<any>("getFrontmost", {}, { signal });
+	async getFrontmost(signal?: AbortSignal, requireExactWindow = false): Promise<PlatformFrontmostResult> {
+		const result = await macosHelper.command<any>("getFrontmost", { requireExactWindow }, { signal });
 		const pid = Math.trunc(toFiniteNumber(result?.pid, NaN));
 		if (!Number.isFinite(pid) || pid <= 0) {
 			throw new Error("No frontmost app was available for screenshot targeting.");
@@ -105,8 +105,9 @@ export const macosBackend: Pick<ComputerUsePlatformBackend, "listApps" | "listRo
 		const activated = await macosHelper.command<{ appRestored?: boolean; offSpace?: boolean }>("restoreUserFocus", { pid: target.pid, windowId: target.windowId, recoverBackgroundClick: target.recoverBackgroundClick, runId: currentOverlayRunId() }, { signal });
 		if (target.recoverBackgroundClick) return activated.appRestored === true;
 		if (activated.offSpace) return false;
-		await macosHelper.command("focusWindow", { ...target, requireOnscreen: true }, { signal });
-		return activated.appRestored === true;
+		if (!activated.appRestored) return false;
+		const focus = await macosHelper.command<PlatformFocusWindowResult>("focusWindow", { ...target, requireOnscreen: true }, { signal });
+		return focus.focused === true;
 	},
 
 	async observe(request: PlatformObserveRequest, options?: { timeoutMs?: number; signal?: AbortSignal }): Promise<LookResponse> {
