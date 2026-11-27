@@ -1417,7 +1417,9 @@ final class Bridge {
 		let focused = copyAttribute(AXUIElementCreateApplication(pid), attribute: kAXFocusedWindowAttribute as CFString).flatMap(asAXElement)
 		let exact = focused.flatMap(exactWindowID)
 		let focusedEntry = exact.flatMap { id in windows.first { ($0["windowId"] as? Int) == Int(id) } }
-		if let chosen = focusedEntry ?? windows.sorted(by: { scoreWindow($0) > scoreWindow($1) }).first {
+		// A guessed Chrome window must never authorize focus-following input. Other apps retain their acquisition fallback.
+		let chosen = focusedEntry ?? (app.bundleIdentifier == "com.google.Chrome" ? nil : windows.sorted(by: { scoreWindow($0) > scoreWindow($1) }).first)
+		if let chosen {
 			result["windowTitle"] = (chosen["title"] as? String) ?? ""
 			if let windowId = chosen["windowId"] {
 				result["windowId"] = windowId
@@ -4985,17 +4987,33 @@ final class Bridge {
 		BridgeFailure(message: "The same Chrome destination still has no verified navigation. Stop this route and report the blocked step.", code: "computer_use_recovery_exhausted")
 	}
 
+	private func currentAddressAttempt(_ scope: AddressScope) -> AddressAttempt? {
+		addresses = addresses.filter { Date().timeIntervalSince($0.value.updated) < 300 }
+		if addresses[scope] == nil, addresses.count >= 128, let oldest = addresses.min(by: { $0.value.updated < $1.value.updated })?.key {
+			addresses.removeValue(forKey: oldest)
+		}
+		return addresses[scope]
+	}
+
 	private func typeChromeAddress(_ text: String, scope: AddressScope, client: Int32?) throws -> [String: Any]? {
-		guard var goal = addresses[scope], goal.editing, Date().timeIntervalSince(goal.updated) < 300 else { return nil }
+		let previous = currentAddressAttempt(scope)
 		guard let expected = addressURL(text), let last = text.last else {
-			goal.typedURL = false
-			addresses[scope] = goal
+			if var goal = previous {
+				goal.typedURL = false
+				addresses[scope] = goal
+			}
 			return nil
 		}
 		guard let bar = chromeAddressField(pid: scope.pid, windowId: scope.window), let source = documentAddress(bar.window) else {
-			throw BridgeFailure(message: "No URL sent. The original Chrome address field lost focus. Inspect the window.", code: "address_focus_changed")
+			if previous?.editing == true {
+				throw BridgeFailure(message: "No URL sent. The original Chrome address field lost focus. Inspect the window.", code: "address_focus_changed")
+			}
+			return nil
 		}
-		guard sameChromeTab(goal.tab, window: bar.window) else { throw tabChanged() }
+		// A screenshot click can select the address field without a preceding Cmd+L. Bind that route as well.
+		guard let tab = selectedChromeTab(bar.window) else { throw tabChanged() }
+		var goal = previous ?? AddressAttempt(tab: tab, editing: true)
+		if let original = goal.tab, !sameElement(original, tab) { throw tabChanged() }
 		let destination = addressDigest(expected.absoluteString)
 		let sourceDigest = addressDigest(source)
 		if goal.expected != destination || goal.source != sourceDigest {
@@ -5054,11 +5072,7 @@ final class Bridge {
 	private func chromeAddressKeys(_ keys: [String], scope: AddressScope, client: Int32?) throws -> [String: Any]? {
 		let chord = keys.joined(separator: "+").lowercased()
 		if ["cmd+l", "command+l", "meta+l"].contains(chord) {
-			addresses = addresses.filter { Date().timeIntervalSince($0.value.updated) < 300 }
-			if addresses[scope] == nil, addresses.count >= 128, let oldest = addresses.min(by: { $0.value.updated < $1.value.updated })?.key {
-				addresses.removeValue(forKey: oldest)
-			}
-			var goal = addresses[scope] ?? AddressAttempt()
+			var goal = currentAddressAttempt(scope) ?? AddressAttempt()
 			goal.editing = true
 			goal.typedURL = false
 			goal.updated = Date()

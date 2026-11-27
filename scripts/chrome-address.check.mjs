@@ -108,6 +108,26 @@ try {
     return result;
   }
 
+  // Start an independent run and select the address visually on the fixture's 1600px window screenshot.
+  context.runId += '-pointer';
+  frame = await observe();
+  await act({ action: 'click', x: 480, y: 110, clickCount: 3 });
+  const pointed = origin + '/from-pointer';
+  let edit = await type(pointed);
+  if (edit === 'address_mismatch') {
+    assert.equal(await focus(), 'address_focus');
+    edit = await type(pointed);
+  }
+  assert.equal(edit, 'address_value');
+  let pointerResult = await submit();
+  if (pointerResult === 'address_pending' || pointerResult === 'address_waiting_for_match') {
+    frame = await observe();
+    pointerResult = await submit();
+  }
+  assert.equal(pointerResult, 'document_url');
+  assert.equal(requests.filter(url => url === '/from-pointer').length, 1);
+  console.log('PASS screenshot address-field click enters the verified route');
+
   const slow = await openUntilSubmitted(origin + '/slow');
   if (slow === 'address_pending') {
     frame = await observe();
