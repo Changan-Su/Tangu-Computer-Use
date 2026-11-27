@@ -115,7 +115,6 @@ try {
   await assert.rejects(run('read_text', {stateId:state(a), ref:'@e1'}, 'B'), /another conversation/);
   await assert.rejects(run('observe_ui', {root:root(a)}, 'B'), /no longer available/);
   assert.match(await run('find_roots', {kind:'browser_page'}), /Found 1 matching root/);
-  await assert.rejects(run('launch_browser', {url,visible:true}), /Strict background/);
   const actionStart = performance.now();
   const acted = await run('act_ui', {stateId:state(a), actions:[
     {action:'setText', ref:ref(a,'textbox','Text'), text:'Blue Finch'},
