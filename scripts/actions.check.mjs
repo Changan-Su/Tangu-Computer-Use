@@ -228,6 +228,13 @@ console.log('✓ scroll:沿用本批 click / moveMouse 的位置、单独出现�
 // (helper 协议 17 起带上,见 scripts/pid-window.probe.mjs);helper 投完比截图,没变才报 didnt。
 {
   const prep = (action, e = env(), state = fresh()) => prepareAction(action, state, e)
+  const mod = process.platform === 'darwin' ? 'cmd' : 'ctrl';
+  for (const [keys, expected] of [[['Mod+L'], [mod + '+L']], [['ControlOrMeta', 'l'], [mod, 'l']]]) {
+    assert.deepEqual(prep({ action: 'keypress', keys }, env(), { ...fresh(), frontmost: true }).params.keys, expected);
+  }
+  assert.throws(() => prep({ action: 'typeText', text: 'test' }, env({ pixelsOnly: true })), error =>
+    /one action per screenshot/.test(error.message) && !/same act_ui call/.test(error.message));
+
   const foreground = (action, e) => prep(action, e).needsForeground
   const dragPath = [{ x: 400, y: 150 }, { x: 400, y: 500 }];
   assert.equal(foreground({ action: 'scroll', x: 300, y: 200, scrollY: 600 }), false, 'a coordinate scroll goes to the background first');

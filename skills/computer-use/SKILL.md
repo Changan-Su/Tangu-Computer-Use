@@ -137,7 +137,8 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
 
 ### Acting
 
-- Pass dependent steps together in one `act_ui` call (click then type), and use `expect` for the
+- In screenshot-only mode take one action per returned state. To navigate in the user's native macOS Chrome window, focus its address bar with `keypress ["Mod+L"]`, check focus, then type the complete URL. Once the value matches, submit with Return. Check for a committed document or redirect. Follow the receipt when navigation is pending. A later Return checks for a delayed commit. A submitted URL is sent once.
+- In semantic or mixed mode pass dependent steps together in one `act_ui` call (click then type), and use `expect` for the
   observable postcondition instead of a separate `observe_ui`. `expect` reads accessibility text, not
   pixels: when it is not met the result carries an `[expect]` line (the action was still delivered).
   On a window whose outline has almost no text, prefer leaving `expect` out — it will rarely be met

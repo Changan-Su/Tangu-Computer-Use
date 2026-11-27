@@ -71,6 +71,18 @@ function accessibilityPressNote(steps: Array<{ accessibilityPress?: boolean; pre
     : `${sent} The window could not be brought forward, so nothing here shows whether it landed. Next, only look: call observe_ui again. If it still shows no change, ask the user to check the window.\n`;
 }
 
+const navigationNotes: Record<string, string> = {
+  address_focus: 'The address bar of this exact Chrome window has focus. Type the complete URL in one action using the new stateId.',
+  address_focus_unconfirmed: 'Chrome did not confirm address-bar focus. Inspect the screenshot before typing.',
+  address_value: 'The complete URL is in the address bar. Send Return once on this state and inspect the destination.',
+  address_mismatch: 'The address bar does not contain the expected URL. Do not submit. Select it again with Mod+L, then check the new screenshot.',
+  address_waiting_for_match: 'No input sent. The exact URL suggestion is not ready. Inspect the next screenshot. If it shows the matching URL, request Return once more.',
+  address_pending: 'Chrome received the URL submission. Inspect the returned screenshot. If navigation is still pending, request Return once for a read-only status check. The helper will not submit the URL again.',
+  document_already_open: 'The requested URL was already open in the verified tab. Check the page contents.',
+  document_changed: 'The browser document changed. Check the displayed destination or redirect before continuing.',
+  document_url: 'The exact window committed the requested document URL. Inspect the page for the task result.',
+};
+
 export function executionNote(details: unknown): string {
   const summary = executionSummary(details);
   if (!summary) return '';
@@ -80,6 +92,8 @@ export function executionNote(details: unknown): string {
     const moved = summary.earlierPressTookEffect === 'picture' ? 'the picture around the element has changed (a current screenshot is attached)' : 'the page has changed (see the changes in this result)';
     return `[execution] ${JSON.stringify(summary)}\nNothing was sent this time. The earlier press of this element showed no change in its result; since then ${moved}, so that press most likely took effect late. Check the returned state before anything else: if it shows the result you wanted, continue. If it shows the press did nothing, press the element once more; that one goes out as a real click.\n` + strict;
   }
+  const navigation = navigationNotes[summary.steps.at(-1)?.verification ?? ''];
+  if (navigation) return `[execution] ${JSON.stringify(summary)}\n${navigation}\n` + strict;
   const meaning = summary.error || summary.outcome === 'didnt'
     ? 'The executor reported a failure. Check any new window and the current screenshot before another action. Keep input in Computer Use so its native helper can manage foreground fallback. Do not use shell commands to activate the application.'
     : summary.outcome === 'unknown'
