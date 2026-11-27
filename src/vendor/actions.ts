@@ -38,6 +38,7 @@ export function keysFollow(actions: readonly UiAction[], index: number): boolean
 
 export interface ActionEnvironment {
 	headless: boolean;
+	pixelsOnly?: boolean;
 	image?: { width: number; height: number };
 	node(ref: string): OutlineNode;
 	center(node: OutlineNode): { x: number; y: number };
@@ -58,7 +59,7 @@ function scrollDelta(value: unknown): number {
 
 function keys(value: unknown): string[] {
 	if (!Array.isArray(value) || value.length === 0) throw new Error("keypress.keys must contain at least one key.");
-	return value.map((key) => String(key));
+	return value.map((key) => String(key).replace(/^(mod|controlormeta)(?=\+|$)/i, process.platform === "darwin" ? "cmd" : "ctrl"));
 }
 
 function path(value: UiAction["path"], env: ActionEnvironment): Array<{ x: number; y: number }> {
@@ -106,6 +107,7 @@ export function targetIsFrontmost(front: { pid: number; windowId?: number }, tar
 // Read by the model: say how to fix the call, not just what is missing.
 function missingTarget(operation: PreparedAction["action"], env: ActionEnvironment): Error {
 	if (isKeyboard(operation)) {
+		if (env.pixelsOnly && !env.headless) return new Error(`${operation} has no focus to follow. No input sent. Use the exact window's foreground recovery if available, then take one action per screenshot. To navigate in Chrome press keys ["Mod+L"], verify the address field is selected, type the URL, then submit after checking the value.`);
 		return new Error(env.headless
 			? `${operation} requires either ref or both x and y. Strict background mode never follows the focus.`
 			: `${operation} has no focus to follow: nothing earlier in this act_ui call clicked a coordinate or an editable control, and the target window is not known to be frontmost (it is in the background, or a press since the start of this call may have changed that). Either put such a click before it in the same act_ui call, or pass x and y (any point in the window; the keys go to whatever already has focus there).`);

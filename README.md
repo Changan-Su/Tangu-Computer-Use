@@ -347,6 +347,8 @@ Windows strict background refuses known activating WinForms Invoke and Framework
 
 Windows 严格后台在输入前拒绝已知会激活窗口的 WinForms Invoke / Framework WPF press 提供方，包含混合宿主。受支持的 WinForms EDIT 写入与报表列表滚动使用验证后的原生控件句柄，不发送全局输入；只读和祖先禁用保护保留。超时或被应用归一化的写入标记为不确定，不自动转前台重写。能力取决于控件提供方，不能把任意无障碍动作视为天然不抢焦点；详见上面的验收记录。
 
+macOS 上构建原生 helper 和插件后可运行 `npm run check:chrome-address`。脚本用独立 Chrome 配置、helper 和本机 HTTP 服务核对地址栏导航，以及页面未跳转时的重试上限。
+
 已有两个桌面时可运行 `npm run check:mac-spaces`。Melody 把自己的测试窗口放到另一个桌面，脚本通过正式插件截图和双击，比对播放状态、桌面变化与目标进程激活通知。
 
 Genesis 的自动 Mini 依赖 helper socket 同目录的 `foreground.json`。升级 helper 行为时必须提升捆绑包版本并重建所有随包 native 产物；桌面按 manifest 版本播种，不覆盖同版本副本。0.5.2 起自动更新成功后重启常驻 helper，避免协议号与路径相同但内存中仍为旧版本。

@@ -2106,6 +2106,7 @@ async function performInspectUi(params: InspectUiParams): Promise<AgentToolResul
 function prepareUiAction(action: UiAction, state: ActionState, look: LookResponse, headless: boolean): PreparedAction {
 	return prepareAction(action, state, {
 		headless,
+		pixelsOnly: operationState().pixelsOnly,
 		image: look.image,
 		node: outlineNodeByRef,
 		center: outlineNodeCenter,
