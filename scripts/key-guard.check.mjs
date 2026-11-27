@@ -46,7 +46,7 @@ const ask = (cmd, args = {}) => new Promise((resolve, reject) => {
 })
 
 const statePath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'cu-key-guard-')), 'melody.json')
-let melody
+let melody, pair
 try {
   assert.ok(fs.existsSync(helperApp), `computer-use helper not installed at ${helperApp}`)
   await execFileP('open', ['-n', '-g', helperApp, '--args', 'serve', '--socket', socket])
@@ -54,22 +54,58 @@ try {
   for (let i = 0; i < 75 && !diag; i++) diag = (await ask('diagnostics').catch(() => undefined))?.result ?? (await sleep(200), undefined)
   assert.ok(diag?.accessibility && diag?.screenRecording, 'isolated helper needs Accessibility and Screen Recording')
 
-  melody = await launchFixture(await buildFixture('melody'), statePath, { frame: { x: 40, y: 60, w: 1000, h: 680 }, behind: true, args: ['--no-activate'] })
+  melody = await launchFixture(await buildFixture('melody'), statePath, { frame: { x: 40, y: 60, w: 1000, h: 680 }, args: ['--no-activate'] })
   const front = (await ask('getFrontmost')).result
   assert.notEqual(front?.pid, melody.pid, 'Melody came up frontmost; the check needs it in the background')
-  const windowId = (await ask('listWindows', { pid: melody.pid })).result?.find((w) => w.windowId)?.windowId
+  const windowId = melody.windowNumber
+  assert.ok(Number.isInteger(windowId) && windowId > 0, 'no fixture window')
   const lookId = (await ask('look', { windowId, maxDimension: 800, includeImage: true })).result?.lookId
   assert.ok(lookId, 'look failed')
   const base = { lookId, pid: melody.pid, target: { x: 20, y: 20 }, policy: 'foreground' }
   for (const [action, params] of [['typeText', { text: '' }], ['keypress', { keys: ['shift'] }]]) {
+    const visibility = (await ask('dockProbe', {pid:melody.pid, windowId})).result
+    assert.equal(visibility?.exists, true, 'fixture window must still exist')
+    const expectedCode = visibility.onScreen ? 'foreground_unavailable' : 'foreground_required'
     const r = await ask('act', { ...base, action, params: { ...params, delivery: 'hid' } })
     assert.notEqual(r.error?.code, 'screen_locked', 'the screen is locked; unlock it and run again (a locked screen refuses keys with or without the guard)')
-    assert.ok(!r.ok && r.error?.code === 'foreground_unavailable', `${action} to a background app must be refused, got ${JSON.stringify(r.ok ? r.result : r.error).slice(0, 200)}`)
-    console.log(`PASS ${action} refused (${r.error.code})`)
+    assert.ok(!r.ok && r.error?.code === expectedCode, `${action} to a background app must be refused, got ${JSON.stringify(r.ok ? r.result : r.error).slice(0, 200)}`)
+    console.log(`PASS ${action} refused (${r.error.code}, onscreen=${visibility.onScreen})`)
   }
   assert.equal(readState(statePath).keys, 0, 'Melody received keys')
   console.log('PASS Melody received no keys')
+
+  const pairState = path.join(path.dirname(statePath), 'siblings.json')
+  const pairApp = await buildFixture('firstmouse')
+  pair = await launchFixture(pairApp, pairState, {args:['--keyboard-sibling']})
+  await execFileP('open', ['-a', pairApp])
+  const focused = await ask('focusWindow', {pid:pair.pid, windowId:pair.siblingId})
+  assert.equal(focused.result?.focused, true, 'fixture must focus the sibling before checking delivery')
+  const target = {pid:pair.pid, windowId:pair.siblingId}
+  let frontWindow
+  for (let i = 0; i < 25; i++) {
+    frontWindow = (await ask('getFrontmost', {requireExactWindow:true})).result
+    if (frontWindow?.pid === target.pid && frontWindow.windowId === target.windowId) break
+    await sleep(100)
+  }
+  assert.equal(frontWindow?.pid, pair.pid)
+  assert.equal(frontWindow?.windowId, pair.siblingId)
+  const send = async (windowId, action, params) => {
+    const look = await ask('look', {windowId, maxDimension:800, includeImage:true, readText:'never'})
+    assert.ok(look.result?.lookId)
+    return ask('act', {lookId:look.result.lookId, pid:pair.pid, target:{x:20,y:40}, policy:'background', action, params})
+  }
+  for (const [action,params] of [['keypress',{keys:['down']}],['typeText',{text:'z'}]]) {
+    const result = await send(pair.windowNumber, action, params)
+    assert.equal(result.error?.code, 'keyboard_window_changed', 'Refuse the other window of the same app')
+  }
+  const keyEvents = () => readState(pairState).events.filter(row => row.kind.startsWith('keyDown-'))
+  assert.deepEqual(keyEvents(), [])
+  assert.equal((await send(pair.siblingId,'typeText',{text:'z'})).ok, true)
+  for (let i = 0; i < 20 && !keyEvents().length; i++) await sleep(50)
+  assert.deepEqual(keyEvents().map(row=>row.kind), ['keyDown-'+pair.siblingId])
+  console.log('PASS sibling window received no misdirected key; exact window received one targeted character')
 } finally {
+  if (pair) await quitFixture(pair).catch(() => {})
   if (melody) await quitFixture(melody).catch(() => {})
   await ask('shutdown').catch(() => {})
   const { stdout } = await execFileP('pgrep', ['-f', socket]).catch(() => ({ stdout: '' }))

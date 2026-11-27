@@ -1,7 +1,7 @@
 ---
 name: Desktop app control
 description: Use when a task needs a real desktop application rather than an API, CLI, or file — reading what is on screen in another app, clicking through its UI, filling its fields, or driving a GUI-only workflow. Covers the Computer Use tool loop, keeping actions in the background, and the confirmation rules for irreversible actions.
-version: 1.3.0
+version: 1.3.1
 category: automation
 ---
 
@@ -137,6 +137,7 @@ an actual tool result. On Windows, honor the shell tool's stated shell and quoti
 
 ### Acting
 
+- In a native screenshot, `keypress` and `typeText` accept both `x` and `y` on the intended window (for example the document pane for a page key). Use this on a window that already has keyboard focus within the target app. The point does not click or move the caret. For native Chrome send keys without a point after verifying foreground focus. Confirm an editable field has focus before typing and check the next screenshot for the result. If exact-window recovery fails, report the blocked step.
 - In screenshot-only mode take one action per returned state. To navigate in the user's native macOS Chrome window, focus its address bar with `keypress ["Mod+L"]`, check focus, then type the complete URL. Once the value matches, submit with Return. Check for a committed document or redirect. Follow the receipt when navigation is pending. A later Return checks for a delayed commit. A submitted URL is sent once.
 - In semantic or mixed mode pass dependent steps together in one `act_ui` call (click then type), and use `expect` for the
   observable postcondition instead of a separate `observe_ui`. `expect` reads accessibility text, not

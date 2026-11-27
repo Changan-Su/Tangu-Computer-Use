@@ -91,6 +91,8 @@ connected to the wrong socket, so `doctor` reported ready while a real observe/a
 
 ### Untargeted keyboard / scroll actions (vendor TS patch, after 0.6.2)
 
+Native keyboard actions with explicit screenshot coordinates route to that window even after an in-batch click. Coordinates do not focus a field. Protocol 24 checks the application’s exact focused window at each native key-down and keeps native Chrome navigation on its checked focus route. Incomplete native points fail before dispatch. Managed browser keyboard behavior is unchanged. Keep the model schema and the native no-focus guidance aligned with this distinction.
+
 `src/vendor/actions.ts` and `src/vendor/bridge.ts` carry a small behavioural patch — **a re-sync wipes it;
 replay it** (`npm run check:actions`, part of `npm run check`, goes red if it is gone):
 

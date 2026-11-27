@@ -236,7 +236,7 @@ export interface ComputerUsePlatformBackend {
 	ensureReady(ctx: ExtensionContext, state: PlatformReadyState, signal?: AbortSignal): Promise<PlatformReadyState>;
 	listApps(signal?: AbortSignal): Promise<PlatformApp[]>;
 	listRoots(query: PlatformRootQuery, signal?: AbortSignal): Promise<PlatformRoot[]>;
-	getFrontmost(signal?: AbortSignal): Promise<PlatformFrontmostResult>;
+	getFrontmost(signal?: AbortSignal, requireExactWindow?: boolean): Promise<PlatformFrontmostResult>;
 	focusWindow(target: PlatformTarget, signal?: AbortSignal): Promise<PlatformFocusWindowResult>;
 	/** Forsion patch, see UPSTREAM.md. Activates the app and raises this window; false if the app could not be activated. focusWindow alone leaves a covered page hidden. */
 	activateWindow?(target: { pid: number; windowId: number; windowRef?: string; recoverBackgroundClick?: boolean }, signal?: AbortSignal): Promise<boolean>;

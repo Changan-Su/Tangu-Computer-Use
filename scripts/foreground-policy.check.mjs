@@ -20,6 +20,12 @@ const tools = new Map(provider.tools().map(t => [t.name, t]));
 const base = { runId: 'run', sessionId: 'conversation', cwd: dir, execMode: 'host' };
 try {
   process.env.PI_COMPUTER_USE_CHROME_EXECUTABLE = path.join(dir, 'missing');
+  const variants = tools.get('act_ui').definition.function.parameters.properties.actions.items.anyOf;
+  for (const action of ['keypress', 'typeText']) {
+    const variant = variants.find(v => v.properties.action.const === action);
+    assert.equal(variant.properties.x.type, 'number');
+    assert.equal(variant.properties.y.type, 'number');
+  }
   assert.equal(tools.has('allow_foreground_for_this_task'), false);
   for (const name of ['ensure_app', 'act_ui', 'launch_browser']) assert.equal(tools.get(name).capabilities.approval, 'command');
   assert.equal(tools.get('observe_ui').capabilities.approval, undefined);

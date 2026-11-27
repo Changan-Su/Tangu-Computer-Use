@@ -7,7 +7,7 @@ import { access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult, AgentToolUpdateCallback, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { canRetryInForeground, isBackgroundPointer, keysFollow, needsFrontmostProbe, backgroundPointerOutcome, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
+import { canRetryInForeground, isBackgroundPointer, keysFollow, needsFrontmostProbe, backgroundPointerOutcome, outcomeAfterCheck, outcomeAfterObservedValues, prepareAction, validateKeyboardTarget, targetIsFrontmost, type ActionState, type PreparedAction } from "./actions.ts";
 import { cdpClickForContext, cdpDragForContext, cdpEvaluateForContext, cdpKeypressForContext, cdpMouseForContext, cdpNavigateContext, cdpScrollForContext, cdpSnapshotForContext, cdpViewportForContext, cdpViewportStamp, cdpTabForWindow, cdpTypeFocusedForContext, cdpTypeForContext, disconnectCdp, listCdpPageContexts, type CdpConsoleEntry, type CdpPageSnapshot } from "./cdp.ts";
 import { getComputerUseConfig, isBrowserUseEnabled, isHeadlessMode, loadComputerUseConfig, operationConfig } from "./config.ts";
 import { applyWheelFix, wheelFix } from "../wheel.ts"; // Forsion patch, see UPSTREAM.md
@@ -2105,6 +2105,7 @@ async function performInspectUi(params: InspectUiParams): Promise<AgentToolResul
 
 function prepareUiAction(action: UiAction, state: ActionState, look: LookResponse, headless: boolean): PreparedAction {
 	return prepareAction(action, state, {
+		preserveBatchKeyboardFocus: currentPlatformBackend.name === "windows",
 		headless,
 		pixelsOnly: operationState().pixelsOnly,
 		image: look.image,
@@ -2151,7 +2152,7 @@ async function dispatchUiAction(action: UiAction, target: ResolvedTarget, look: 
  */
 async function targetHoldsFocus(target: ResolvedTarget, signal?: AbortSignal): Promise<boolean> {
 	if (currentPlatformBackend.name !== "macos") return target.isFocused;
-	return await getFrontmost(signal).then((front) => targetIsFrontmost(front, target), () => false);
+	return await currentPlatformBackend.getFrontmost(signal, true).then((front) => targetIsFrontmost(front, target), () => false);
 }
 
 async function dispatchUiTransaction(actions: UiAction[], target: ResolvedTarget, look: LookResponse, headless: boolean, signal?: AbortSignal): Promise<ExecutionTrace> {
@@ -2406,6 +2407,15 @@ async function performDesktopTransaction(params: ActParams, actions: UiAction[],
 	}
 	const scopeNode = condition ? conditionScopeNode(look.parsedOutline!, condition) : undefined;
 	const target = await ensureTargetWindowId(await resolveCurrentTarget(signal), signal);
+	for (const action of actions) {
+		validateKeyboardTarget(action);
+		if ((action.action === "typeText" || action.action === "keypress") && action.x !== undefined && action.y !== undefined) {
+			ensurePointIsInLookImage(action.x, action.y, look);
+			if (currentPlatformBackend.name === "macos" && target.bundleId === "com.google.Chrome") {
+				throw new Error("For native Chrome, use the focused window and send keys without coordinates. No input sent.");
+			}
+		}
+	}
 	const noteBefore = state.currentNote;
 	return await withWindowWriteLock(target, async () => {
 		const headless = getComputerUseConfig().headless;
