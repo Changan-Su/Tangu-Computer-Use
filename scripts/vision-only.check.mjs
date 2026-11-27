@@ -154,12 +154,11 @@ if (backgroundOnly) {
     assert.notEqual((await frontmost()).pid, boot.pid)
     process.kill(boot.pid, 'SIGUSR1')
     await until('fixture hidden', s => !s.visible)
-    cu.syncSettings({getScopeSettings: () => ({headless: false})})
     const result = await cu.runEnsureApp({ app: APP }, tcx, pctx)
     assert.match(result, /no observable window/)
     assert.ok(!state().visible)
     assert.notEqual((await frontmost()).pid, boot.pid)
-    console.log('PASS hidden native fixture stayed hidden with strict background off and no user grant')
+    console.log('PASS hidden native fixture stayed hidden without a foreground request')
   } finally { await killFixture() }
 } else try {
   await killFixture()
@@ -297,17 +296,14 @@ if (backgroundOnly) {
   const empty = shown(await cu.executeFind('', { pid: boot.pid }, undefined, undefined, pctx))
   assert.match(line(empty.said, '[hint]'), /ensure_app/, `④ find_roots 按 pid 找不到时也要指向 ensure_app,实得:${empty.said}`)
   assert.equal(state().page, 1, '④ 报错的那一次不得有点击落下')
-  // 开着「严格后台」:不激活,说明原因,窗口和前台都不动。
-  // 走真的设置入口:只改内存里的配置对象会被 vendor 下一次重新加载冲掉(这个开关以前因此从未生效)。
-  const strict = (headless) => cu.syncSettings({ getScopeSettings: () => ({ headless }) })
-  strict(true)
-  const refused = await cu.runEnsureApp({ app: APP }, tcx, pctx).finally(() => strict(false))
-  assert.match(refused, /no observable window/, `④ 严格后台下 ensure_app 不该激活,实得:${refused}`)
-  assert.ok(!state().visible && (await frontmost()).pid !== boot.pid, '④ 严格后台下窗口不该回来、前台不该变')
+  // 禁止前台输入的调用不能激活隐藏窗口。
+  const refused = await cu.runEnsureApp({ app: APP }, tcx, { ...pctx, foregroundAllowed: false })
+  assert.match(refused, /no observable window/, `④ 禁止前台输入时 ensure_app 不该激活,实得:${refused}`)
+  assert.ok(!state().visible && (await frontmost()).pid !== boot.pid, '④ 禁止前台输入时窗口不该回来、前台不该变')
   // 按路径给(临时目录里的 App 没在 LaunchServices 登记,open -b 找不到它);ensure_app 按名字那一段认出它已经在跑。
   const withoutGrant = await cu.runEnsureApp({ app: APP }, tcx, pctx)
   assert.match(withoutGrant, /no observable window/)
-  assert.ok(!state().visible && (await frontmost()).pid !== boot.pid, 'No activation without a task grant even when strict background is off')
+  assert.ok(!state().visible && (await frontmost()).pid !== boot.pid, 'No activation without a task grant during background discovery')
   const back = await cu.runEnsureApp({ app: APP }, tcx, { ...pctx, foregroundAllowed: true })
   assert.match(back, /no observable window/)
   assert.ok(!state().visible && (await frontmost()).pid !== boot.pid, 'Window discovery also stays passive at full access')

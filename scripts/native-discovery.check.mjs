@@ -41,7 +41,6 @@ try {
       assert.equal(result.includes('Screenshot unavailable for @r2'), !deliver);
     }
   }
-  process.env.PI_COMPUTER_USE_HEADLESS = 'false';
   const raised = [];
   const window = { pid: 19, windowId: 572, windowRef: '@r2', isOnscreen: true };
   const backend = {
@@ -58,10 +57,6 @@ try {
   await request('@r2');
   assert.deepEqual(raised, []);
   window.isOnscreen = true;
-  process.env.PI_COMPUTER_USE_HEADLESS = 'true';
-  await request('@r2');
-  assert.deepEqual(raised, []);
-  process.env.PI_COMPUTER_USE_HEADLESS = 'false';
   assert.match(await request('@r2'), /Brought test.local @r2 forward/);
   assert.deepEqual(raised, [{ pid: 19, windowId: 572 }]);
   for (const running of [false, true]) {

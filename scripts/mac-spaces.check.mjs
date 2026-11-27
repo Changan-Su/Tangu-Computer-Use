@@ -9,7 +9,6 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { buildFixture, launchFixture, quitFixture, readState } from './vision-fixtures.mjs';
 
 if (process.platform !== 'darwin') process.exit(0);
-const strict = process.argv.includes('--strict');
 const directory = mkdtempSync(path.join(tmpdir(), 'tangu-other-space-'));
 const archive = fileURLToPath(new URL(`../prebuilt/macos/${process.arch}/tangu-computer-use.app.zip`, import.meta.url));
 execFileSync('ditto', ['-x', '-k', archive, directory]);
@@ -33,7 +32,7 @@ try {
     'Fixture must actually occupy a different Space. Prepare two regular Spaces on the main display.');
   let provider;
   plugin.activate({ registerPlugin(meta) { provider = meta.toolProvider; }, registerCommand() {}, log() {},
-    sdk: { pluginStore: { isPluginEnabledSync: () => true, getScopeSettings: () => ({ headless: strict }) } } });
+    sdk: { pluginStore: { isPluginEnabledSync: () => true, getScopeSettings: () => ({ headless: true /* saved by an older installation */ }) } } });
   const tools = new Map(provider.tools().map(tool => [tool.name, tool]));
   const context = { runId: 'off-space-test', sessionId: 'off-space-test', cwd: directory,
     execMode: 'host', collectImage(image) { assert.match(image.url, /^data:image\//); return true; } };
@@ -95,13 +94,6 @@ try {
   await assert.rejects(click(pixelStateId(retryFrame), Math.round(Number(size[1]) * 0.96), Math.round(Number(size[2]) * 0.12)),
     error => error?.code === 'computer_use_recovery_exhausted');
   assert.equal(readState(stateFile).clicks, misses, 'Alternating a double and single click cannot extend the retry budget');
-  if (strict) {
-    const root = /Screenshot only for (@r\d+)/.exec(missFrame)?.[1];
-    assert.ok(root);
-    const denied = await tools.get('ensure_app').execute({ app, foregroundRoot: root }, context);
-    assert.match(denied, /unavailable|cannot be raised/);
-    assert.equal(readState(stateFile).clicks, misses);
-  }
   if (process.argv.includes('--recover')) {
     const root = /foregroundRoot[^@]+(@r\d+)/.exec(missFrame)?.[1];
     assert.ok(root, missFrame);
@@ -153,7 +145,7 @@ try {
     assert.equal(endEvents.filter(e => e.kind === 'spaceChanged' || (e.kind === 'frontChanged' && e.detail === String(boot.pid))).length, 0);
     console.log(JSON.stringify({ activeSpace: placement.current, windowSpace: placement.target, image: size.slice(1),
       click: [x,y], played: after.playing.index, playedAfterMisses: ended.playing.index, popupClicks: final.clicks - ended.clicks,
-      spaceChanges: 0, targetActivations: 0, strict, ms: Math.round(performance.now() - start) }));
+      spaceChanges: 0, targetActivations: 0, ms: Math.round(performance.now() - start) }));
   }
 } finally {
   if (process.argv.includes('--recover') && boot.originalFrontPid) {

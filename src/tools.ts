@@ -22,7 +22,7 @@ import {
   executeAct, executeReadText, executeWaitFor, executeLaunchBrowser, executeNavigateBrowser,
   executeEvaluateBrowser, ensureComputerUseSetup, toolSurface, pixelBinding,
 } from './vendor/bridge.ts';
-import { getComputerUseConfig, loadComputerUseConfig } from './vendor/config.ts';
+import { getComputerUseConfig } from './vendor/config.ts';
 import { currentPlatformBackend } from './vendor/platform/index.ts';
 import { isSupportedPlatform } from './helperState.ts';
 import { autoInstallFailed, ensureHelperCurrent, guideMissingPermissions } from './onboarding.ts';
@@ -178,7 +178,7 @@ const toolSpecs = (compact: boolean, panels = false): ToolSpec[] => [
     description: 'Perform one or more precisely targeted checked actions and return the successor state. '
       + (compact ? 'For a single left click in a browser screenshot, pass click:[x,y] and its view or stateId. ' : '')
       + (panels ? 'For an unfamiliar icon on a live page, hover:[x,y] can reveal its tooltip or status text before you click. ' : '')
-      + 'When the state says Screenshot only, send exactly ONE action without ref, inspect the successor image, and use its new stateId. In native macOS Chrome, opening a known URL takes three separate screenshot calls. Start with only the Mod+L keypress. After address_focus type the complete URL. After address_value request Return. Follow the navigation receipt. For other states, batch only actions whose targets are already present in this state (for example focus then type). After navigation or opening a popup, inspect the successor state before targeting a newly revealed control; do not guess its coordinates from the old screenshot. Use expect for observable completion. expect reads accessibility text only, never the pixels: on a window whose outline has almost no text it will rarely match, so prefer leaving it out there and judging from the attached screenshot. Coordinates (x / y, drag path) are pixels in the latest attached screenshot, whose size the result states on an [image] line. After clicking an editable region in the same call, omit ref from typeText/keypress so input follows that focus; a later call can omit ref only while the target window is still frontmost, otherwise click again first. To fill a text field prefer a single setText action — it writes the value in the background without taking focus; only click the field first (which takes the foreground) if setText reports it did not take, as happens on some web/Electron inputs. When any action takes the foreground the result says so on a [foreground] line. For strict background-only runs, turn on the plugin\'s "strict background" setting.',
+      + 'When the state says Screenshot only, send exactly ONE action without ref, inspect the successor image, and use its new stateId. In native macOS Chrome, opening a known URL takes three separate screenshot calls. Start with only the Mod+L keypress. After address_focus type the complete URL. After address_value request Return. Follow the navigation receipt. For other states, batch only actions whose targets are already present in this state (for example focus then type). After navigation or opening a popup, inspect the successor state before targeting a newly revealed control; do not guess its coordinates from the old screenshot. Use expect for observable completion. expect reads accessibility text only, never the pixels: on a window whose outline has almost no text it will rarely match, so prefer leaving it out there and judging from the attached screenshot. Coordinates (x / y, drag path) are pixels in the latest attached screenshot, whose size the result states on an [image] line. After clicking an editable region in the same call, omit ref from typeText/keypress so input follows that focus; a later call can omit ref only while the target window is still frontmost, otherwise click again first. To fill a text field prefer a single setText action — it writes the value in the background without taking focus; only click the field first (which takes the foreground) if setText reports it did not take, as happens on some web/Electron inputs. When any action takes the foreground the result says so on a [foreground] line. Follow a window-specific recovery hint once if the requested result is missing.',
     parameters: obj({
       ...(compact ? { view, click: screenshotPoint('Single left click at [x,y] in the identified screenshot.') } : {}),
       ...(panels ? { hover: screenshotPoint('Move the browser pointer to [x,y] without clicking and capture the full page viewport after a short dwell.') } : {}),
@@ -209,7 +209,7 @@ const toolSpecs = (compact: boolean, panels = false): ToolSpec[] => [
   {
     name: 'launch_browser', exec: executeLaunchBrowser as PiExecute, sideEffect: 'browser', approval: 'command', browserOnly: true, timeoutMs: 60_000,
     description: 'Open a fresh background browser for this conversation. No Chrome extension or desktop permissions are needed. For a URL or web form, start here and use the returned state with act_ui. This separate profile has no personal tabs or logins. Use browser_tabs when the user needs their existing browser.',
-    parameters: obj({ url: S('Initial URL', 8192), mode: { type:'string', enum:['auto','pixels'], description:'pixels for screenshot-only control (canvas, remote desktop, or when explicitly requested). Launch and each action return an image. Click or drag at image coordinates.' }, visible: { type: 'boolean', description: 'Show a window on the user’s desktop only when requested. Screenshots work without this flag. Requires strict background to be off and approval for this task.' } }),
+    parameters: obj({ url: S('Initial URL', 8192), mode: { type:'string', enum:['auto','pixels'], description:'pixels for screenshot-only control (canvas, remote desktop, or when explicitly requested). Launch and each action return an image. Click or drag at image coordinates.' }, visible: { type: 'boolean', description: 'Show a window on the user’s desktop only when requested. Screenshots work without this flag. Uses the normal host tool permission.' } }),
   },
   {
     name: 'navigate_browser', exec: executeNavigateBrowser as PiExecute, sideEffect: 'browser', approval: 'command', browserOnly: true, timeoutMs: 60_000,
@@ -225,7 +225,7 @@ const toolSpecs = (compact: boolean, panels = false): ToolSpec[] => [
 
 /** 把 pluginStore 的设置注入 vendor 的配置。
  *  ⚠️只改 activeConfig 不够:vendor 每次工具调用都重新加载配置(ensureReady → loadComputerUseConfig = 缺省值 + 配置文件 +
- *  环境变量,整个对象换新),刚注入的值在执行器跑起来之前就被冲掉 —— 实测「严格后台」「光标动画」等开关因此从未生效(10-11)。
+ *  环境变量,整个对象换新),刚注入的值在执行器跑起来之前就被冲掉 —— 实测「光标动画」等开关因此从未生效(10-11)。
  *  所以同时写进它每次加载都会重读、且优先级最高的那组环境变量;vendor 一行不用改。 */
 export function syncSettings(store: PluginStore): void {
   const s = store.getScopeSettings(PLUGIN_ID, 'global');
@@ -235,7 +235,6 @@ export function syncSettings(store: PluginStore): void {
   // 这次没给的项:把我们上次写的环境变量撤掉(不撤的话旧值会一直压着);不是我们写的不碰。
   const unset = (key: string) => { if (owned.delete(key)) delete process.env[env(key)]; };
   if (typeof s.browser_use === 'boolean') set('browser_use', s.browser_use); else unset('browser_use');
-  if (typeof s.headless === 'boolean') set('headless', s.headless); else unset('headless');
   if (typeof s.cursor_overlay === 'boolean') set('cursor_overlay', s.cursor_overlay); else unset('cursor_overlay');
   if (s.managed_browser === 'chrome' || s.managed_browser === 'helium') set('managed_browser', s.managed_browser); else unset('managed_browser');
 }
@@ -346,13 +345,13 @@ export async function runEnsureApp(args: Record<string, any>, tcx: ToolContext, 
   const lockedMessage = `[screen_locked] macOS is locked and ${name} has no observable window. Stop this desktop task and tell the user to unlock their Mac. Wait for their reply before any further tool calls.`;
   // -g:启动但不置前台。execFile 传 argv(非 shell),bundleId/app 作单参无注入。
   const openInBackground = () => execFileP('open', ['-g', ...(bundleId && !absolute ? ['-b', bundleId] : ['-a', app])], { timeout: 8000, signal: tcx.signal });
-  const strict = loadComputerUseConfig(pctx.cwd).config.headless;
+  const backgroundOnly = pctx.foregroundAllowed === false;
   // 查找已运行的 App 时不重复发送 open 事件，有的 App 收到它会自己跳到前台。
-  if (foregroundRoot && (strict || !wasRunning)) return 'The requested window cannot be raised in this run.';
+  if (foregroundRoot && (backgroundOnly || !wasRunning)) return 'The requested window cannot be raised in this run.';
   if (!wasRunning) {
     if (await discovery.screenLocked(tcx.signal)) return lockedMessage;
     if (absolute && running.some(a => bundleId && a.bundleId === bundleId)) return 'Another installed copy is running. Open the requested copy manually and retry with its path.';
-    if (strict) return `${name} is not running. Strict background is enabled; ask the user to open it before observing.`;
+    if (backgroundOnly) return `${name} is not running. This operation can only observe running apps.`;
     try {
       await openInBackground();
     } catch (e: any) {
@@ -545,8 +544,7 @@ export function buildToolProvider(store: PluginStore, validateUrl = legacyBrowse
       syncSettings(store);
       const pctx = makePiCtx(tcx, false);
       pctx.jevEnabled = store.getScopeSettings(PLUGIN_ID, 'global').jev_enabled === true;
-      const strict = loadComputerUseConfig(pctx.cwd).config.headless;
-      pctx.foregroundAllowed = !strict && spec.approval === 'command';
+      pctx.foregroundAllowed = spec.approval === 'command';
       const mode = browserMode();
       pctx.compactBrowserControls = mode !== 'standard';
       pctx.browserPanelZoom = mode === 'panels';

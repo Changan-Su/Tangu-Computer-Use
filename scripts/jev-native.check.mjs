@@ -19,7 +19,6 @@ const socket = process.env.PI_CU_SOCKET_PATH;
 // Optional real API; credentials stay in memory and only the synthetic fixture is uploaded.
 const liveSettings = process.env.JEV_SETTINGS_FILE
   ? JSON.parse(await fs.readFile(process.env.JEV_SETTINGS_FILE, 'utf8')).plugins.global['computer-use'] : undefined;
-process.env.PI_COMPUTER_USE_HEADLESS = 'false';
 assert(process.platform === 'darwin' && socket, 'Use macOS and an isolated PI_CU_SOCKET_PATH');
 const ask = cmd => new Promise((resolve, reject) => {
   const s = net.connect(socket); let text = '';
@@ -114,7 +113,7 @@ try {
   // Put a different fixture in front so this checks real background behavior, not only metadata.
   await exec('open', [fieldsApp]);
   await until(async () => (await ask('getFrontmost'))?.pid === fieldsPid);
-  process.env.PI_COMPUTER_USE_HEADLESS = 'true';
+  ctx.foregroundAllowed = false;
   const strict = await run([step(liveSettings ? 'The green square button in the left sidebar' : 'Page 2 button')]);
   if (strict.report.attemptedSteps || !liveSettings) {
   assert.equal(strict.report.attemptedSteps, 1, JSON.stringify(strict.report));

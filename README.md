@@ -88,7 +88,7 @@ Dependabot 提 PR 升级内置版本。首个版本需按上面两条命令人�
 ### Jev experimental acceleration / Jev 实验加速（macOS）
 
 **Where:** Settings → **Computer Use** (AI group, right after Browser control). Searching settings for
-"Jev" or "strict background" lands there too. Enable **Jev experimental acceleration** and enter the
+"Jev" lands there too. Enable **Jev experimental acceleration** and enter the
 **Jev API URL** and **Jev API key**. The default URL is `https://api.typesafe.ai/v1/systemone`; a service
 origin or `/v1` base is also accepted. Use a TypeSafe-compatible endpoint, not an OpenAI chat endpoint.
 The key is stored in the local plugin configuration; hosts supporting `secret:true` mask the input.
@@ -96,7 +96,7 @@ Never paste it into chat. Target-window element labels are sent to the configure
 Visual Box modes also send screenshots (fill text is not part of a targeting request, but can appear in
 a later screenshot).
 
-**位置：**设置 → **电脑操作**（AI 分组，紧挨「浏览器控制」）；在设置里搜「Jev」或「严格后台」也能直达。
+**位置：**设置 → **电脑操作**（AI 分组，紧挨「浏览器控制」）；在设置里搜「Jev」也能直达。
 开启「Jev 实验加速」，填写「Jev API 地址」和「Jev API 密钥」。默认地址 `https://api.typesafe.ai/v1/systemone`，
 也接受服务根地址或 `/v1` 基址；需兼容 TypeSafe 协议，不是 OpenAI 聊天接口。密钥随本机插件配置保存，
 支持 `secret:true` 的宿主以密码框显示，不要把密钥填进聊天。开启后元素标签会发送到配置的服务；
@@ -148,7 +148,7 @@ therefore still confirmed when the screen shows the expected result, and the run
   (>5 s), window changes, ambiguity and cancellation stop the run. `double_click`, `type`, `key` and
   `scroll` need Auto or Vision mode. `fill` stays an atomic setText on native editable elements; `type`
   never clears a field, it only types at the caret. Drag and cross-window transitions use the existing
-  tools. Normal approval and strict background apply.
+  tools. Normal host tool permissions apply.
 - `preview:true` locates one step without input. Jev and `act_ui` share the executor and the foreground
   policy; `foregroundTaken:false` is not a Jev-only limitation.
 
@@ -169,7 +169,7 @@ therefore still confirmed when the screen shows the expected result, and the run
 - **限制：**20 秒加每步 20 秒，滚动那步算两步（最多 170 秒）；画面超过 5 秒、窗口变化、有歧义、被取消都会停。
   双击、打字、按键、滚动需要自动或视觉模式。填写仍只对原生可编辑控件整段写入；打字只在光标处输入、不会清空输入框。
   拖动、跨窗口走原工具。
-  原有审批和严格后台照常生效。`preview:true` 只定位一步、不发输入。
+  输入沿用宿主审批，优先在后台完成。`preview:true` 只定位一步、不发输入。
 
 Ask: **“Use Jev: open the daily recommendations and play the third song. Report each step.”**
 可以对 Agent 说：**「用 Jev 打开每日推荐，播放第三首，逐步告诉我结果。」**说「用 Jev 预览定位，不要点击」只测一个目标。
@@ -250,11 +250,11 @@ and their existing logins. For a canvas or a screenshot-only task, launch with `
 - **compact_browser_controls** (default off) — offer short screenshot handles for single browser clicks with point focus.
 - **browser_panel_zoom** (default off) — include compact clicks and an optional wider view. To inspect a toolbar or panel, choose a viewport region with `observe_ui({view,region:"top-left"})`. The named regions overlap and are capped at 1600 px per side. A panel handle can zoom further with `focus:{x,y}` or open another region of the same viewport. On a live page, use `act_ui({view,hover:[x,y]})` to move the browser pointer and read a delayed tooltip or status label in the returned full screenshot. A subsequent click uses the new view. At maximum zoom, focusing again refreshes the same area and gives the coordinates for an explicit click after visual confirmation. At non-default page zoom use the full screenshot or `magnify`. Click using coordinates in the delivered image.
 - **managed_browser** (default Chrome) — which browser `launch_browser` starts.
-- **headless / 严格后台** (default on) — actions stay in the background; no foreground focus grab or
-  cursor move. Things the background genuinely cannot do then fail instead of stealing focus.
-  With strict background off, foreground input on the current Space follows the host's normal tool permission. Windows in another macOS Space stay there.
-  关闭严格后台后，当前空间里的前台输入遵循会话审批档位。其他空间的窗口只走后台观察与定向输入。
 - **cursor_overlay / 操作可视化** (default on) — the agent cursor *and* the controlled-window edge glow.
+
+Desktop input starts in the background. If the verified target does not change, follow its recovery hint once to use foreground Mini under the normal host tool permission. If recovery fails, report the blocked step.
+
+桌面操作优先在后台执行。核对目标窗口后仍无变化时，按动作回执进入一次前台 Mini 恢复；恢复失败会报告卡住的步骤。
 
 ## Development
 
@@ -339,13 +339,13 @@ Release builds are signed with the project's Developer ID Application certificat
 
 Offline platform regression: `npm run build && npm run check:platform` checks tool visibility and guidance in isolated processes without starting a helper or controlling a UI. Native Windows acceptance still requires verifying helper startup, window discovery, observation and actions on Windows hardware.
 
-`npm run check:vision:windows` 在独占的 GitHub Actions Windows 桌面启动原生 WinForms 夹具，直接调用真实 bridge / helper 验证坐标滚动、拖拽、截图尺寸、expect、严格后台、ref 输入与设置开关。脚本拒绝在正在使用的开发者桌面运行；`windows-checks` 自动执行，日志 / 原生控件状态 / 截图作为 artifact 保存，不发布软件。
+`npm run check:vision:windows` 在独占的 GitHub Actions Windows 桌面启动原生 WinForms 夹具，直接调用真实 bridge / helper 验证坐标滚动、拖拽、截图尺寸、expect、禁止前台的单次调用、ref 输入与设置。脚本拒绝在正在使用的开发者桌面运行；`windows-checks` 自动执行，日志 / 原生控件状态 / 截图作为 artifact 保存，不发布软件。
 
-`npm run check:vision:windows` runs a native WinForms fixture through the real bridge/helper on a dedicated GitHub Actions Windows desktop. It checks coordinate scroll/drag, decoded screenshot dimensions, expect, strict background, reference input and settings. It refuses to run on an occupied developer desktop. The `windows-checks` workflow retains logs, native control state and screenshots without publishing a package.
+`npm run check:vision:windows` runs a native WinForms fixture through the real bridge/helper on a dedicated GitHub Actions Windows desktop. It checks coordinate scroll/drag, decoded screenshot dimensions, expect, foreground-restricted calls, reference input and settings. It refuses to run on an occupied developer desktop. The `windows-checks` workflow retains logs, native control state and screenshots without publishing a package.
 
-Windows strict background refuses known activating WinForms Invoke and Framework WPF press providers before input, including mixed hosts. Supported WinForms EDIT writes and report-list scrolling use verified native control handles without global input. Read-only or effectively disabled controls remain protected; timed-out or normalized writes report uncertain delivery and do not trigger a foreground retry. These are provider-specific capabilities, not a promise that arbitrary accessibility actions cannot activate an app. See [Windows acceptance evidence](docs/windows-vision-2026-10-21.md).
+When a caller forbids foreground input, Windows refuses known activating WinForms Invoke and Framework WPF press providers before input, including mixed hosts. Supported WinForms EDIT writes and report-list scrolling use verified native control handles without global input. Read-only or effectively disabled controls remain protected; timed-out or normalized writes report uncertain delivery and do not trigger a foreground retry. These are provider-specific capabilities, not a promise that arbitrary accessibility actions cannot activate an app. See [Windows acceptance evidence](docs/windows-vision-2026-10-21.md).
 
-Windows 严格后台在输入前拒绝已知会激活窗口的 WinForms Invoke / Framework WPF press 提供方，包含混合宿主。受支持的 WinForms EDIT 写入与报表列表滚动使用验证后的原生控件句柄，不发送全局输入；只读和祖先禁用保护保留。超时或被应用归一化的写入标记为不确定，不自动转前台重写。能力取决于控件提供方，不能把任意无障碍动作视为天然不抢焦点；详见上面的验收记录。
+调用方禁止前台输入时，Windows 会在输入前拒绝已知会激活窗口的 WinForms Invoke / Framework WPF press 提供方，包含混合宿主。受支持的 WinForms EDIT 写入与报表列表滚动使用验证后的原生控件句柄，不发送全局输入；只读和祖先禁用保护保留。超时或被应用归一化的写入标记为不确定，不自动转前台重写。能力取决于控件提供方，不能把任意无障碍动作视为天然不抢焦点；详见上面的验收记录。
 
 macOS 上构建原生 helper 和插件后可运行 `npm run check:chrome-address`。脚本用独立 Chrome 配置、helper 和本机 HTTP 服务核对地址栏导航，慢响应与 HTTP 204 是否只提交一次，以及切换标签后的输入保护。
 

@@ -26,17 +26,17 @@ is 5 files:
 
 `tsconfig.json` `paths` + `scripts/build.mjs` esbuild `alias` both map
 `@earendil-works/pi-coding-agent` → `src/pi-compat.ts`, so **the vendor import lines are not
-edited**. Config is injected by mutating the `activeConfig` object returned by
-`getComputerUseConfig()` (see `src/tools.ts` → `syncSettings`), so `config.ts` is unmodified too.
-`syncSettings` also writes each setting to the `PI_COMPUTER_USE_*` environment variable upstream reads: upstream's
-`ensureReady()` calls `loadComputerUseConfig()` on every tool call and replaces the config object, so a value
-written only into the object was gone before the executor ran (measured 10-11: strict background never took
-effect). Environment variables are re-read on each load and win over files. `scripts/actions.check.mjs` §6 pins it.
+edited**. The adapter synchronizes supported plugin settings in `src/tools.ts` (`syncSettings`).
+`ensureReady()` reloads the vendor config on each tool call, so supported settings also
+use their upstream environment variables. `scripts/actions.check.mjs` covers this reload.
 
 ### Background desktop and managed web sessions
 
-Forsion defaults native delivery to strict background in the settings schema and vendor config.
-Explicit saved choices and configuration overrides retain priority. The Tangu adapter and
+Native actions try background delivery first. The host's ordinary command permission
+controls foreground recovery. Vendor config ignores the retired `headless` key and
+`PI_COMPUTER_USE_HEADLESS`, including values left behind by an older plugin.
+An operation that forbids foreground input still enforces that restriction in `bridge.ts`.
+The Tangu adapter and
 `bridge.ts` identify page-only calls from the stored state or root and skip native helper setup.
 `src/managedBrowser.ts` owns one temporary profile per conversation, obtains Chrome's loopback
 debugging port from that profile and cleans it up on close. The managed browser opens headlessly.
@@ -44,13 +44,13 @@ debugging port from that profile and cleans it up on close. The managed browser 
 clicks and editing. The first observation includes control refs and successful conditions return
 the snapshot used for verification. Keep these adaptations when resyncing upstream.
 
-On macOS, preserve exact WindowServer IDs across Spaces. Keep geometry-derived AX pairings tied to the original AX window ref. Coordinate clicks try the app’s hit-tested accessibility action or window-addressed PID input. A per-run receipt limits unconfirmed repeats. When foreground recovery is enabled, `ensure_app` can raise the exact window after an unconfirmed click. The next physical click requires a fresh capture and rechecks window ownership, focus, coverage, frame and cancellation before each mouse-down. `scripts/mac-spaces.check.mjs` exercises background and foreground delivery across two real desktops, including `--strict` and `--recover`.
+On macOS, preserve exact WindowServer IDs across Spaces. Keep geometry-derived AX pairings tied to the original AX window ref. Coordinate clicks try the app’s hit-tested accessibility action or window-addressed PID input. A per-run receipt limits unconfirmed repeats. When the host allows foreground recovery, `ensure_app` can raise the exact window after an unconfirmed click. The next physical click requires a fresh capture and rechecks window ownership, focus, coverage, frame and cancellation before each mouse-down. `scripts/mac-spaces.check.mjs` exercises background and foreground delivery across two real desktops, including the `--recover` path with a legacy saved setting.
 
 ### Tangu adaptation layer (NOT vendored — hand-written)
 - `src/pi-compat.ts` — the pi shim (only the shapes vendor actually uses).
 - `src/tools.ts` — upstream's 11 `defineTool` → Tangu `ToolDef[]`; typebox schema hand-translated
   to plain JSON Schema; `AgentToolResult.content` → return string + `ctx.collectImage` (screenshots).
-- `src/settings.ts` — 3 keys (browser_use / headless / cursor_overlay).
+- `src/settings.ts` — user-facing Computer Use configuration and Jev preferences.
 - `src/setup.ts` — `tangu computer-use setup|doctor|stop` (readline `ExtensionContext` reuses
   vendor `ensureComputerUseSetup`).
 - `src/index.ts` — the `TanguPlugin` entry.

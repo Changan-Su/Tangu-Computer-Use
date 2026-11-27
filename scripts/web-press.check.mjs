@@ -57,7 +57,6 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const rootArg = process.argv.indexOf('--root')
 const root = rootArg > 0 ? path.resolve(process.argv[rootArg + 1]) : repo
-process.env.PI_COMPUTER_USE_HEADLESS ??= 'false'; // Exercises explicitly enabled foreground fallback.
 const electron = process.env.CU_ELECTRON ?? path.resolve(repo, '../../Forsion-Genesis/desktop/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron')
 const helperApp = process.env.PI_COMPUTER_USE_HELPER_APP_PATH ?? '/Applications/tangu-computer-use.app'
 assert.ok(fs.existsSync(electron), `Electron not found: ${electron} (set CU_ELECTRON)`)

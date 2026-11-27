@@ -92,7 +92,7 @@ find_roots  →  observe_ui  →  (search_ui / expand_ui / inspect_ui)  →  act
 ```
 
 1. **`ensure_app` (macOS only)** — on macOS, call this first when the target app may not be running.
-   A cold native launch may activate the app. The normal host tool permission applies. In strict background mode ask the user to open it.
+   A cold native launch may activate the app. The normal host tool permission applies.
    On Windows and Linux, start with `find_roots` and ask the user to open a missing app.
 2. **`find_roots`** — pick the window/menu/sheet you want. Returns `@r` refs.
 3. **`observe_ui`** — capture that root. Returns a bounded outline of `@e` element refs plus a note.

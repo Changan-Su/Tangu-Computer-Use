@@ -86,7 +86,7 @@ const navigationNotes: Record<string, string> = {
 export function executionNote(details: unknown): string {
   const summary = executionSummary(details);
   if (!summary) return '';
-  const strict = summary.strictBackground ? '[policy] Strict background is ON. Do not bypass it with shell, AppleScript, open/activate, or another tool. If foreground input is needed, ask the user to switch the app or change this setting.\n' : '';
+  const strict = summary.strictBackground ? '[policy] Foreground input is unavailable for this operation. Report the blocked step if it needs focus.\n' : '';
   if (summary.earlierPressTookEffect) {
     // 页面变了是证据,不是定论(页面上的时钟也会动):说清楚变了什么,让模型看了再定;它再按一次就发出去。
     const moved = summary.earlierPressTookEffect === 'picture' ? 'the picture around the element has changed (a current screenshot is attached)' : 'the page has changed (see the changes in this result)';
@@ -126,7 +126,7 @@ export function foregroundNote(execution: unknown, targetPid?: number): string {
   }
   if (!steps.some(tookForeground)) return '';
   const why = steps.map((s) => s?.escalationReason).find(Boolean);
-  return `\n[foreground] This action took the foreground (focus/pointer was moved to the target)${why ? ` — ${why}` : ''}. Use the plugin's "strict background" setting to block actions that require foreground access (act_ui no longer takes a headless parameter).`;
+  return `\n[foreground] This action took the foreground (focus/pointer was moved to the target)${why ? ` — ${why}` : ''}.`;
 }
 
 /**
