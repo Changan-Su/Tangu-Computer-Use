@@ -139,6 +139,7 @@ for (const action of [{ action: 'keypress', keys: ['UP'] }, { action: 'typeText'
   // 自带坐标的不吃「在前台」这条:照旧按坐标目标走(后台优先),坐标照旧要过校验
   const seated = fresh({ frontmost: true, clicked: true });
   assert.deepEqual(prepareAction({ ...action, x: 10, y: 20 }, seated, env()).target, { x: 10, y: 20 });
+  assert.equal(prepareAction({ ...action, x: 10, y: 20 }, seated, env({ preserveBatchKeyboardFocus: true })).usesCurrentFocus, true, "Windows keeps the focus established by a preceding click");
   for (const partial of [{ x: 10 }, { y: 20 }, { x: NaN, y: 20 }]) {
     assert.throws(() => prepareAction({ ...action, ...partial }, seated, env()), /both x and y/);
   }

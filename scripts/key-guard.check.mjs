@@ -54,10 +54,11 @@ try {
   for (let i = 0; i < 75 && !diag; i++) diag = (await ask('diagnostics').catch(() => undefined))?.result ?? (await sleep(200), undefined)
   assert.ok(diag?.accessibility && diag?.screenRecording, 'isolated helper needs Accessibility and Screen Recording')
 
-  melody = await launchFixture(await buildFixture('melody'), statePath, { frame: { x: 40, y: 60, w: 1000, h: 680 }, behind: true, args: ['--no-activate'] })
+  melody = await launchFixture(await buildFixture('melody'), statePath, { frame: { x: 40, y: 60, w: 1000, h: 680 }, args: ['--no-activate'] })
   const front = (await ask('getFrontmost')).result
   assert.notEqual(front?.pid, melody.pid, 'Melody came up frontmost; the check needs it in the background')
-  const windowId = (await ask('listWindows', { pid: melody.pid })).result?.find((w) => w.windowId)?.windowId
+  const windowId = melody.windowNumber
+  assert.ok(Number.isInteger(windowId) && windowId > 0, 'no fixture window')
   const lookId = (await ask('look', { windowId, maxDimension: 800, includeImage: true })).result?.lookId
   assert.ok(lookId, 'look failed')
   const base = { lookId, pid: melody.pid, target: { x: 20, y: 20 }, policy: 'foreground' }
