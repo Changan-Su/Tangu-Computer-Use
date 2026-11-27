@@ -163,7 +163,7 @@ for (const action of [{ action: 'keypress', keys: ['UP'] }, { action: 'typeText'
   for (const state of [fresh({ clicked: true }), fresh({ frontmost: true })]) {
     const strict = message(() => prepareAction(action, state, env({ headless: true })));
     assert.match(strict, /requires either ref or both x and y/, `${name}: headless still demands a target`);
-    assert.match(strict, /Strict background/, `${name}: headless error says why`);
+    assert.match(strict, /Foreground input is unavailable/, `${name}: headless error says why`);
     assert.doesNotMatch(strict, /same act_ui call/, `${name}: headless error does not suggest a click (it would not help)`);
   }
   assert.equal(prepareAction({ ...action, x: 10, y: 20 }, fresh({ clicked: true, frontmost: true }), env({ headless: true })).usesCurrentFocus, false, `${name}: headless never uses the focus`);
