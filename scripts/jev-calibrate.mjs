@@ -34,7 +34,6 @@ const settings = froms.length ? null : JSON.parse(await fs.readFile(process.env.
 await fs.mkdir(out, { recursive: true });
 const socket = path.join(os.homedir(), 'Library/Caches', `forsion-jev-calibrate-${process.pid}.sock`);
 process.env.PI_CU_SOCKET_PATH = socket;
-process.env.PI_COMPUTER_USE_HEADLESS = 'false';
 
 // ── scenes:启动参数决定画面;targets 的 expect = layout 里真目标的匹配条件(null = 画面上没有) ──
 const daily3 = (s) => s.catalog.daily[2];

@@ -1398,7 +1398,7 @@ async function helperAct(
 				|| (look.window.metadata?.pairing as {confidence?: string} | undefined)?.confidence === "exact");
 			rememberClick(target, point, look.image?.grid, exact);
 			trace.recoveryHint = !exact ? "The original window identity could not be verified. If the requested result is missing, stop the blocked step." : strict
-				? "If the requested change is absent after observing, stop and report the blocked step. Strict background is enabled."
+				? "If the requested change is absent after observing, stop and report the blocked step. Foreground input is unavailable for this operation."
 				: `If the requested change is absent on the successor screenshot, use ${recoveryCall} once. It can switch Spaces and shows Mini. Inspect the fresh image before clicking. If recovery fails, stop and report the blocked step.`;
 		} else if (point) forgetClick(target);
 		return trace;
@@ -2717,7 +2717,7 @@ async function performLaunchBrowser(params: LaunchBrowserParams, signal?: AbortS
 	const url = trimOrUndefined(params.url);
 	if (url && !/^https?:\/\//i.test(url)) throw new Error("launch_browser.url must be an absolute HTTP(S) URL.");
 	const visible = params.visible === true;
-	if (visible && config.headless) throw new Error("Strict background is enabled. Launch without visible to keep the browser in the background.");
+	if (visible && config.headless) throw new Error("Foreground input is unavailable for this operation. Launch without visible to keep the browser in the background.");
 	const executable = await managedBrowserExecutable(config.managed_browser);
 	const launch = await resourceScheduler.read(`managed-browser:${browserOwner()}`, () =>
 		launchManagedBrowser(executable, visible, signal, async (pid) => {

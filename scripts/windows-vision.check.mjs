@@ -42,7 +42,7 @@ async function until(name, predicate, timeout = 15000) {
 const checks = [];
 const check = (name, ok, detail = '') => { checks.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name} ${detail}`); assert.ok(ok, name); };
 const ctx = { cwd: root, hasUI: false, ui: { notify() {}, select: async () => undefined }, sessionManager: { getBranch: () => [] } };
-let settings = { headless: false, browser_use: false, cursor_overlay: false };
+let settings = { browser_use: false, cursor_overlay: false };
 const store = { getScopeSettings: () => settings, isPluginEnabledSync: () => true };
 const sync = () => cu.syncSettings(store);
 const collected = [];
@@ -167,7 +167,7 @@ try {
   seen = await observe();
   const absent = await act(seen, [{ action: 'click', ...point(80, 32) }], { text: 'IMPOSSIBLE_WINDOWS_EXPECT_MARKER', timeoutMs: 700 });
   check('unsatisfied expect is reported after a delivered action', absent.said.includes('[expect] NOT satisfied') && state().presses > 0, absent.said);
-  settings = { ...settings, headless: true, cursor_overlay: true }; sync();
+  ctx.foregroundAllowed = false; settings = { ...settings, cursor_overlay: true }; sync();
   await cover(); seen = await observe();
   const strictIndex = state().topIndex;
   const strict = await act(seen, [{ action: 'scroll', ...point(120, 210), scrollY: 3 }]).catch(error => {
@@ -259,7 +259,7 @@ try {
   const refScroll = await act(seen, [{ action: 'scroll', ref: list, scrollY: 3 }]);
   await until('reference scroll changes the native list', s => s.topIndex > at);
   check('reference scroll stays in the background', !refScroll.said.includes('[foreground]') && (await front())?.windowId === state().cover, refScroll.said);
-  settings = { ...settings, headless: false, cursor_overlay: false }; sync();
+  ctx.foregroundAllowed = true; settings = { ...settings, cursor_overlay: false }; sync();
   await cover();
   seen = await observe();
   const normalizedInput = seen.details.renderedOutline.split('\n').find(line => line.includes('Fixture input'))?.match(/@e\d+/)?.[0];

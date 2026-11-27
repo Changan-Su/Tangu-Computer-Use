@@ -57,17 +57,17 @@ const { prepareAction, followsFocus, needsFrontmostProbe, targetIsFrontmost, can
   const store = (values) => ({ getScopeSettings: () => values });
   settings.syncSettings(store({ headless: true, cursor_overlay: false, browser_use: false, managed_browser: 'helium' }));
   settings.loadComputerUseConfig(os.tmpdir()); // 每次工具调用都会发生的那一下
-  assert.deepEqual({ ...settings.getComputerUseConfig() }, { browser_use: false, headless: true, cursor_overlay: false, managed_browser: 'helium' }, '设置在 vendor 重新加载配置之后必须还在');
+  assert.deepEqual({ ...settings.getComputerUseConfig() }, { browser_use: false, headless: false, cursor_overlay: false, managed_browser: 'helium' }, '设置在 vendor 重新加载配置之后必须还在');
   settings.syncSettings(store({ headless: false }));
   settings.loadComputerUseConfig(os.tmpdir());
-  assert.equal(settings.getComputerUseConfig().headless, false, '关掉严格后台也要跟得上');
+  assert.equal(settings.getComputerUseConfig().headless, false, '忽略旧严格后台设置');
   assert.equal(process.env.PI_COMPUTER_USE_CURSOR_OVERLAY, undefined, '这次没给的项:上次写的环境变量撤掉');
   assert.equal(settings.getComputerUseConfig().cursor_overlay, true, '撤掉之后回到缺省值');
   process.env.PI_COMPUTER_USE_BROWSER_USE = 'false'; // 不是 syncSettings 写的(用户自己设的)
   settings.syncSettings(store({}));
   assert.equal(process.env.PI_COMPUTER_USE_BROWSER_USE, 'false', '不是我们写的环境变量不碰');
   delete process.env.PI_COMPUTER_USE_BROWSER_USE;
-  console.log('✓ 插件设置(严格后台等)活过 vendor 的配置重新加载');
+  console.log('✓ 插件设置重新加载后保留，旧严格后台设置不参与投递');
 }
 
 // 7) src/wheel.ts:Mos 的设置 → 发给 helper 的滚动量。实测的那组设置(reverse=1 / smooth=1 / speed=3)下 -100 滚 +267。
@@ -163,7 +163,7 @@ for (const action of [{ action: 'keypress', keys: ['UP'] }, { action: 'typeText'
   for (const state of [fresh({ clicked: true }), fresh({ frontmost: true })]) {
     const strict = message(() => prepareAction(action, state, env({ headless: true })));
     assert.match(strict, /requires either ref or both x and y/, `${name}: headless still demands a target`);
-    assert.match(strict, /Strict background/, `${name}: headless error says why`);
+    assert.match(strict, /Foreground input is unavailable/, `${name}: headless error says why`);
     assert.doesNotMatch(strict, /same act_ui call/, `${name}: headless error does not suggest a click (it would not help)`);
   }
   assert.equal(prepareAction({ ...action, x: 10, y: 20 }, fresh({ clicked: true, frontmost: true }), env({ headless: true })).usesCurrentFocus, false, `${name}: headless never uses the focus`);

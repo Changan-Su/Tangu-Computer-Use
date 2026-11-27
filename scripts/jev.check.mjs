@@ -143,7 +143,7 @@ try {
     assert.equal(r.report.executor, 'act_ui'); assert.equal(r.report.steps[0].execution.strictBackground, true);
     assert.equal(r.report.steps[0].execution.steps[0].delivery, 'pid');
     const text = JSON.stringify(r.report) + j.render(after, {});
-    for (const fact of ['not failed', 'SAME executor', 'Strict background is ON', 'Do not bypass', 'Preview only locates']) assert(text.includes(fact), fact);
+    for (const fact of ['not failed', 'SAME executor', 'Foreground input is unavailable', 'Preview only locates']) assert(text.includes(fact), fact);
     assert(!text.includes('must-not-leak')); assert(!text.includes('private-value'));
     assert.equal(calls.filter(c => c === 'box').length, 1);
   });
